@@ -46,8 +46,7 @@ rules and pyright strict — an unannotated def fails `make check`.
 
 ## 4. Naming
 
-- `snake_case` functions/methods/variables, `PascalCase` classes, `UPPER_SNAKE`
-  constants, `_leading_underscore` for internals. (pep8-naming `N` rules enforce.)
+- Standard **PEP 8** naming — nothing custom. (pep8-naming `N` rules enforce.)
 - Names say what a thing is for the reader who arrives cold: no abbreviations that only
   make sense mid-session, no `mgr`/`util2`/`tmp` survivors.
 
