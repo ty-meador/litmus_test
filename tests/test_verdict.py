@@ -23,7 +23,6 @@ class TestPassSentinel:
         # The whole point of identity over equality: a suite that returns the literal
         # string cannot claim a verdict it did not produce.
         assert PASS != "PASS"
-        assert PASS != "PASS"
 
     def test_no_truthy_value_is_the_sentinel(self) -> None:
         for impostor in (True, 1, "PASS", ["PASS"], {"verdict": "PASS"}, object()):
