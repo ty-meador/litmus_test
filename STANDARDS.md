@@ -71,9 +71,16 @@ rules and pyright strict — an unannotated def fails `make check`.
 
 ## 7. Workflow
 
-- `main` is release-shaped; day-to-day work merges into `develop`. Branch from
-  `develop` per task (`phase-0-verdict`, `fix-abort-shield`, …).
+- **`main` is the trunk, and it is locked by design** — `push = No one`, merge restricted
+  to maintainers, force-push disabled. The only way in is branch, then merge request.
+- Branch from `main` per task, named for the work (`phase-0-verdict`, `fix-abort-shield`,
+  …). No personal prefixes. The branch is deleted when its MR merges.
+- Every change reaches `main` through an MR — no exceptions, and no direct pushes. Link
+  the issue the branch closes so the board stays honest about what is done.
+- **Merge authority rests with Commander Zavala.** He reviews each MR against `PLAN.md`
+  (the design) and this document (the code shape), and makes the call on what enters
+  `main`. Open the MR and leave it for that review; do not merge your own.
 - Commits: imperative subject line, ≤72 chars, body explains *why* when non-obvious.
-  Run `make check` before pushing; CI will run the same gate.
+  Run `make check` before pushing — it is the gate, and an MR that fails it is not merged.
 - Never commit: `.venv/`, caches, artifacts, secrets, real hostnames/credentials from
   test racks. `uv.lock` **is** committed.
