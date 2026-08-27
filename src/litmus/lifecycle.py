@@ -181,10 +181,12 @@ class ChildBoundary:
       - Returns an `Outcome` when the call settled node-locally — Pass, Fail, node-local
         Aborted, or nothing terminal. Nothing is raised, so nothing reaches the
         enclosing `TaskGroup` and no sibling is disturbed.
-      - Raises when the halt is harness-level: `ExternalIntegrationFailure`,
-        `CancelledError`, or any other `BaseException` outside the taxonomy. The
-        outcome is recorded on `self.outcome` **before** the exception leaves, so an
-        aborted node still has its story in the artifact.
+      - Raises when the halt is harness-level. An `ExternalIntegrationFailure` or a
+        `CancelledError` is classified first — the outcome is recorded on
+        `self.outcome` **before** the exception leaves, so an aborted node still has
+        its story in the artifact. A `BaseException` outside the taxonomy
+        (`KeyboardInterrupt`, `SystemExit`) passes through untouched and unrecorded:
+        the boundary has no business classifying a halt that is not litmus's own.
       - Never swallows a cancellation. Structured concurrency depends on
         `CancelledError` continuing outward; the boundary classifies it and re-raises.
     """
@@ -259,7 +261,10 @@ class ChildBoundary:
             # Suite code raised something that is not a verdict. It lands in Fail, but
             # banners itself so nobody mistakes a broken test for a broken unit.
             violation = ContractViolation(self._node, cause=error)
-            self._logger.error("%s", violation.fail_message)
+            if not policy.swallows_errors:
+                # The swallow path logs what it discards; logging here too would
+                # report one event as two.
+                self._logger.error("%s", violation.fail_message)
             return self._record(self._classify_thrown(slot, policy, violation))
         else:
             return self._record(self._classify_return(slot, policy, result))
