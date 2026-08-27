@@ -1,0 +1,12 @@
+#!/bin/sh
+# Auto-format and auto-fix staged Python files, re-staging the fixes.
+# Unfixable lint errors still block the commit.
+set -e
+
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.py')
+[ -z "$files" ] && exit 0
+
+uv run ruff format $files
+uv run ruff check --fix $files || true
+git add $files
+uv run ruff check $files
