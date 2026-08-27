@@ -53,6 +53,12 @@ ignore = [
     "ANN401",    # explicit Any is allowed where the contract is dict[str, Any] (ctx)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# The failure taxonomy's class names are fixed by PLAN.md section 2 and carried from
+# the legacy framework — they are the vocabulary the FT and the artifacts already use.
+# An `Error` suffix would rename a published contract to satisfy a naming convention.
+"src/litmus/errors.py" = ["N818"]
+
 [tool.pyright]
 include = ["src", "tests"]
 typeCheckingMode = "strict"
