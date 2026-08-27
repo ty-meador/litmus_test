@@ -16,18 +16,16 @@ import pytest
 
 from litmus import (
     PASS,
-    ChildBoundary,
     ContractViolation,
     ExternalIntegrationFailure,
     FrameworkContractViolation,
     MissingVerdict,
-    Outcome,
-    RunAbort,
-    Slot,
-    State,
     TestFailure,
 )
-from litmus.lifecycle import SLOT_POLICIES
+
+# Internal machinery on purpose: the boundary is the subject under test here, and the
+# self-test suite is the one consumer allowed to reach past the public surface.
+from litmus.lifecycle import SLOT_POLICIES, ChildBoundary, Outcome, RunAbort, Slot, State
 
 NODE = "dimm-0"
 WRONG_VALUE = 42
