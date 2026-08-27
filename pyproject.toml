@@ -37,7 +37,7 @@ select = [
     "E", "W",    # pycodestyle
     "F",         # pyflakes
     "I",         # isort
-    "N",         # pep8-naming
+    "N",         # pep8-naming — standard PEP 8 naming
     "UP",        # pyupgrade — enforce latest-3.x idioms
     "B",         # bugbear
     "C4",        # comprehensions
