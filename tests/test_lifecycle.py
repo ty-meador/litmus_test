@@ -420,6 +420,17 @@ class TestBugGuardLayers:
         assert "CONTRACT VIOLATION" in banners
         assert "FRAMEWORK CONTRACT VIOLATION" in banners
 
+    async def test_a_swallowed_violation_reads_as_one_event_in_the_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Cleanup swallows the error to protect the verdict; the swallow log line is
+        # the record of it. A second banner line would read as a second bug.
+        with caplog.at_level("ERROR", logger="litmus"):
+            boundary = ChildBoundary(NODE)
+            await boundary.run(Slot.CLEANUP, self._raises(ValueError("kaboom")))
+        assert len(caplog.records) == 1
+        assert "CONTRACT VIOLATION" in caplog.records[0].getMessage()
+
     async def test_an_undeclared_slot_is_a_framework_bug_caught_before_hardware(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
