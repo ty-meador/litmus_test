@@ -17,3 +17,9 @@ htmlcov/
 # Editors
 .idea/
 .vscode/
+
+# Secrets — GitLab project access tokens live in the working tree as *.gplat.
+# This rule was present before the scaffold commit and was lost when that commit
+# rewrote the file; restored here. Without it `git add -A` in a fresh clone
+# commits a live credential.
+*.gplat
