@@ -14,6 +14,13 @@ After `__init__` runs, `self` is read-only. All runtime state flows through conf
 
 **Why:** Mutable instance state creates hidden coupling between lifecycle phases. When state flows through ctx, the data path is explicit and traceable. The Floor Technician benefits because `run_data` captures ctx automatically — structured evidence appears in `RunResult` with zero extra work.
 
+**Enforcement:** This is a tier-1 runtime guard, not merely a lint convention.
+`LitmusTest` freezes only after the most-derived `__init__` returns, so subclasses may
+finish declaring their identity after `super().__init__()`. Ordinary assignment and
+deletion then raise `AttributeError`. Framework-owned lifecycle and evidence transitions
+use `object.__setattr__` directly; suite code receives no framework escape-hatch method.
+The static no-self-mutation rule remains defense in depth.
+
 **Scope note:** ctx is strictly instance-local. A parent's ctx never flows into composed children — composition is the only coupling mechanism, and ctx inheritance would smuggle hidden state across it.
 
 ## run_data — Automatic Structured Evidence
@@ -24,6 +31,7 @@ The default `run_data` returns all serializable values from `utils.ctx`. Primiti
 async def configure(self, utils: TestUtils) -> dict[str, object]:
     ip = await self._resolve()
     return {"ip": ip, "hostname": "switch-01"}
+
 
 # RunResult.run_data => {"ip": "10.0.0.1", "hostname": "switch-01"}
 ```
@@ -51,10 +59,14 @@ def run_data(self) -> object:
 
 ```python
 def build_suite(self) -> LitmusTest:
-    return self.sequence(self.name, [
-        self.case("check reachable", self._check_reachable),
-        self.case("check firmware",  self._check_firmware),
-    ])
+    return self.sequence(
+        self.name,
+        [
+            self.case("check reachable", self._check_reachable),
+            self.case("check firmware", self._check_firmware),
+        ],
+    )
+
 
 async def _check_reachable(self, utils: TestUtils) -> Verdict:
     # `self` is preserved — bound at attribute access, no wrapping needed
@@ -122,7 +134,6 @@ Throw from either hook → run halts → every enclosing node transitions to `Ab
 
 ```python
 class MyDevice(LitmusTest):
-
     # configure ALWAYS returns the context your test provides to its
     # lifecycle methods and children. This tells future devs exactly what
     # context your test requires and what it supplies — important, for
@@ -130,7 +141,7 @@ class MyDevice(LitmusTest):
     async def configure(self, utils: TestUtils) -> dict[str, object]:
         username = utils.env.get("TARGET_USER")
         password = utils.env.get("TARGET_PASSWORD")
-        address  = utils.env.get("TARGET_ADDRESS")
+        address = utils.env.get("TARGET_ADDRESS")
         # Raise TestFailure to signal a verdict from configure — the test lands
         # in Fail without the suite ever running. The verdict means "did not
         # reach a testable state"; whether the cause is config/infra or DUT is
@@ -152,10 +163,13 @@ class MyDevice(LitmusTest):
         pass  # ssh auto-disconnected by framework
 
     def build_suite(self) -> LitmusTest:
-        return self.sequence(self.name, [
-            self.case("survey",    self._capture_survey),
-            self.case("reachable", self._check_reachable),
-        ])
+        return self.sequence(
+            self.name,
+            [
+                self.case("survey", self._capture_survey),
+                self.case("reachable", self._check_reachable),
+            ],
+        )
 
     async def _check_reachable(self, utils: TestUtils) -> Verdict:
         # utils.exec already routed through ssh
@@ -266,7 +280,7 @@ Returning `{"ssh": ...}` from `configure()` also makes the device eligible as a 
 Pass an existing `SshInterface` as the `via` argument to `utils.get_shell()` to tunnel the new connection through it. Both interfaces are framework-managed — no `cleanup()` override needed.
 
 ```python
-jump   = await utils.get_shell(host=jump_host, username=jump_user)
+jump = await utils.get_shell(host=jump_host, username=jump_user)
 target = await utils.get_shell(host=target_host, username=target_user, via=jump)
 ```
 
