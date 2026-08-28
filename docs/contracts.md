@@ -13,7 +13,7 @@ static analysis.
 
 ## Lifecycle Contract
 **Developer obligation:** Implement `configure()`, `build_suite()`, and `cleanup()` with the correct intent.
-- `configure()` — put the test in a known state. Readiness gates and polling live here. Return a ctx dict whose entries merge into `utils.ctx` for test methods, cleanup, and all descendant tests.
+- `configure()` — put the test in a known state. Readiness gates and polling live here. Its framework return annotation is `dict[str, Any]`; a suite may narrow it to a local `TypedDict`. The returned value is always an ordinary dict whose entries merge into `utils.ctx` for test methods, cleanup, and all descendant tests.
 - `build_suite()` — pure table-of-contents composition. Return a `LitmusTest` built from `self.case()` / `self.sequence()` / `self.group()`. Test methods (private class methods passed to `self.case()`) carry the actual verdict logic — return the `PASS` sentinel to pass, raise `TestFailure` to fail intentionally.
 - `cleanup()` — restore state. Must not throw (errors are swallowed and logged).
 
@@ -63,6 +63,7 @@ static analysis.
 - Log artifacts are co-located with their test case.
 - All serializable values (primitives, plain dicts, lists) added to `ctx` are automatically added to `run_data`.
   - Functions, class instances, and live handles (e.g. SSH connections) are stripped.
+  - Context annotations do not bypass this filter. A `TypedDict` is an ordinary dict at runtime, and each value still has to satisfy the same serialization rules.
 - Every `RunResult` includes `ancestor_names: list[str]` (path from root) and `bread_crumbs: str` (joined for display), plus a `summary_tree` snapshot of the node's subtree state at completion. Downstream integrators can reconstruct the full Inspector tree from the root's RunResult alone.
 - `TestFailure` and `ExternalIntegrationFailure` both implement `to_json()`. Serializing a `RunResult` produces clean JSON for downstream integrators without any custom serializer.
 
