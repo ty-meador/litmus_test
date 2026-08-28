@@ -24,6 +24,8 @@ class RemoteInterface(ABC):
       - `connect` / `disconnect` own the connected flag. Subclasses implement
         `_connect` and `_disconnect`; they do not set the flag themselves.
       - `_disconnect` must be safe when the transport was never opened.
+      - `disconnect` clears the flag even if `_disconnect` raises, so a later
+        `exec` cannot silently run against a half-dead transport.
       - `exec` never raises for a command's own exit status. Failure is an
         `ExecResult`. Calling `exec` while not connected raises
         `ConnectionError` — a protocol-level reject, not a verdict.
@@ -63,9 +65,13 @@ class RemoteInterface(ABC):
         """Close the transport and release its resources.
 
         Safe when the transport was never opened or is already closed.
+        The connected flag is cleared even if `_disconnect` raises, so a
+        later `exec` cannot silently succeed against a half-dead transport.
         """
-        await self._disconnect()
-        self._connected = False
+        try:
+            await self._disconnect()
+        finally:
+            self._connected = False
 
     @final
     async def reconnect(self) -> None:
