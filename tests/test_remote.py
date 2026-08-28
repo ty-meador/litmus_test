@@ -42,6 +42,19 @@ class _UartStub(RemoteInterface):
         return ExecResult(stdout=command, stderr="", exit_code=0)
 
 
+class _DisconnectRaises(RemoteInterface):
+    """Graceful close fails after the transport is open — the flag must still clear."""
+
+    async def _connect(self) -> None:
+        return
+
+    async def _disconnect(self) -> None:
+        raise RuntimeError("close failed")
+
+    async def _exec(self, command: str) -> ExecResult:
+        return ExecResult(stdout=command, stderr="", exit_code=0)
+
+
 class _HardClose(RemoteInterface):
     """Overrides the default cancel path the way SSH will: destroy, don't hang up."""
 
@@ -127,6 +140,19 @@ class TestUartShapedPeer:
         assert transport.connected is True
         assert transport.disconnect_calls == 1
         assert (await transport.exec("at")).exit_code == 0
+
+
+class TestDisconnectClearsTheFlag:
+    async def test_connected_is_false_and_later_exec_rejects_when_close_raises(self) -> None:
+        transport = _DisconnectRaises()
+        await transport.connect()
+
+        with pytest.raises(RuntimeError, match="close failed"):
+            await transport.disconnect()
+
+        assert transport.connected is False
+        with pytest.raises(ConnectionError, match="not connected"):
+            await transport.exec("at")
 
 
 class TestExecRejectsWhenClosed:
