@@ -12,7 +12,12 @@ make fix       # auto-format + auto-fix lint
 make check     # CI gate: format check, lint, pyright strict, pytest
 ```
 
-Read `STANDARDS.md` before committing. The port design lives in the workspace plan
+Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
+`overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
+patterns), and `contracts.md` (the non-negotiable developer↔framework invariants),
+translated from the legacy docs and updated to the port's semantics.
+
+The port design lives in the workspace plan
 (`../PLAN.md`); the TypeScript original is the `../litmus-test-legacy/` design reference,
 and its language server is `../litmus-language-server-legacy/`. Both are read-only —
 parity with them is explicitly not a goal. `PLAN.md` section 0 maps the workspace.
