@@ -4,6 +4,12 @@ import pytest
 
 import litmus
 from litmus import PASS, ContractViolation, LitmusTest, Verdict
+from litmus.lifecycle import State
+
+
+class StubUtils:
+    def __init__(self) -> None:
+        self.ctx: dict[str, object] = {}
 
 
 class TestLitmusTestPublicSurface:
@@ -62,9 +68,11 @@ class TestLitmusTestMain:
                 self.calls.append(utils)
                 return PASS
 
-        marker = object()
+        marker = StubUtils()
 
-        assert await Suite(name="rack").main(marker) is PASS
+        outcome = await Suite(name="rack").main(marker)
+
+        assert outcome.state is State.PASS
         assert calls == [marker]
 
     async def test_instance_cannot_run_twice(self) -> None:
@@ -77,6 +85,8 @@ class TestLitmusTestMain:
 
         suite = Suite(name="rack")
 
-        assert await suite.main(object()) is PASS
+        outcome = await suite.main(StubUtils())
+
+        assert outcome.state is State.PASS
         with pytest.raises(ContractViolation, match="may run only once"):
-            await suite.main(object())
+            await suite.main(StubUtils())
