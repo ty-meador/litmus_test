@@ -21,6 +21,7 @@ class TestSealedInternals:
             "__init_subclass__",
             "__setattr__",
             "case",
+            "group",
             "main",
             "run",
             "_run_lifecycle",
