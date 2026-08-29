@@ -28,7 +28,7 @@ The default `run_data` returns all serializable values from `utils.ctx`. Primiti
 
 ```python
 # configure returns data — it appears in run_data automatically
-async def configure(self, utils: TestUtils) -> dict[str, object]:
+async def configure(self, utils: TestUtils) -> dict[str, Any]:
     ip = await self._resolve()
     return {"ip": ip, "hostname": "switch-01"}
 
@@ -130,7 +130,26 @@ Register once at the root — the framework fires them around every executed tes
 Throw from either hook → run halts → every enclosing node transitions to `Aborted` → every in-flight SSH session and subprocess is killed immediately. A 30-minute firmware flash mid-abort does NOT continue to mutate the hardware.
 
 ## Configure-Returns-Context Pattern
-`configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant test cases. No instance fields needed for configure-phase data. (The ctx typing story — plain dict vs. `TypedDict` annotation — is an open question in `../PLAN.md`; the examples here use plain dicts.)
+`configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant test cases. No instance fields are needed for configure-phase data.
+
+The broad framework annotation is `dict[str, Any]`. When a suite benefits from precise
+key types, define a local `TypedDict` and use it as the covariant return annotation.
+This is static information only: a `TypedDict` is still an ordinary mutable dict at
+runtime. A context dataclass is deliberately out of contract because it would fight
+dict merge semantics and require special handling in the default `run_data` path.
+
+```python
+class DeviceContext(TypedDict):
+    ssh: RemoteInterface
+    token: str
+
+
+async def configure(self, utils: TestUtils) -> DeviceContext: ...
+```
+
+Generic `TestUtils[CtxT]` typing may later carry the same suite-local type through
+`utils.ctx`, but remains opt-in sugar. The framework stores a dict either way, and
+`run_data` still strips class instances, functions, and live handles value by value.
 
 ```python
 class MyDevice(LitmusTest):
@@ -138,7 +157,7 @@ class MyDevice(LitmusTest):
     # lifecycle methods and children. This tells future devs exactly what
     # context your test requires and what it supplies — important, for
     # example, for ssh chaining, which requires an "ssh" entry in ctx.
-    async def configure(self, utils: TestUtils) -> dict[str, object]:
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
         username = utils.env.get("TARGET_USER")
         password = utils.env.get("TARGET_PASSWORD")
         address = utils.env.get("TARGET_ADDRESS")
