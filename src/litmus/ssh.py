@@ -4,9 +4,11 @@ Suite authors do not construct this. `utils.get_shell` / `utils.use_shell` will
 hand one over once that surface exists. Self-tests import the module directly.
 Not on the public surface.
 
-Via chains are a constructor argument: an upstream `SshInterface` is brought up
-before this one, torn down after it, and hard-cancelled with it. Framework-owned
-`LitmusTest` via lifecycle (TestParams) is a later layer on top of this.
+Via chains are a constructor argument: an upstream `SshInterface` is handed over
+unconnected, brought up before this one, torn down after it, and hard-cancelled
+with it. This interface owns its hop outright — a hop cannot be shared or
+managed externally. Framework-owned `LitmusTest` via lifecycle (TestParams) is a
+later layer on top of this.
 """
 
 from __future__ import annotations
@@ -33,6 +35,9 @@ class SshInterface(RemoteInterface):
       - `cancel_in_flight` aborts the asyncssh client (socket-level destroy),
         then walks the via chain with the same hard-close. Graceful hangup is
         not used on either path — SSH disconnect is a destroy, matching legacy.
+      - A `via` hop is owned outright: it must arrive unconnected, `connect`
+        rejects one that is already up, and every teardown path collapses the
+        chain unconditionally.
       - Auth resolution, in order: explicit `agent` path, in-memory
         `private_key`, `private_key_path`, `password`, then `SSH_AUTH_SOCK`.
       - `skip_host_verification` is `known_hosts=None` (lab hosts without
@@ -56,7 +61,8 @@ class SshInterface(RemoteInterface):
         """Create an unconnected SSH interface.
 
         Credentials are stored for connect time. `via`, when given, is an
-        upstream hop this connection tunnels through.
+        upstream hop this connection tunnels through; it must be handed over
+        unconnected and belongs to this interface from then on.
         """
         super().__init__()
         self._host = host
@@ -108,20 +114,24 @@ class SshInterface(RemoteInterface):
         await self.reconnect()
 
     async def _connect(self) -> None:
-        opened_via = False
-        if self._via is not None and not self._via.connected:
-            await self._via.connect()
-            opened_via = True
-        tunnel = self._via._connection if self._via is not None else None
-        options = self._connect_options()
+        via = self._via
+        if via is not None:
+            if via.connected:
+                msg = "via hop is owned by this interface and must be handed over unconnected"
+                raise ConnectionError(msg)
+            await via.connect()
         try:
-            if tunnel is not None:
-                options["tunnel"] = tunnel
+            options = self._connect_options()
+            if via is not None:
+                if via._connection is None:
+                    msg = "via hop reports connected without a live connection"
+                    raise ConnectionError(msg)
+                options["tunnel"] = via._connection
             self._connection = await asyncssh.connect(self._host, self._port, **options)
         except BaseException:
-            if opened_via and self._via is not None:
+            if via is not None:
                 with contextlib.suppress(Exception):
-                    await self._via.disconnect()
+                    await via.disconnect()
             raise
 
     async def _disconnect(self) -> None:
