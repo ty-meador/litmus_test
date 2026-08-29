@@ -162,3 +162,57 @@ class TestCleanupGuarantee:
         with pytest.raises(asyncio.CancelledError):
             await running
         assert calls == ["test", "cleanup-started", "cleanup-finished"]
+
+    async def test_second_cancellation_still_waits_for_cleanup(self) -> None:
+        cleanup_started = asyncio.Event()
+        cleanup_release = asyncio.Event()
+        calls: list[str] = []
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: StubUtils) -> Verdict:
+                calls.append("test")
+                return PASS
+
+            async def cleanup(self, utils: StubUtils) -> None:
+                calls.append("cleanup-started")
+                cleanup_started.set()
+                await cleanup_release.wait()
+                calls.append("cleanup-finished")
+
+        running = asyncio.create_task(Suite(name="rack").main(StubUtils()))
+        await cleanup_started.wait()
+
+        running.cancel()
+        await asyncio.sleep(0)
+        running.cancel()
+        await asyncio.sleep(0)
+
+        assert not running.done()
+        cleanup_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert calls == ["test", "cleanup-started", "cleanup-finished"]
+
+
+class TestBuildSuiteClassification:
+    """Pinned decision from the !17 review: build_suite runs outside any child
+    boundary, so a plain exception raised there escapes main raw. Classification
+    of composition-time errors is deferred to the tier-2 checks (#12, #13)."""
+
+    async def test_plain_build_suite_error_escapes_raw_but_still_cleans_up(self) -> None:
+        calls: list[str] = []
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                raise ValueError("composition table is malformed")
+
+            async def cleanup(self, utils: StubUtils) -> None:
+                calls.append("cleanup")
+
+        with pytest.raises(ValueError, match="composition table is malformed"):
+            await Suite(name="rack").main(StubUtils())
+
+        assert calls == ["cleanup"]
