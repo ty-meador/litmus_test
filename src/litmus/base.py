@@ -2,14 +2,60 @@
 
 import asyncio
 import contextlib
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any, final
 
 from litmus.errors import ContractViolation
+from litmus.hooks import AuditHook, HookFunction, SurveyHook
 from litmus.lifecycle import ChildBoundary, Outcome, Slot
 from litmus.verdict import Verdict
 
 type _TestFunction = Callable[[Any], Awaitable[Verdict]]
+
+_SEALED_METHODS = frozenset(
+    {
+        "__delattr__",
+        "__init_subclass__",
+        "__setattr__",
+        "case",
+        "main",
+        "run",
+        "_run_lifecycle",
+        "_configure_and_merge_context",
+        "_run_cleanup",
+        "use_survey",
+        "use_audit",
+    }
+)
+_LIFECYCLE_COROUTINES = frozenset({"configure", "cleanup"})
+
+
+def _function(member: object) -> object:
+    """Return an instance function; class/static descriptors are not authored methods."""
+    if isinstance(member, (classmethod, staticmethod)):
+        return None
+    return member
+
+
+def _returns_verdict(member: object) -> bool:
+    """Recognize the mandatory test-method return contract without resolving hints."""
+    function = _function(member)
+    if not inspect.isfunction(function):
+        return False
+    annotation = inspect.signature(function).return_annotation
+    return (
+        annotation is Verdict
+        or getattr(annotation, "__name__", None) == "Verdict"
+        or (isinstance(annotation, str) and annotation.rsplit(".", maxsplit=1)[-1] == "Verdict")
+    )
+
+
+def _is_declared_test_method(cls: type[object], name: str, member: object) -> bool:
+    """Find a Verdict method, including a specialization that omits its annotation."""
+    if _returns_verdict(member):
+        return True
+    return any(_returns_verdict(base.__dict__.get(name)) for base in cls.__mro__[1:])
 
 
 class _LitmusTestMeta(type):
@@ -29,20 +75,52 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     :class:`ContractViolation`, preserving the first run as evidence.
     """
 
-    __slots__ = ("_frozen", "_has_run", "_name", "_test")
+    __slots__ = ("_audits", "_frozen", "_has_run", "_name", "_surveys", "_test")
 
     def __init__(self, *, name: str) -> None:
         """Create a named, not-yet-run test node."""
         self._frozen = False
         self._has_run = False
         self._name = name
+        self._surveys: list[SurveyHook] = []
+        self._audits: list[AuditHook] = []
         self._test: _TestFunction | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Reject attempts to replace the framework-owned verdict path."""
+        """Reject malformed authored classes before an instance can touch hardware."""
         super().__init_subclass__(**kwargs)
-        if "main" in cls.__dict__:
-            msg = "LitmusTest.main is framework-owned and cannot be overridden"
+
+        for name in cls.__dict__:
+            if name in _SEALED_METHODS or name.startswith("_safe_"):
+                msg = f"LitmusTest.{name} is framework-owned and cannot be overridden"
+                raise TypeError(msg)
+
+        for name in _LIFECYCLE_COROUTINES:
+            member = cls.__dict__.get(name)
+            if member is not None and not inspect.iscoroutinefunction(_function(member)):
+                msg = f"{cls.__name__}.{name} must be defined with async def"
+                raise TypeError(msg)
+
+        for name, member in cls.__dict__.items():
+            function = _function(member)
+            if (
+                inspect.isfunction(function)
+                and _is_declared_test_method(cls, name, function)
+                and not inspect.iscoroutinefunction(function)
+            ):
+                msg = f"{cls.__name__}.{name} must be defined with async def"
+                raise TypeError(msg)
+
+        build_suite = inspect.getattr_static(cls, "build_suite")
+        if build_suite is LitmusTest.build_suite:
+            msg = f"{cls.__name__}.build_suite must be overridden"
+            raise TypeError(msg)
+        build_suite_function = _function(build_suite)
+        if not inspect.isfunction(build_suite_function):
+            msg = f"{cls.__name__}.build_suite must be defined with def"
+            raise TypeError(msg)
+        if inspect.iscoroutinefunction(build_suite_function):
+            msg = f"{cls.__name__}.build_suite must be defined with def, not async def"
             raise TypeError(msg)
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -66,7 +144,25 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
     def case(self, name: str, test: _TestFunction) -> LitmusTest:
         """Create an internal leaf node from an already-bound verdict method."""
+        if not inspect.iscoroutinefunction(test):
+            method = getattr(test, "__qualname__", repr(test))
+            msg = f"test method {method} must be defined with async def"
+            raise TypeError(msg)
         return _Case(name=name, test=test)
+
+    @final
+    def use_survey(self, fn: HookFunction) -> None:
+        """Register a survey as immutable test identity during construction."""
+        if self._frozen:
+            raise ContractViolation(self.name, "hooks may be registered only during construction")
+        self._surveys.append(SurveyHook(fn=fn))
+
+    @final
+    def use_audit(self, *, interval: float, fn: HookFunction) -> None:
+        """Register an interval audit as immutable test identity during construction."""
+        if self._frozen:
+            raise ContractViolation(self.name, "hooks may be registered only during construction")
+        self._audits.append(AuditHook(interval=interval, fn=fn))
 
     async def configure(self, utils: Any) -> dict[str, Any]:
         """Prepare the test and return context for its suite and cleanup."""
@@ -109,12 +205,14 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         finally:
             await self._run_cleanup(boundary, utils)
 
+    @final
     async def _configure_and_merge_context(self, utils: Any) -> dict[str, Any]:
         """Keep configure and its required ctx merge inside one child boundary."""
         configured = await self.configure(utils)
         utils.ctx.update(configured)
         return configured
 
+    @final
     async def _run_cleanup(self, boundary: ChildBoundary, utils: Any) -> None:
         """Finish cleanup before allowing cancellation to leave this node."""
         cleanup = asyncio.create_task(boundary.run(Slot.CLEANUP, self.cleanup(utils)))
@@ -138,3 +236,7 @@ class _Case(LitmusTest):
     def __init__(self, *, name: str, test: _TestFunction) -> None:
         super().__init__(name=name)
         self._test = test
+
+    def build_suite(self) -> LitmusTest:
+        """Satisfy the structural contract; leaf execution never composes a suite."""
+        raise AssertionError("an internal case has no child suite")
