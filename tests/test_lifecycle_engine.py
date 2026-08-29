@@ -4,7 +4,14 @@ import asyncio
 
 import pytest
 
-from litmus import PASS, ContractViolation, LitmusTest, TestFailure, Verdict
+from litmus import (
+    PASS,
+    ContractViolation,
+    ExternalIntegrationFailure,
+    LitmusTest,
+    TestFailure,
+    Verdict,
+)
 from litmus.lifecycle import State
 
 
@@ -114,6 +121,29 @@ class TestCleanupGuarantee:
         assert outcome.failure is failed_check
         assert calls == ["cleanup"]
 
+    async def test_run_abort_still_reaches_cleanup(self) -> None:
+        calls: list[str] = []
+        abort = ExternalIntegrationFailure(
+            "before_each", RuntimeError("shop-floor database refused the record")
+        )
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: StubUtils) -> Verdict:
+                calls.append("test")
+                raise abort
+
+            async def cleanup(self, utils: StubUtils) -> None:
+                calls.append("cleanup")
+
+        with pytest.raises(ExternalIntegrationFailure) as caught:
+            await Suite(name="rack").main(StubUtils())
+
+        assert caught.value is abort
+        assert calls == ["test", "cleanup"]
+
     async def test_cleanup_error_is_logged_and_does_not_mask_the_verdict(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -167,6 +197,7 @@ class TestCleanupGuarantee:
         assert calls == ["test", "cleanup-started", "cleanup-finished"]
 
     async def test_second_cancellation_still_waits_for_cleanup(self) -> None:
+        test_started = asyncio.Event()
         cleanup_started = asyncio.Event()
         cleanup_release = asyncio.Event()
         calls: list[str] = []
@@ -176,7 +207,9 @@ class TestCleanupGuarantee:
                 return self.case("claim", self._claim)
 
             async def _claim(self, utils: StubUtils) -> Verdict:
-                calls.append("test")
+                calls.append("test-started")
+                test_started.set()
+                await asyncio.Event().wait()
                 return PASS
 
             async def cleanup(self, utils: StubUtils) -> None:
@@ -186,10 +219,13 @@ class TestCleanupGuarantee:
                 calls.append("cleanup-finished")
 
         running = asyncio.create_task(Suite(name="rack").main(StubUtils()))
+        await test_started.wait()
+
+        # The first cancellation aborts active work and enters finalization.
+        running.cancel()
         await cleanup_started.wait()
 
-        running.cancel()
-        await asyncio.sleep(0)
+        # A repeated cancellation must not orphan cleanup in flight.
         running.cancel()
         await asyncio.sleep(0)
 
@@ -197,7 +233,7 @@ class TestCleanupGuarantee:
         cleanup_release.set()
         with pytest.raises(asyncio.CancelledError):
             await running
-        assert calls == ["test", "cleanup-started", "cleanup-finished"]
+        assert calls == ["test-started", "cleanup-started", "cleanup-finished"]
 
 
 class TestBuildSuiteClassification:
