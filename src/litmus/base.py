@@ -1,6 +1,7 @@
 """The single public test node and its framework-owned lifecycle."""
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any, final
 
@@ -120,7 +121,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         try:
             await asyncio.shield(cleanup)
         except asyncio.CancelledError:
-            await cleanup
+            # Section 4.2: repeated cancellations must not abandon the wait —
+            # restoration finishes before cancellation may leave this node.
+            while not cleanup.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(cleanup)
             raise
 
 
