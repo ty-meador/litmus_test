@@ -35,6 +35,12 @@ class TestLitmusTestImmutability:
                 super().__init__(name=name)
                 self.serial = serial
 
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: object) -> Verdict:
+                return PASS
+
         device = Device(name="dut", serial="abc123")
 
         assert device.name == "dut"
