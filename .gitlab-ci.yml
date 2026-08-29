@@ -1,0 +1,28 @@
+# CI gate — mirrors `make check` exactly: verify only, no auto-fix. A red
+# pipeline means the change does not merge; there is no passing a subset.
+#
+# The image carries uv on a Debian base with make and Python 3.14 preinstalled,
+# matching .python-version. `uv sync --locked` refuses a stale uv.lock rather
+# than silently re-resolving, so lockfile drift fails here, loudly, before the
+# gate runs.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+
+check:
+  image: ghcr.io/astral-sh/uv:python3.14-bookworm
+  interruptible: true
+  variables:
+    UV_CACHE_DIR: .uv-cache
+    UV_LINK_MODE: copy
+  cache:
+    key:
+      files:
+        - uv.lock
+    paths:
+      - .uv-cache
+  script:
+    - uv sync --locked
+    - make check
