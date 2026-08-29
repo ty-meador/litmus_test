@@ -439,6 +439,60 @@ class TestViaChain:
             await jump_peer.aclose()
             await target_peer.aclose()
 
+    async def test_a_pre_connected_via_is_rejected_and_left_untouched(self) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        target = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="root",
+            password="admin",
+            skip_host_verification=True,
+            via=jump,
+        )
+        try:
+            await jump.connect()
+            with pytest.raises(ConnectionError, match="unconnected"):
+                await target.connect()
+            assert target.connected is False
+            assert jump.connected is True
+        finally:
+            await jump.disconnect()
+            await jump_peer.aclose()
+
+    async def test_a_failed_target_connect_collapses_the_via_it_opened(self) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        target_peer = await _LoopbackSshd.start(username="root", password="admin")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        target = SshInterface(
+            host="127.0.0.1",
+            port=target_peer.port,
+            username="root",
+            password="wrong",
+            skip_host_verification=True,
+            via=jump,
+        )
+        try:
+            with pytest.raises(asyncssh.Error):
+                await target.connect()
+            assert target.connected is False
+            assert jump.connected is False
+        finally:
+            await jump_peer.aclose()
+            await target_peer.aclose()
+
 
 class TestReconnect:
     async def test_reconnect_to_replaces_the_socket_at_a_new_address(self) -> None:
