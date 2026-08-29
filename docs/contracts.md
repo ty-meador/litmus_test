@@ -133,6 +133,18 @@ static analysis.
 
 ---
 
+## Exec Routing Contract
+**Framework obligation:** `use_shell` is the only writer of the node's exec router. `get_shell` may open extra endpoints and may read `inherit` to pick a tunnel; it never assigns the router or the propagate flag.
+
+- Four `use_shell` shapes: connection (`host` + `username`), connection with explicit `via`, policy-only `inherit=False` (force local), and bare `use_shell()` (return the active handle).
+- Explicit `via` always wins. `inherit=False` on a connection form skips the parent's hop.
+- `propagate=False` on `use_shell` stops this node's router from flowing to children; they start local. `propagate` on `get_shell` is a documented no-op.
+- Children inherit the route through run params (`RouterRunParams`), never through ctx. ctx is instance-local domain data, not infrastructure.
+
+**Developer obligation:** Call `use_shell` when this node's `utils.exec` should land somewhere other than the test host. Call `get_shell` for auxiliary endpoints. Do not stuff SSH handles into ctx and expect routing to notice.
+
+---
+
 ## Composability Contract
 **Framework obligation:** Any `LitmusTest` or subclass thereof can be composed indefinitely in any shape the SE deems appropriate.
 
