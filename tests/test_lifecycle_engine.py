@@ -79,6 +79,9 @@ class TestLifecycleOrder:
             async def configure(self, utils: StubUtils) -> dict[str, object]:
                 raise ValueError("malformed readiness probe")
 
+            def build_suite(self) -> LitmusTest:
+                raise AssertionError("configure failure must skip the suite")
+
             async def cleanup(self, utils: StubUtils) -> None:
                 calls.append("cleanup")
 
