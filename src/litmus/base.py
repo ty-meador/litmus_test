@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import copy
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, final
@@ -192,20 +193,31 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     async def main(self, utils: Any) -> Outcome:
         """Execute the sealed lifecycle exactly once."""
-        return await self._run_lifecycle(utils, RunAbort())
+        return await self._run_lifecycle(utils, RunAbort(), isolate_context=False)
 
     @final
-    async def _run_lifecycle(self, utils: Any, run_abort: RunAbort) -> Outcome:
+    async def _run_lifecycle(
+        self,
+        utils: Any,
+        run_abort: RunAbort,
+        *,
+        isolate_context: bool = True,
+    ) -> Outcome:
         """Execute one node while preserving the tree's shared halt signal."""
         if self._has_run:
             raise ContractViolation(self.name, "a LitmusTest instance may run only once")
         object.__setattr__(self, "_has_run", True)
 
         children = self._children
+        test = self._test
+        if isolate_context and children is None and test is None:
+            # Utilities remain shared services; mutable context belongs to one authored instance.
+            utils = copy.copy(utils)
+            object.__setattr__(utils, "ctx", {})
+
         if children is not None:
             return await self._run_group(utils, run_abort, children)
 
-        test = self._test
         if test is not None:
             # ChildBoundary is the sole enforcement point for authored verdicts.
             return await ChildBoundary(self.name, run_abort).run(Slot.TEST_METHOD, test(utils))
