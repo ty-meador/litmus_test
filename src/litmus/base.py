@@ -23,8 +23,10 @@ _SEALED_METHODS = frozenset(
         "group",
         "main",
         "run",
+        "sequence",
         "_run_lifecycle",
         "_run_group",
+        "_run_sequence",
         "_configure_and_merge_context",
         "_run_cleanup",
         "use_survey",
@@ -160,6 +162,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             raise ContractViolation(name, "a test group must contain at least one child")
         return _Group(name=name, tests=tests)
 
+    def sequence(self, name: str, tests: Sequence[LitmusTest]) -> LitmusTest:
+        """Compose dependent children that stop at the first non-pass verdict."""
+        if not tests:
+            raise ContractViolation(name, "a test sequence must contain at least one child")
+        return _Sequence(name=name, tests=tests)
+
     @final
     def use_survey(self, fn: HookFunction) -> None:
         """Register a survey as immutable test identity during construction."""
@@ -181,10 +189,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     def build_suite(self) -> LitmusTest:
         """Return this node's authored composition.
 
-        Subclasses provide a pure table of contents assembled with ``self.case()``
-        and, once their tracked implementation lands, ``sequence`` and ``group``.
+        Subclasses provide a pure table of contents assembled with ``self.case()``,
+        ``self.sequence()``, and ``self.group()``.
         """
-        detail = "build_suite() must return a composition built with self.case()"
+        detail = "build_suite() must return a case, sequence, or group composition"
         raise ContractViolation(self.name, detail)
 
     async def cleanup(self, utils: Any) -> None:
@@ -216,6 +224,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             object.__setattr__(utils, "ctx", {})
 
         if children is not None:
+            if isinstance(self, _Sequence):
+                return await self._run_sequence(utils, run_abort, children)
             return await self._run_group(utils, run_abort, children)
 
         if test is not None:
@@ -273,6 +283,35 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
 
     @final
+    async def _run_sequence(
+        self,
+        utils: Any,
+        run_abort: RunAbort,
+        children: tuple[LitmusTest, ...],
+    ) -> Outcome:
+        """Run dependent children in order and stop at the first non-pass verdict."""
+        outcomes: list[Outcome] = []
+        for child in children:
+            outcome = await child._run_lifecycle(utils, run_abort)
+            outcomes.append(outcome)
+            if outcome.state in (State.FAIL, State.ABORTED):
+                return Outcome(
+                    Slot.TEST_METHOD,
+                    self.name,
+                    outcome.state,
+                    failure=outcome.failure,
+                    value=tuple(outcomes),
+                )
+            if outcome.state is not State.PASS:
+                raise AssertionError("a sequence child settled without a terminal state")
+
+        all_ran = len(outcomes) == len(children)
+        all_passed = all(outcome.state is State.PASS for outcome in outcomes)
+        if not (all_ran and all_passed):
+            raise AssertionError("a sequence reached no explicit terminal verdict")
+        return Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=tuple(outcomes))
+
+    @final
     async def _configure_and_merge_context(self, utils: Any) -> dict[str, Any]:
         """Keep configure and its required ctx merge inside one child boundary."""
         configured = await self.configure(utils)
@@ -322,3 +361,18 @@ class _Group(LitmusTest):
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; group execution owns its child tasks."""
         raise AssertionError("an internal group has no child suite")
+
+
+@final
+class _Sequence(LitmusTest):
+    """Internal serial specialization created only by :meth:`LitmusTest.sequence`."""
+
+    __slots__ = ()
+
+    def __init__(self, *, name: str, tests: Sequence[LitmusTest]) -> None:
+        super().__init__(name=name)
+        self._children = tuple(tests)
+
+    def build_suite(self) -> LitmusTest:
+        """Satisfy the structural contract; sequence execution owns child order."""
+        raise AssertionError("an internal sequence has no child suite")
