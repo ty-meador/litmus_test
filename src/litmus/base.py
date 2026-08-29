@@ -1,9 +1,12 @@
-"""The single public test node and its framework-owned verdict path."""
+"""The single public test node and its framework-owned lifecycle."""
 
+import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any, final
 
 from litmus.errors import ContractViolation
+from litmus.lifecycle import ChildBoundary, Outcome, Slot
 from litmus.verdict import Verdict
 
 type _TestFunction = Callable[[Any], Awaitable[Verdict]]
@@ -65,6 +68,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """Create an internal leaf node from an already-bound verdict method."""
         return _Case(name=name, test=test)
 
+    async def configure(self, utils: Any) -> dict[str, Any]:
+        """Prepare the test and return context for its suite and cleanup."""
+        return {}
+
     def build_suite(self) -> LitmusTest:
         """Return this node's authored composition.
 
@@ -74,19 +81,52 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         detail = "build_suite() must return a composition built with self.case()"
         raise ContractViolation(self.name, detail)
 
+    async def cleanup(self, utils: Any) -> None:
+        """Restore state after the suite settles, regardless of its outcome."""
+
     @final
-    async def main(self, utils: Any) -> Verdict:
-        """Execute the sealed verdict path exactly once."""
+    async def main(self, utils: Any) -> Outcome:
+        """Execute the sealed lifecycle exactly once."""
         if self._has_run:
             raise ContractViolation(self.name, "a LitmusTest instance may run only once")
         object.__setattr__(self, "_has_run", True)
 
         test = self._test
         if test is not None:
-            return await test(utils)
+            # ChildBoundary is the sole enforcement point for authored verdicts.
+            return await ChildBoundary(self.name).run(Slot.TEST_METHOD, test(utils))
 
-        suite = self.build_suite()
-        return await suite.main(utils)
+        boundary = ChildBoundary(self.name)
+        try:
+            configured = await boundary.run(
+                Slot.CONFIGURE, self._configure_and_merge_context(utils)
+            )
+            if configured.state is not None:
+                return configured
+
+            suite = self.build_suite()
+            return await suite.main(utils)
+        finally:
+            await self._run_cleanup(boundary, utils)
+
+    async def _configure_and_merge_context(self, utils: Any) -> dict[str, Any]:
+        """Keep configure and its required ctx merge inside one child boundary."""
+        configured = await self.configure(utils)
+        utils.ctx.update(configured)
+        return configured
+
+    async def _run_cleanup(self, boundary: ChildBoundary, utils: Any) -> None:
+        """Finish cleanup before allowing cancellation to leave this node."""
+        cleanup = asyncio.create_task(boundary.run(Slot.CLEANUP, self.cleanup(utils)))
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # Section 4.2: repeated cancellations must not abandon the wait —
+            # restoration finishes before cancellation may leave this node.
+            while not cleanup.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(cleanup)
+            raise
 
 
 @final
