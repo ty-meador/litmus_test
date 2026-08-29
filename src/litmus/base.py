@@ -3,12 +3,12 @@
 import asyncio
 import contextlib
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, final
 
-from litmus.errors import ContractViolation
+from litmus.errors import ContractViolation, ExternalIntegrationFailure
 from litmus.hooks import AuditHook, HookFunction, SurveyHook
-from litmus.lifecycle import ChildBoundary, Outcome, Slot
+from litmus.lifecycle import ChildBoundary, Outcome, RunAbort, Slot, State
 from litmus.verdict import Verdict
 
 type _TestFunction = Callable[[Any], Awaitable[Verdict]]
@@ -19,9 +19,11 @@ _SEALED_METHODS = frozenset(
         "__init_subclass__",
         "__setattr__",
         "case",
+        "group",
         "main",
         "run",
         "_run_lifecycle",
+        "_run_group",
         "_configure_and_merge_context",
         "_run_cleanup",
         "use_survey",
@@ -75,7 +77,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     :class:`ContractViolation`, preserving the first run as evidence.
     """
 
-    __slots__ = ("_audits", "_frozen", "_has_run", "_name", "_surveys", "_test")
+    __slots__ = ("_audits", "_children", "_frozen", "_has_run", "_name", "_surveys", "_test")
 
     def __init__(self, *, name: str) -> None:
         """Create a named, not-yet-run test node."""
@@ -85,6 +87,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._surveys: list[SurveyHook] = []
         self._audits: list[AuditHook] = []
         self._test: _TestFunction | None = None
+        self._children: tuple[LitmusTest, ...] | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Reject malformed authored classes before an instance can touch hardware."""
@@ -150,6 +153,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             raise TypeError(msg)
         return _Case(name=name, test=test)
 
+    def group(self, name: str, tests: Sequence[LitmusTest]) -> LitmusTest:
+        """Compose independent children under one structured-concurrency owner."""
+        if not tests:
+            raise ContractViolation(name, "a test group must contain at least one child")
+        return _Group(name=name, tests=tests)
+
     @final
     def use_survey(self, fn: HookFunction) -> None:
         """Register a survey as immutable test identity during construction."""
@@ -183,16 +192,25 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     async def main(self, utils: Any) -> Outcome:
         """Execute the sealed lifecycle exactly once."""
+        return await self._run_lifecycle(utils, RunAbort())
+
+    @final
+    async def _run_lifecycle(self, utils: Any, run_abort: RunAbort) -> Outcome:
+        """Execute one node while preserving the tree's shared halt signal."""
         if self._has_run:
             raise ContractViolation(self.name, "a LitmusTest instance may run only once")
         object.__setattr__(self, "_has_run", True)
 
+        children = self._children
+        if children is not None:
+            return await self._run_group(utils, run_abort, children)
+
         test = self._test
         if test is not None:
             # ChildBoundary is the sole enforcement point for authored verdicts.
-            return await ChildBoundary(self.name).run(Slot.TEST_METHOD, test(utils))
+            return await ChildBoundary(self.name, run_abort).run(Slot.TEST_METHOD, test(utils))
 
-        boundary = ChildBoundary(self.name)
+        boundary = ChildBoundary(self.name, run_abort)
         try:
             configured = await boundary.run(
                 Slot.CONFIGURE, self._configure_and_merge_context(utils)
@@ -201,9 +219,46 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 return configured
 
             suite = self.build_suite()
-            return await suite.main(utils)
+            return await suite._run_lifecycle(utils, run_abort)
         finally:
             await self._run_cleanup(boundary, utils)
+
+    @final
+    async def _run_group(
+        self,
+        utils: Any,
+        run_abort: RunAbort,
+        children: tuple[LitmusTest, ...],
+    ) -> Outcome:
+        """Run every child to settlement unless a harness-level halt escapes."""
+        tasks: list[asyncio.Task[Outcome]] = []
+        try:
+            async with asyncio.TaskGroup() as task_group:
+                tasks.extend(
+                    task_group.create_task(child._run_lifecycle(utils, run_abort))
+                    for child in children
+                )
+        except* ExternalIntegrationFailure as failures:
+            # TaskGroup has already cancelled and joined every sibling. Restore the
+            # taxonomy's class-intact halt instead of leaking an ExceptionGroup.
+            raise failures.exceptions[0] from None
+
+        outcomes = tuple(task.result() for task in tasks)
+        if all(outcome.state is State.PASS for outcome in outcomes):
+            return Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=outcomes)
+
+        first_nonpass = next(outcome for outcome in outcomes if outcome.state is not State.PASS)
+        state = State.FAIL
+        if any(outcome.state is State.ABORTED for outcome in outcomes):
+            state = State.ABORTED
+            first_nonpass = next(outcome for outcome in outcomes if outcome.state is State.ABORTED)
+        return Outcome(
+            Slot.TEST_METHOD,
+            self.name,
+            state,
+            failure=first_nonpass.failure,
+            value=outcomes,
+        )
 
     @final
     async def _configure_and_merge_context(self, utils: Any) -> dict[str, Any]:
@@ -240,3 +295,18 @@ class _Case(LitmusTest):
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; leaf execution never composes a suite."""
         raise AssertionError("an internal case has no child suite")
+
+
+@final
+class _Group(LitmusTest):
+    """Internal concurrent specialization created only by :meth:`LitmusTest.group`."""
+
+    __slots__ = ()
+
+    def __init__(self, *, name: str, tests: Sequence[LitmusTest]) -> None:
+        super().__init__(name=name)
+        self._children = tuple(tests)
+
+    def build_suite(self) -> LitmusTest:
+        """Satisfy the structural contract; group execution owns its child tasks."""
+        raise AssertionError("an internal group has no child suite")
