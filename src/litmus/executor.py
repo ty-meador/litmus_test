@@ -1,8 +1,8 @@
 """Host-side execution choke point.
 
 Every blocking or native call the framework makes on the test host enters through
-`LocalExec`. Suite authors never hold an instance; `utils.exec` wraps `LocalExec.run`
-once the test-class surface exists.
+`LocalExec`. Suite authors never hold an instance; each run seed gives `TestUtils`
+one executor, shared by its per-node routed views.
 
 The instance is the unit of isolation. Nothing here is process-global, so a later
 process-per-DUT worker can own its own `LocalExec` without a redesign.

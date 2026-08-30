@@ -11,18 +11,14 @@ from litmus import (
     FrameworkContractViolation,
     LitmusTest,
     TestFailure,
+    TestUtils,
     Verdict,
 )
 from litmus.lifecycle import Outcome, RunAbort, Slot, State
 
 
-class StubUtils:
-    def __init__(self) -> None:
-        self.ctx: dict[str, object] = {}
-
-
 class _NonTerminalChild:
-    async def _run_lifecycle(self, _utils: object, _run_abort: RunAbort) -> Outcome:
+    async def _run_lifecycle(self, _utils: TestUtils, _run_abort: RunAbort) -> Outcome:
         return Outcome(Slot.CONFIGURE, "corrupt child", None)
 
 
@@ -61,7 +57,7 @@ class TestCompositionFactories:
 
         suite = Suite(name="rack")
 
-        outcome = await suite.main(StubUtils())
+        outcome = await suite.main(TestUtils())
 
         assert outcome.state is State.PASS
         assert calls == [("first", suite), ("second", suite)]
@@ -100,7 +96,7 @@ class TestCompositionFactories:
         child = cast("LitmusTest", _NonTerminalChild())
 
         with pytest.raises(FrameworkContractViolation) as raised:
-            await sequence._run_sequence(StubUtils(), RunAbort(), (child,))
+            await sequence._run_sequence(TestUtils(), RunAbort(), (child,))
 
         assert raised.value.node == sequence.name
         assert raised.value.detail == "a sequence child settled without a terminal state"
@@ -112,7 +108,7 @@ class TestCompositionFactories:
         children = cast("tuple[LitmusTest, ...]", _InconsistentChildren())
 
         with pytest.raises(FrameworkContractViolation) as raised:
-            await sequence._run_sequence(StubUtils(), RunAbort(), children)
+            await sequence._run_sequence(TestUtils(), RunAbort(), children)
 
         assert raised.value.node == sequence.name
         assert raised.value.detail == "a sequence reached no explicit terminal verdict"
@@ -145,7 +141,7 @@ class TestSequenceExecution:
                 calls.append("unreachable")
                 return PASS
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
         children = cast("tuple[Outcome, ...]", outcome.value)
 
         assert calls == ["first", "failing"]
@@ -173,7 +169,7 @@ class TestSequenceExecution:
                 calls.append("second")
                 return PASS
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
         children = cast("tuple[Outcome, ...]", outcome.value)
 
         assert calls == ["first", "second"]
