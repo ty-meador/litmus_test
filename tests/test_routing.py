@@ -13,6 +13,7 @@ from litmus.routing import (
     ShellOpenRequest,
     SshConnector,
 )
+from litmus.ssh import SshInterface
 
 
 class _Local:
@@ -285,4 +286,15 @@ class TestSshConnector:
         await hop.connect()
         request = ShellOpenRequest(host="10.0.0.2", username="root", via=hop)
         with pytest.raises(TypeError, match="SshInterface"):
+            await SshConnector().open(request)
+
+    async def test_rejects_a_dead_via_hop(self) -> None:
+        hop = SshInterface(
+            host="127.0.0.1",
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        request = ShellOpenRequest(host="10.0.0.2", username="root", via=hop)
+        with pytest.raises(ConnectionError, match="must be live"):
             await SshConnector().open(request)
