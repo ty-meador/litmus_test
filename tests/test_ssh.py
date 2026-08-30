@@ -494,6 +494,147 @@ class TestViaChain:
             await target_peer.aclose()
 
 
+class TestBorrowedTunnel:
+    async def test_target_tunnels_through_a_borrowed_live_hop(self) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        target_peer = await _LoopbackSshd.start(username="root", password="admin")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        target = SshInterface(
+            host="127.0.0.1",
+            port=target_peer.port,
+            username="root",
+            password="admin",
+            skip_host_verification=True,
+            tunnel=jump,
+        )
+        try:
+            await jump.connect()
+            await target.connect()
+            result = await target.exec("uname")
+            assert result == ExecResult(stdout="uname", stderr="", exit_code=0)
+            await target.disconnect()
+            assert target.connected is False
+            assert jump.connected is True
+            result = await jump.exec("id")
+            assert result.exit_code == 0
+        finally:
+            await jump.disconnect()
+            await jump_peer.aclose()
+            await target_peer.aclose()
+
+    async def test_an_unconnected_tunnel_is_rejected_and_left_untouched(self) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        target = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="root",
+            password="admin",
+            skip_host_verification=True,
+            tunnel=jump,
+        )
+        try:
+            with pytest.raises(ConnectionError, match="handed over connected"):
+                await target.connect()
+            assert target.connected is False
+            assert jump.connected is False
+        finally:
+            await jump_peer.aclose()
+
+    def test_via_and_tunnel_are_mutually_exclusive(self) -> None:
+        hop = SshInterface(
+            host="127.0.0.1",
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            SshInterface(
+                host="127.0.0.1",
+                username="root",
+                password="admin",
+                skip_host_verification=True,
+                via=hop,
+                tunnel=hop,
+            )
+
+    async def test_cancel_leaves_the_borrowed_hop_up(self) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        target_peer = await _LoopbackSshd.start(username="root", password="admin")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        target = SshInterface(
+            host="127.0.0.1",
+            port=target_peer.port,
+            username="root",
+            password="admin",
+            skip_host_verification=True,
+            tunnel=jump,
+        )
+        try:
+            await jump.connect()
+            await target.connect()
+            task = asyncio.create_task(target.exec("sleep 30"))
+            await asyncio.sleep(0.2)
+            await target.cancel_in_flight()
+            result = await task
+            assert result.exit_code == -1
+            assert target.connected is False
+            assert jump.connected is True
+            result = await jump.exec("id")
+            assert result.exit_code == 0
+        finally:
+            await jump.disconnect()
+            await jump_peer.aclose()
+            await target_peer.aclose()
+
+    async def test_a_failed_target_connect_leaves_the_borrowed_hop_up(self) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        target_peer = await _LoopbackSshd.start(username="root", password="admin")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        target = SshInterface(
+            host="127.0.0.1",
+            port=target_peer.port,
+            username="root",
+            password="wrong",
+            skip_host_verification=True,
+            tunnel=jump,
+        )
+        try:
+            await jump.connect()
+            with pytest.raises(asyncssh.Error):
+                await target.connect()
+            assert target.connected is False
+            assert jump.connected is True
+        finally:
+            await jump.disconnect()
+            await jump_peer.aclose()
+            await target_peer.aclose()
+
+
 class TestReconnect:
     async def test_reconnect_to_replaces_the_socket_at_a_new_address(self) -> None:
         first = await _LoopbackSshd.start()
