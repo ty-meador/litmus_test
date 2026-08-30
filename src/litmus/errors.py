@@ -112,10 +112,12 @@ class TestFailure(LitmusError):
         expected: object = MISSING,
         received: object = MISSING,
     ) -> None:
-        """Args:
-        fail_message: What failed, in the FT's language.
-        expected: The spec-defined value, when there is one.
-        received: The value actually observed — unknown, which is why we test.
+        """Record what failed and, when given, the comparison that proves it.
+
+        Args:
+            fail_message: What failed, in the FT's language.
+            expected: The spec-defined value, when there is one.
+            received: The value actually observed — unknown, which is why we test.
         """
         super().__init__(fail_message)
         self.fail_message = fail_message
@@ -170,10 +172,12 @@ class ContractViolation(TestFailure):
         detail: str | None = None,
         cause: BaseException | None = None,
     ) -> None:
-        """Args:
-        node: Name of the node whose contract was violated.
-        detail: What specifically went wrong. Defaults to the general form.
-        cause: The original exception, preserved verbatim for the artifact.
+        """Banner the violation with the node it happened in.
+
+        Args:
+            node: Name of the node whose contract was violated.
+            detail: What specifically went wrong. Defaults to the general form.
+            cause: The original exception, preserved verbatim for the artifact.
         """
         resolved = detail if detail is not None else self.DEFAULT_DETAIL
         super().__init__(f"{self.BANNER} IN {node}: {resolved}")
@@ -227,9 +231,11 @@ class MissingVerdict(LitmusError):
     BANNER: ClassVar[str] = "CONTRACT VIOLATION"
 
     def __init__(self, node: str, returned: object) -> None:
-        """Args:
-        node: Name of the node that returned without a verdict.
-        returned: The value it returned instead of PASS.
+        """Record the non-verdict a node returned.
+
+        Args:
+            node: Name of the node that returned without a verdict.
+            returned: The value it returned instead of PASS.
         """
         fail_message = (
             f"{self.BANNER} IN {node}: returned {returned!r} instead of the PASS "
@@ -276,9 +282,11 @@ class ExternalIntegrationFailure(LitmusError):
     """
 
     def __init__(self, hook: HookName, cause: BaseException) -> None:
-        """Args:
-        hook: Which hook threw — `before_each` or `after_each`.
-        cause: The integrator's original exception, preserved verbatim.
+        """Carry the integrator's error across the framework without rebranding it.
+
+        Args:
+            hook: Which hook threw — `before_each` or `after_each`.
+            cause: The integrator's original exception, preserved verbatim.
         """
         fail_message = f"external integration hook {hook}() threw — test run halted: {cause}"
         super().__init__(fail_message)
