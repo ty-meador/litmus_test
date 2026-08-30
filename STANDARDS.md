@@ -36,10 +36,12 @@ rules and pyright strict — an unannotated def fails `make check`.
 
 ## 3. Shape of the code
 
-- **OOP only.** Logic lives in classes as instance methods (private `_method` for
-  internals). No floating module-level functions, no arrow-style lambda wrappers where a
-  method suffices. Module level holds classes, constants, and true singletons (e.g. the
-  `PASS` sentinel).
+- **OOP at the surface.** Public logic lives in classes as instance methods (private
+  `_method` for internals). No arrow-style lambda wrappers where a method suffices, and
+  never a module-level function on the public surface. Module level holds classes,
+  constants, true singletons (e.g. the `PASS` sentinel), and private stateless helper
+  functions (`_helper`) serving that module's classes — a pure predicate does not earn
+  a class-as-namespace.
 - **No nested ternaries.** Ever. Use a default assignment followed by `if`/`elif`.
   A single flat ternary is fine; `x if a else (y if b else z)` is not.
 - **Async-first.** All I/O is `async`. Blocking or native calls enter only through the
