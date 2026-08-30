@@ -10,14 +10,10 @@ from litmus import (
     ExternalIntegrationFailure,
     LitmusTest,
     TestFailure,
+    TestUtils,
     Verdict,
 )
 from litmus.lifecycle import State
-
-
-class StubUtils:
-    def __init__(self, **ctx: object) -> None:
-        self.ctx: dict[str, object] = dict(ctx)
 
 
 class TestLifecycleOrder:
@@ -25,7 +21,7 @@ class TestLifecycleOrder:
         calls: list[tuple[str, dict[str, object]]] = []
 
         class Suite(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append(("configure", dict(utils.ctx)))
                 return {"serial": "SN-0042", "station": "west"}
 
@@ -33,14 +29,14 @@ class TestLifecycleOrder:
                 calls.append(("build_suite", {}))
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append(("test", dict(utils.ctx)))
                 return PASS
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append(("cleanup", dict(utils.ctx)))
 
-        utils = StubUtils(station="east")
+        utils = TestUtils(ctx={"station": "east"})
 
         outcome = await Suite(name="rack").main(utils)
 
@@ -58,7 +54,7 @@ class TestLifecycleOrder:
         readiness = TestFailure("device did not reach a testable state")
 
         class Suite(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append("configure")
                 raise readiness
 
@@ -66,14 +62,14 @@ class TestLifecycleOrder:
                 calls.append("build_suite")
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test")
                 return PASS
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup")
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
 
         assert outcome.state is State.FAIL
         assert outcome.failure is readiness
@@ -83,16 +79,16 @@ class TestLifecycleOrder:
         calls: list[str] = []
 
         class Suite(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 raise ValueError("malformed readiness probe")
 
             def build_suite(self) -> LitmusTest:
                 raise AssertionError("configure failure must skip the suite")
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup")
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
 
         assert outcome.state is State.FAIL
         assert isinstance(outcome.failure, ContractViolation)
@@ -109,13 +105,13 @@ class TestCleanupGuarantee:
             def build_suite(self) -> LitmusTest:
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 raise failed_check
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup")
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
 
         assert outcome.state is State.FAIL
         assert outcome.failure is failed_check
@@ -131,15 +127,15 @@ class TestCleanupGuarantee:
             def build_suite(self) -> LitmusTest:
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test")
                 raise abort
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup")
 
         with pytest.raises(ExternalIntegrationFailure) as caught:
-            await Suite(name="rack").main(StubUtils())
+            await Suite(name="rack").main(TestUtils())
 
         assert caught.value is abort
         assert calls == ["test", "cleanup"]
@@ -151,14 +147,14 @@ class TestCleanupGuarantee:
             def build_suite(self) -> LitmusTest:
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 raise RuntimeError("relay refused neutral state")
 
         with caplog.at_level("ERROR", logger="litmus"):
-            outcome = await Suite(name="rack").main(StubUtils())
+            outcome = await Suite(name="rack").main(TestUtils())
 
         assert outcome.state is State.PASS
         assert len(caplog.records) == 1
@@ -174,17 +170,17 @@ class TestCleanupGuarantee:
             def build_suite(self) -> LitmusTest:
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test")
                 return PASS
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup-started")
                 cleanup_started.set()
                 await cleanup_release.wait()
                 calls.append("cleanup-finished")
 
-        running = asyncio.create_task(Suite(name="rack").main(StubUtils()))
+        running = asyncio.create_task(Suite(name="rack").main(TestUtils()))
         await cleanup_started.wait()
 
         running.cancel()
@@ -206,19 +202,19 @@ class TestCleanupGuarantee:
             def build_suite(self) -> LitmusTest:
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test-started")
                 test_started.set()
                 await asyncio.Event().wait()
                 return PASS
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup-started")
                 cleanup_started.set()
                 await cleanup_release.wait()
                 calls.append("cleanup-finished")
 
-        running = asyncio.create_task(Suite(name="rack").main(StubUtils()))
+        running = asyncio.create_task(Suite(name="rack").main(TestUtils()))
         await test_started.wait()
 
         # The first cancellation aborts active work and enters finalization.
@@ -248,10 +244,10 @@ class TestBuildSuiteClassification:
             def build_suite(self) -> LitmusTest:
                 raise ValueError("composition table is malformed")
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup")
 
         with pytest.raises(ValueError, match="composition table is malformed"):
-            await Suite(name="rack").main(StubUtils())
+            await Suite(name="rack").main(TestUtils())
 
         assert calls == ["cleanup"]

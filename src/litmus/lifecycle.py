@@ -195,7 +195,7 @@ class ChildBoundary:
         self,
         node: str,
         run_abort: RunAbort | None = None,
-        logger: logging.Logger | None = None,
+        logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
     ) -> None:
         """Bind the boundary to the one node it guards.
 
@@ -203,7 +203,8 @@ class ChildBoundary:
             node: The node's name, as it appears in logs and contract-violation banners.
             run_abort: The run-level halt signal. A private one is made if omitted,
                 which is what a standalone bench run of a single node wants.
-            logger: Where swallowed errors and bug banners go. Defaults to `litmus`.
+            logger: Where swallowed errors and bug banners go. A scoped adapter keeps
+                framework signals in the node's evidence trail. Defaults to `litmus`.
         """
         self._node = node
         self._run_abort = run_abort if run_abort is not None else RunAbort()

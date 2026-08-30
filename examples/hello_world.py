@@ -1,9 +1,8 @@
 """The smallest complete Litmus suite: one authored claim that passes."""
 
 import asyncio
-from types import SimpleNamespace
 
-from litmus import PASS, LitmusTest, Verdict
+from litmus import PASS, LitmusTest, TestUtils, Verdict
 
 
 class HelloWorld(LitmusTest):
@@ -13,7 +12,7 @@ class HelloWorld(LitmusTest):
         """Build one leaf whose explicit verdict is Pass."""
         return self.case("say hello", self._say_hello)
 
-    async def _say_hello(self, _utils: object) -> Verdict:
+    async def _say_hello(self, _utils: TestUtils) -> Verdict:
         return PASS
 
 
@@ -23,7 +22,7 @@ class HelloWorldExample:
     @staticmethod
     async def run() -> None:
         """Execute the example through the framework-owned lifecycle."""
-        await HelloWorld(name="hello world").main(SimpleNamespace(ctx={}))
+        await HelloWorld(name="hello world").run()
 
 
 if __name__ == "__main__":
