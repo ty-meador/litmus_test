@@ -13,6 +13,7 @@ import pytest
 
 from litmus.executor import ExecResult
 from litmus.remote import RemoteInterface
+from litmus.routing import ExecRouter, ExecRouting, ShellOpenRequest, SshConnector
 from litmus.ssh import SshInterface
 
 
@@ -628,6 +629,90 @@ class TestBorrowedTunnel:
             with pytest.raises(asyncssh.Error):
                 await target.connect()
             assert target.connected is False
+            assert jump.connected is True
+        finally:
+            await jump.disconnect()
+            await jump_peer.aclose()
+            await target_peer.aclose()
+
+
+class TestRoutedConnector:
+    """The real `SshConnector` against the ownership contract.
+
+    The `_Connector` seam in test_routing covers routing policy only; these
+    tests prove the routed tunnel path holds against a live transport — the
+    seam is what let a via-owning connector ship green once.
+    """
+
+    async def test_opens_through_a_live_via_and_borrows_it(self) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        target_peer = await _LoopbackSshd.start(username="root", password="admin")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        try:
+            await jump.connect()
+            request = ShellOpenRequest(
+                host="127.0.0.1",
+                username="root",
+                port=target_peer.port,
+                password="admin",
+                skip_host_verification=True,
+                via=jump,
+            )
+            target = await SshConnector().open(request)
+            result = await target.exec("uname")
+            assert result == ExecResult(stdout="uname", stderr="", exit_code=0)
+            await target.disconnect()
+            assert target.connected is False
+            assert jump.connected is True
+            result = await jump.exec("id")
+            assert result.exit_code == 0
+        finally:
+            await jump.disconnect()
+            await jump_peer.aclose()
+            await target_peer.aclose()
+
+    async def test_inherited_connection_form_tunnels_through_the_live_parent_hop(
+        self,
+    ) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        target_peer = await _LoopbackSshd.start(username="root", password="admin")
+        jump = SshInterface(
+            host="127.0.0.1",
+            port=jump_peer.port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+
+        async def local_exec(command: str) -> ExecResult:
+            return ExecResult(stdout=f"local:{command}", stderr="", exit_code=0)
+
+        try:
+            await jump.connect()
+            routing = ExecRouting(
+                local_exec,
+                inherited=ExecRouter.for_ssh(jump),
+                connector=SshConnector(),
+            )
+            shell = await routing.use_shell(
+                host="127.0.0.1",
+                username="root",
+                port=target_peer.port,
+                password="admin",
+                skip_host_verification=True,
+            )
+            result = await shell.exec("uname")
+            assert result == ExecResult(stdout="uname", stderr="", exit_code=0)
+            # The router owns hop lifecycle: dependents close before hops,
+            # and closing what this node opened leaves the borrowed hop up.
+            for opened in routing.opened:
+                await opened.disconnect()
             assert jump.connected is True
         finally:
             await jump.disconnect()

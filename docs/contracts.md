@@ -133,6 +133,19 @@ static analysis.
 
 ---
 
+## Exec Routing Contract
+**Framework obligation:** `use_shell` is the only writer of the node's exec router. `get_shell` may open extra endpoints and may read `inherit` to pick a tunnel; it never assigns the router or the propagate flag.
+
+- Four `use_shell` shapes: connection (`host` + `username`), connection with explicit `via`, policy-only `inherit=False` (force local), and bare `use_shell()` (return the active handle).
+- Explicit `via` always wins. `inherit=False` on a connection form skips the parent's hop.
+- `propagate=False` on `use_shell` stops this node's router from flowing to children; they start local. `propagate` on `get_shell` is a documented no-op.
+- Children inherit the route through run params (`RouterRunParams`), never through ctx. ctx is instance-local domain data, not infrastructure.
+- Routed tunnels are borrowed; the router owns hop lifecycle. Every hop the router resolves — an explicit `via=` Shell or an inherited route — is already live, so the connector threads it through the transport's borrowed `tunnel=` channel, never the owned `via=` one. The opened interface must not disconnect, cancel, or collapse its hop. What a node opened is recorded on the node (`opened`) and closes before the hop it tunnels through; a hard abort on the hop kills everything tunneled through it at the socket (In-Flight Termination Contract). A dead hop at open time is an error, not something the router silently brings up.
+
+**Developer obligation:** Call `use_shell` when this node's `utils.exec` should land somewhere other than the test host. Call `get_shell` for auxiliary endpoints. Do not stuff SSH handles into ctx and expect routing to notice.
+
+---
+
 ## Composability Contract
 **Framework obligation:** Any `LitmusTest` or subclass thereof can be composed indefinitely in any shape the SE deems appropriate.
 
