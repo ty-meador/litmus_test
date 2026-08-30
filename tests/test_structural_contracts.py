@@ -24,11 +24,16 @@ class TestSealedInternals:
             "group",
             "main",
             "run",
+            "sequence",
             "_run_lifecycle",
+            "_run_group",
+            "_run_sequence",
             "_configure_and_merge_context",
             "_run_cleanup",
             "_safe_cleanup",
             "_safe_survey",
+            "use_audit",
+            "use_survey",
         ],
     )
     def test_framework_owned_methods_reject_overrides(self, method_name: str) -> None:
