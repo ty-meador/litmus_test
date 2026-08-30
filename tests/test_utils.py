@@ -1,14 +1,15 @@
 """Per-node TestUtils ownership and scoped evidence logging."""
 
 import ast
+import inspect
 from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
 
 import litmus
-from litmus import PASS, LitmusTest, TestUtils, Verdict
-from litmus.lifecycle import State
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
+from litmus.lifecycle import Outcome, State
 
 
 class _ScopedLogRecord(Protocol):
@@ -113,6 +114,68 @@ class TestTestUtilsInjection:
 
         with pytest.raises(TypeError):
             cast("dict[str, str]", seen["configure"].env)["STATION"] = "mutated"
+
+
+class TestWaitForContract:
+    @staticmethod
+    def _assert_timeout_failure(outcome: Outcome, looking_for: str) -> None:
+        assert outcome.state is State.FAIL
+        assert isinstance(outcome.failure, TestFailure)
+
+        artifact = outcome.failure.to_json()
+        assert artifact["fail_message"] == f"timed out waiting for {looking_for}"
+        assert artifact["expected"] == looking_for
+        assert artifact["received"] == "timeout"
+
+    def test_looking_for_is_a_required_keyword(self) -> None:
+        parameter = inspect.signature(TestUtils.wait_for).parameters["looking_for"]
+
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameter.default is inspect.Parameter.empty
+
+    async def test_configure_timeout_fails_without_building_the_suite(self) -> None:
+        looking_for = "UUT boot flag present"
+        built: list[str] = []
+
+        class Suite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                await utils.wait_for(
+                    lambda: False,
+                    looking_for=looking_for,
+                    timeout_seconds=0,
+                )
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                built.append("built")
+                return self.case("unreachable", self._unreachable)
+
+            async def _unreachable(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        outcome = await Suite(name="configure gate").run()
+
+        self._assert_timeout_failure(outcome, looking_for)
+        assert built == []
+
+    async def test_test_method_timeout_is_a_failure_artifact(self) -> None:
+        looking_for = "stress test log present on UUT"
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("wait for stress test", self._wait_for_stress_test)
+
+            async def _wait_for_stress_test(self, utils: TestUtils) -> Verdict:
+                await utils.wait_for(
+                    lambda: False,
+                    looking_for=looking_for,
+                    timeout_seconds=0,
+                )
+                return PASS
+
+        outcome = await Suite(name="verdict wait").run()
+
+        self._assert_timeout_failure(outcome, looking_for)
 
 
 class TestFrameworkLoggingDiscipline:
