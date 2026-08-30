@@ -38,55 +38,47 @@ class _Missing:
 MISSING = _Missing()
 
 
-@final
-class _JsonSafe:
-    """Normalizes arbitrary values into a JSON-serializable shape.
+def _is_json_serializable(value: object) -> bool:
+    """True if `value` is a primitive, or a list/dict built only of primitives."""
+    if value is None or isinstance(value, str | int | float | bool):
+        return True
+    if isinstance(value, list | tuple):
+        return all(_is_json_serializable(item) for item in cast("Sequence[object]", value))
+    if isinstance(value, dict):
+        items = cast("Mapping[object, object]", value).items()
+        return all(isinstance(key, str) and _is_json_serializable(item) for key, item in items)
+    return False
+
+
+def _normalize_json(value: object) -> Any:
+    if isinstance(value, list | tuple):
+        return [_normalize_json(item) for item in cast("Sequence[object]", value)]
+    if isinstance(value, dict):
+        items = cast("Mapping[str, object]", value).items()
+        return {key: _normalize_json(item) for key, item in items}
+    return value
+
+
+def _json_safe(value: object) -> Any:
+    """Return a JSON-safe rendering of `value`. Never raises.
 
     Failures carry `expected` / `received` / `cause` values that came from suite code
     and may hold live handles — SSH interfaces, streams, open files. Those must never
     reach an artifact: this collapses them to something a reader can still use rather
     than letting serialization throw and mask the failure entirely.
+
+    Branches are ordered by specificity: framework failures recurse through their
+    own `to_json()` so nested structure survives; a plain exception is extracted by
+    hand because `BaseException` has no JSON form; anything already serializable
+    passes through; everything else degrades to `str()`.
     """
-
-    __slots__ = ()
-
-    def is_serializable(self, value: object) -> bool:
-        """True if `value` is a primitive, or a list/dict built only of primitives."""
-        if value is None or isinstance(value, str | int | float | bool):
-            return True
-        if isinstance(value, list | tuple):
-            return all(self.is_serializable(item) for item in cast("Sequence[object]", value))
-        if isinstance(value, dict):
-            items = cast("Mapping[object, object]", value).items()
-            return all(isinstance(key, str) and self.is_serializable(item) for key, item in items)
-        return False
-
-    def coerce(self, value: object) -> Any:
-        """Return a JSON-safe rendering of `value`. Never raises.
-
-        Branches are ordered by specificity: framework failures recurse through their
-        own `to_json()` so nested structure survives; a plain exception is extracted by
-        hand because `BaseException` has no JSON form; anything already serializable
-        passes through; everything else degrades to `str()`.
-        """
-        if isinstance(value, TestFailure | ExternalIntegrationFailure | MissingVerdict):
-            return value.to_json()
-        if isinstance(value, BaseException):
-            return {"name": type(value).__name__, "message": str(value)}
-        if self.is_serializable(value):
-            return self._normalize(value)
-        return str(value)
-
-    def _normalize(self, value: object) -> Any:
-        if isinstance(value, list | tuple):
-            return [self._normalize(item) for item in cast("Sequence[object]", value)]
-        if isinstance(value, dict):
-            items = cast("Mapping[str, object]", value).items()
-            return {key: self._normalize(item) for key, item in items}
-        return value
-
-
-JSON_SAFE = _JsonSafe()
+    if isinstance(value, TestFailure | ExternalIntegrationFailure | MissingVerdict):
+        return value.to_json()
+    if isinstance(value, BaseException):
+        return {"name": type(value).__name__, "message": str(value)}
+    if _is_json_serializable(value):
+        return _normalize_json(value)
+    return str(value)
 
 
 class LitmusError(Exception):
@@ -152,9 +144,9 @@ class TestFailure(LitmusError):
             "state": "Fail",
         }
         if self.expected is not MISSING:
-            payload["expected"] = JSON_SAFE.coerce(self.expected)
+            payload["expected"] = _json_safe(self.expected)
         if self.received is not MISSING:
-            payload["received"] = JSON_SAFE.coerce(self.received)
+            payload["received"] = _json_safe(self.received)
         return payload
 
 
@@ -201,7 +193,7 @@ class ContractViolation(TestFailure):
         payload["node"] = self.node
         payload["bug"] = True
         if self.cause is not None:
-            payload["cause"] = JSON_SAFE.coerce(self.cause)
+            payload["cause"] = _json_safe(self.cause)
         return payload
 
 
@@ -261,7 +253,7 @@ class MissingVerdict(LitmusError):
             "state": "Aborted",
             "banner": self.BANNER,
             "node": self.node,
-            "returned": JSON_SAFE.coerce(self.returned),
+            "returned": _json_safe(self.returned),
             "bug": True,
         }
 
@@ -307,7 +299,7 @@ class ExternalIntegrationFailure(LitmusError):
             "fail_message": self.fail_message,
             "state": "Aborted",
             "hook": self.hook,
-            "cause": JSON_SAFE.coerce(self.cause),
+            "cause": _json_safe(self.cause),
         }
 
 
