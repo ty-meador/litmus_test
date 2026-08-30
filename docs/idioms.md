@@ -3,6 +3,23 @@
 ## The Golden Rule
 If implementing something feels awkward or "ugly", you are fighting the framework. Seek the idiomatic approach.
 
+Treat that friction as a design-review signal, not a style preference and not immediate
+evidence that the framework needs another feature. Ask:
+
+> What established Litmus idiom is this design fighting, and which problem-domain concept
+> would let composition, lifecycle boundaries, or `utils` express the intent coherently?
+
+Resolve that question before expanding the public API. A new abstraction is warranted only
+when the existing idioms cannot express a real manufacturing-test concept without obscuring
+evidence, hardware ownership, or verdict integrity. Convenience alone is not sufficient.
+
+The most important application is the React boundary in the port plan's section 1. Litmus
+borrows React's component model—composition, inversion of control, hooks, and local state—not
+its runtime model. Reconciliation, re-rendering, and reactivity are out of scope because a
+hardware test executes once and may produce irreversible physical side effects. If a proposal
+feels awkward because it tries to import that runtime model, the friction identifies a crossed
+boundary, not a missing Litmus feature.
+
 ## Immutable-self Convention
 After `__init__` runs, `self` is read-only. All runtime state flows through configure's return value into `utils.ctx`. This eliminates hidden state coupling and makes the data flow explicit.
 
