@@ -20,6 +20,29 @@ import pytest
 from litmus.executor import ExecResult, LocalExec
 
 
+class TestExecResultSettled:
+    """The single settlement path every transport shares."""
+
+    def test_decodes_bytes_and_passes_status_through(self) -> None:
+        result = ExecResult.settled(b"out", b"err", 3)
+        assert result == ExecResult(stdout="out", stderr="err", exit_code=3)
+
+    def test_str_output_passes_through_unchanged(self) -> None:
+        result = ExecResult.settled("out", "err", 0)
+        assert result == ExecResult(stdout="out", stderr="err", exit_code=0)
+
+    def test_missing_output_settles_as_empty_text(self) -> None:
+        result = ExecResult.settled(None, None, 0)
+        assert result == ExecResult(stdout="", stderr="", exit_code=0)
+
+    def test_absent_and_negative_status_settle_as_minus_one(self) -> None:
+        assert ExecResult.settled("", "", None).exit_code == -1
+        assert ExecResult.settled("", "", -9).exit_code == -1
+
+    def test_invalid_utf8_degrades_with_replacement(self) -> None:
+        assert ExecResult.settled(b"\xff", b"", 0).stdout == "�"
+
+
 class _Child:
     """Probe helpers for in-flight host processes. Not production API."""
 
