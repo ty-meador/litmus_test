@@ -90,6 +90,9 @@ rules and pyright strict — an unannotated def fails `make check`.
 - **Merge authority rests with Commander Zavala.** He reviews each MR against `PLAN.md`
   (the design) and this document (the code shape), and makes the call on what enters
   `main`. Open the MR and leave it for that review; do not merge your own.
+- Design reviews apply the [Golden Rule](docs/idioms.md#the-golden-rule): when authoring
+  feels awkward, identify the idiom or problem-domain boundary being fought before proposing
+  a new framework feature.
 - Commits: imperative subject line, ≤72 chars, body explains *why* when non-obvious.
   Run `make check` before pushing — it is the gate, and an MR that fails it is not merged.
 - Never commit: `.venv/`, caches, artifacts, secrets, real hostnames/credentials from
