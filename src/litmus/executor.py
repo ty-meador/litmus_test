@@ -32,6 +32,35 @@ class ExecResult:
     stderr: str
     exit_code: int
 
+    @classmethod
+    def settled(
+        cls,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+        exit_status: int | None,
+    ) -> ExecResult:
+        """Settle raw transport output into a result.
+
+        Output arrives as whatever the transport produced — `bytes` (decoded UTF-8
+        with replacement), `str`, or nothing (empty). An `exit_status` of `None` or
+        below zero means no real status exists — signal kill, or abort before an exit
+        status — and settles as `-1`. Every transport builds its results here, so the
+        `-1` contract cannot drift between them.
+        """
+        return cls(
+            stdout=cls._decode(stdout),
+            stderr=cls._decode(stderr),
+            exit_code=-1 if exit_status is None or exit_status < 0 else exit_status,
+        )
+
+    @staticmethod
+    def _decode(data: str | bytes | None) -> str:
+        if data is None:
+            return ""
+        if isinstance(data, bytes):
+            return data.decode("utf-8", errors="replace")
+        return data
+
 
 @final
 class LocalExec:
@@ -76,11 +105,7 @@ class LocalExec:
             except asyncio.CancelledError:
                 await self._terminate(proc)
                 raise
-            return ExecResult(
-                stdout=self._decode(stdout_b),
-                stderr=self._decode(stderr_b),
-                exit_code=self._exit_code(proc.returncode),
-            )
+            return ExecResult.settled(stdout_b, stderr_b, proc.returncode)
         finally:
             self._in_flight.discard(proc)
 
@@ -124,15 +149,3 @@ class LocalExec:
                 os.killpg(pid, signal.SIGKILL)
             await asyncio.shield(proc.wait())
             raise
-
-    @staticmethod
-    def _decode(data: bytes | None) -> str:
-        if data is None:
-            return ""
-        return data.decode("utf-8", errors="replace")
-
-    @staticmethod
-    def _exit_code(returncode: int | None) -> int:
-        if returncode is None or returncode < 0:
-            return -1
-        return returncode
