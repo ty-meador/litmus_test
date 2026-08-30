@@ -75,14 +75,24 @@ class ShellConnector(Protocol):
 
 @final
 class SshConnector:
-    """Default connector: asyncssh `SshInterface`, connected before return."""
+    """Default connector: asyncssh `SshInterface`, connected before return.
+
+    Every hop `_resolve_tunnel` can supply is already live — an inherited
+    router's hop was brought up by the parent's `use_shell`, and an explicit
+    `via=jump` Shell wraps a connected remote. The opened interface therefore
+    *borrows* the hop through the transport's `tunnel=` channel; it never
+    claims ownership via `via=`, and teardown of the hop stays with the router.
+    """
 
     async def open(self, request: ShellOpenRequest) -> RemoteInterface:
-        """Reject a non-SSH via; open and connect an `SshInterface`."""
+        """Reject a non-SSH or dead via; open an `SshInterface` borrowing the hop."""
         via = request.via
         if via is not None and not isinstance(via, SshInterface):
             msg = "SshConnector via must be an SshInterface"
             raise TypeError(msg)
+        if via is not None and not via.connected:
+            msg = "routed via hop must be live at open time; the router never brings hops up"
+            raise ConnectionError(msg)
         ssh = SshInterface(
             host=request.host,
             username=request.username,
@@ -93,7 +103,7 @@ class SshConnector:
             passphrase=request.passphrase,
             agent=request.agent,
             skip_host_verification=request.skip_host_verification,
-            via=via,
+            tunnel=via,
         )
         await ssh.connect()
         return ssh
