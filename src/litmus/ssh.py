@@ -184,11 +184,9 @@ class SshInterface(RemoteInterface):
             # Socket died under us (abort, peer reset). Settle as no-status,
             # matching legacy: orphaned awaits resolve with exit_code -1.
             return ExecResult(stdout="", stderr="", exit_code=-1)
-        return ExecResult(
-            stdout=self._as_text(result.stdout),
-            stderr=self._as_text(result.stderr),
-            exit_code=self._exit_code(result.exit_status, result.exit_signal),
-        )
+        # A signal kill carries no usable exit status; settle it as the no-status case.
+        exit_status = None if result.exit_signal is not None else result.exit_status
+        return ExecResult.settled(result.stdout, result.stderr, exit_status)
 
     async def _abort_client(self) -> None:
         connection = self._connection
@@ -226,19 +224,3 @@ class SshInterface(RemoteInterface):
         raise ConnectionError(
             "SshInterface requires password, private_key, private_key_path, or SSH_AUTH_SOCK"
         )
-
-    @staticmethod
-    def _as_text(data: str | bytes | None) -> str:
-        if data is None:
-            return ""
-        if isinstance(data, bytes):
-            return data.decode("utf-8", errors="replace")
-        return data
-
-    @staticmethod
-    def _exit_code(exit_status: int | None, exit_signal: object) -> int:
-        if exit_signal is not None:
-            return -1
-        if exit_status is None or exit_status < 0:
-            return -1
-        return exit_status
