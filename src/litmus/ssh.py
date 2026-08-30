@@ -9,6 +9,13 @@ unconnected, brought up before this one, torn down after it, and hard-cancelled
 with it. This interface owns its hop outright — a hop cannot be shared or
 managed externally. Framework-owned `LitmusTest` via lifecycle (TestParams) is a
 later layer on top of this.
+
+`tunnel` is the mirror image, for the routing layer: a *borrowed* hop, handed
+over connected and owned by whoever brought it up (the exec router). This
+interface dials through it and never touches its lifecycle — no bring-up, no
+teardown, no cancel. When the hop's owner hard-closes it, every connection
+tunneled through it dies at the socket with it; the via-chain collapse of
+PLAN §4.3 lives with the owner, not the borrower.
 """
 
 from __future__ import annotations
@@ -38,6 +45,11 @@ class SshInterface(RemoteInterface):
       - A `via` hop is owned outright: it must arrive unconnected, `connect`
         rejects one that is already up, and every teardown path collapses the
         chain unconditionally.
+      - A `tunnel` hop is borrowed: it must arrive connected, `connect`
+        rejects one that is down, and no teardown path — `disconnect`,
+        `cancel_in_flight`, or a failed `connect` — ever touches it.
+      - `via` and `tunnel` are mutually exclusive: own the hop or borrow it,
+        never both.
       - Auth resolution, in order: explicit `agent` path, in-memory
         `private_key`, `private_key_path`, `password`, then `SSH_AUTH_SOCK`.
       - `skip_host_verification` is `known_hosts=None` (lab hosts without
@@ -57,13 +69,19 @@ class SshInterface(RemoteInterface):
         agent: str | None = None,
         skip_host_verification: bool = False,
         via: SshInterface | None = None,
+        tunnel: SshInterface | None = None,
     ) -> None:
         """Create an unconnected SSH interface.
 
         Credentials are stored for connect time. `via`, when given, is an
         upstream hop this connection tunnels through; it must be handed over
-        unconnected and belongs to this interface from then on.
+        unconnected and belongs to this interface from then on. `tunnel`, when
+        given, is a borrowed upstream hop; it must be handed over connected and
+        its lifecycle stays with its owner.
         """
+        if via is not None and tunnel is not None:
+            msg = "via and tunnel are mutually exclusive: own the hop or borrow it, never both"
+            raise ValueError(msg)
         super().__init__()
         self._host = host
         self._port = port
@@ -75,6 +93,7 @@ class SshInterface(RemoteInterface):
         self._agent = agent
         self._skip_host_verification = skip_host_verification
         self._via = via
+        self._tunnel = tunnel
         self._connection: asyncssh.SSHClientConnection | None = None
 
     @property
@@ -115,11 +134,15 @@ class SshInterface(RemoteInterface):
 
     async def _connect(self) -> None:
         via = self._via
+        tunnel = self._tunnel
         if via is not None:
             if via.connected:
                 msg = "via hop is owned by this interface and must be handed over unconnected"
                 raise ConnectionError(msg)
             await via.connect()
+        if tunnel is not None and not tunnel.connected:
+            msg = "tunnel hop is borrowed and must be handed over connected"
+            raise ConnectionError(msg)
         try:
             options = self._connect_options()
             if via is not None:
@@ -127,8 +150,15 @@ class SshInterface(RemoteInterface):
                     msg = "via hop reports connected without a live connection"
                     raise ConnectionError(msg)
                 options["tunnel"] = via._connection
+            elif tunnel is not None:
+                if tunnel._connection is None:
+                    msg = "tunnel hop reports connected without a live connection"
+                    raise ConnectionError(msg)
+                options["tunnel"] = tunnel._connection
             self._connection = await asyncssh.connect(self._host, self._port, **options)
         except BaseException:
+            # The owned via is collapsed on failure; the borrowed tunnel is
+            # its owner's to close and is deliberately left up.
             if via is not None:
                 with contextlib.suppress(Exception):
                     await via.disconnect()
