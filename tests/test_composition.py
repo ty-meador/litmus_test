@@ -1,16 +1,37 @@
 """Composition factories and the serial semantics they expose to authored suites."""
 
+from collections.abc import Iterator
 from typing import cast
 
 import pytest
 
-from litmus import PASS, ContractViolation, LitmusTest, TestFailure, Verdict
-from litmus.lifecycle import Outcome, State
+from litmus import (
+    PASS,
+    ContractViolation,
+    FrameworkContractViolation,
+    LitmusTest,
+    TestFailure,
+    Verdict,
+)
+from litmus.lifecycle import Outcome, RunAbort, Slot, State
 
 
 class StubUtils:
     def __init__(self) -> None:
         self.ctx: dict[str, object] = {}
+
+
+class _NonTerminalChild:
+    async def _run_lifecycle(self, _utils: object, _run_abort: RunAbort) -> Outcome:
+        return Outcome(Slot.CONFIGURE, "corrupt child", None)
+
+
+class _InconsistentChildren:
+    def __iter__(self) -> Iterator[LitmusTest]:
+        return iter(())
+
+    def __len__(self) -> int:
+        return 1
 
 
 class TestCompositionFactories:
@@ -52,6 +73,49 @@ class TestCompositionFactories:
             suite.sequence("sequence", [])
         with pytest.raises(ContractViolation, match=r"group.*at least one child"):
             suite.group("group", [])
+
+    async def test_internal_nodes_report_direct_build_as_framework_bugs(self) -> None:
+        async def passes(_utils: object) -> Verdict:
+            return PASS
+
+        suite = LitmusTest(name="rack")
+        case = suite.case("case", passes)
+        nodes = (
+            (case, "an internal case has no child suite"),
+            (suite.group("group", [case]), "an internal group has no child suite"),
+            (
+                suite.sequence("sequence", [case]),
+                "an internal sequence has no child suite",
+            ),
+        )
+
+        for node, detail in nodes:
+            with pytest.raises(FrameworkContractViolation) as raised:
+                node.build_suite()
+            assert raised.value.node == node.name
+            assert raised.value.detail == detail
+
+    async def test_sequence_reports_a_nonterminal_child_as_a_framework_bug(self) -> None:
+        sequence = LitmusTest(name="dependent claims")
+        child = cast("LitmusTest", _NonTerminalChild())
+
+        with pytest.raises(FrameworkContractViolation) as raised:
+            await sequence._run_sequence(StubUtils(), RunAbort(), (child,))
+
+        assert raised.value.node == sequence.name
+        assert raised.value.detail == "a sequence child settled without a terminal state"
+
+    async def test_sequence_reports_an_incomplete_pass_check_as_a_framework_bug(
+        self,
+    ) -> None:
+        sequence = LitmusTest(name="dependent claims")
+        children = cast("tuple[LitmusTest, ...]", _InconsistentChildren())
+
+        with pytest.raises(FrameworkContractViolation) as raised:
+            await sequence._run_sequence(StubUtils(), RunAbort(), children)
+
+        assert raised.value.node == sequence.name
+        assert raised.value.detail == "a sequence reached no explicit terminal verdict"
 
 
 class TestSequenceExecution:
