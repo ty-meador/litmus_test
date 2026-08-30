@@ -7,7 +7,11 @@ import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, final
 
-from litmus.errors import ContractViolation, ExternalIntegrationFailure
+from litmus.errors import (
+    ContractViolation,
+    ExternalIntegrationFailure,
+    FrameworkContractViolation,
+)
 from litmus.hooks import AuditHook, HookFunction, SurveyHook
 from litmus.lifecycle import ChildBoundary, Outcome, RunAbort, Slot, State
 from litmus.verdict import Verdict
@@ -307,12 +311,18 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                     value=tuple(outcomes),
                 )
             if outcome.state is not State.PASS:
-                raise AssertionError("a sequence child settled without a terminal state")
+                raise FrameworkContractViolation(
+                    self.name,
+                    detail="a sequence child settled without a terminal state",
+                )
 
         all_ran = len(outcomes) == len(children)
         all_passed = all(outcome.state is State.PASS for outcome in outcomes)
         if not (all_ran and all_passed):
-            raise AssertionError("a sequence reached no explicit terminal verdict")
+            raise FrameworkContractViolation(
+                self.name,
+                detail="a sequence reached no explicit terminal verdict",
+            )
         return Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=tuple(outcomes))
 
     @final
@@ -349,7 +359,10 @@ class _Case(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; leaf execution never composes a suite."""
-        raise AssertionError("an internal case has no child suite")
+        raise FrameworkContractViolation(
+            self.name,
+            detail="an internal case has no child suite",
+        )
 
 
 @final
@@ -364,7 +377,10 @@ class _Group(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; group execution owns its child tasks."""
-        raise AssertionError("an internal group has no child suite")
+        raise FrameworkContractViolation(
+            self.name,
+            detail="an internal group has no child suite",
+        )
 
 
 @final
@@ -379,4 +395,7 @@ class _Sequence(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; sequence execution owns child order."""
-        raise AssertionError("an internal sequence has no child suite")
+        raise FrameworkContractViolation(
+            self.name,
+            detail="an internal sequence has no child suite",
+        )
