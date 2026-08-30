@@ -5,8 +5,8 @@ methods (CoAP get/put, HTTP post, SSH port-forward) belong on the subclass —
 putting them here would freeze UART out of the port.
 
 Suite authors do not construct a `RemoteInterface`. `ExecRouting.get_shell`
-hands one over; TestUtils will wrap that surface once it exists. Self-tests
-and later transports import this module directly.
+hands one to `TestUtils`, which returns the scoped `Shell`. Self-tests and
+transport implementations import this module directly.
 """
 
 from __future__ import annotations
