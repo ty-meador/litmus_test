@@ -1,8 +1,8 @@
 """asyncssh-backed SSH transport.
 
-Suite authors do not construct this. `utils.get_shell` / `utils.use_shell` will
-hand one over once that surface exists. Self-tests import the module directly.
-Not on the public surface.
+Suite authors do not construct this. `ExecRouting.use_shell` / `get_shell` open
+one; TestUtils will wrap that surface once it exists. Self-tests import the
+module directly. Not on the public surface.
 
 Via chains are a constructor argument: an upstream `SshInterface` is handed over
 unconnected, brought up before this one, torn down after it, and hard-cancelled

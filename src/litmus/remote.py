@@ -4,9 +4,9 @@ SSH, and later serial/UART, are peers behind this class. Protocol-specific
 methods (CoAP get/put, HTTP post, SSH port-forward) belong on the subclass —
 putting them here would freeze UART out of the port.
 
-Suite authors do not construct a `RemoteInterface`. `utils.get_shell` will hand
-one over once that surface exists. Self-tests and later transports import this
-module directly.
+Suite authors do not construct a `RemoteInterface`. `ExecRouting.get_shell`
+hands one over; TestUtils will wrap that surface once it exists. Self-tests
+and later transports import this module directly.
 """
 
 from __future__ import annotations
