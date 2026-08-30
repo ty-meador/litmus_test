@@ -146,15 +146,9 @@ class SshInterface(RemoteInterface):
         try:
             options = self._connect_options()
             if via is not None:
-                if via._connection is None:
-                    msg = "via hop reports connected without a live connection"
-                    raise ConnectionError(msg)
-                options["tunnel"] = via._connection
+                options["tunnel"] = self._live_hop_connection(via, "via")
             elif tunnel is not None:
-                if tunnel._connection is None:
-                    msg = "tunnel hop reports connected without a live connection"
-                    raise ConnectionError(msg)
-                options["tunnel"] = tunnel._connection
+                options["tunnel"] = self._live_hop_connection(tunnel, "tunnel")
             self._connection = await asyncssh.connect(self._host, self._port, **options)
         except BaseException:
             # The owned via is collapsed on failure; the borrowed tunnel is
@@ -224,3 +218,12 @@ class SshInterface(RemoteInterface):
         raise ConnectionError(
             "SshInterface requires password, private_key, private_key_path, or SSH_AUTH_SOCK"
         )
+
+    @staticmethod
+    def _live_hop_connection(hop: SshInterface, role: str) -> asyncssh.SSHClientConnection:
+        """The hop's open client connection; a connected hop without one is a lie."""
+        connection = hop._connection
+        if connection is None:
+            msg = f"{role} hop reports connected without a live connection"
+            raise ConnectionError(msg)
+        return connection
