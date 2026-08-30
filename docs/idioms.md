@@ -212,6 +212,16 @@ A device-level test can be dropped into a rack-level test without modification. 
 ## Environment Variables
 Always use `utils.env` inside test code. Never `os.environ` directly. The full env snapshot is stored in every `RunResult` for post-run auditing.
 
+## TestUtils Injection
+Call `await root.run()` to execute a suite. The framework constructs `TestUtils`; suite
+authors import it for lifecycle annotations, not as plumbing they must assemble.
+
+Every node receives a distinct `TestUtils` object with a logger scoped to that node's
+full root-to-leaf path. Inline cases, sequences, and groups built by one authored
+instance share that instance's `utils.ctx` dict, while a composed `LitmusTest` subclass
+starts with a fresh context. The environment snapshot is immutable and shared across
+the run; the halt signal is read-only from suite code.
+
 ## Logging
 - `utils.logger` is scoped per test case — never `print()`, so evidence is captured in artifacts
 - Artifacts captured automatically

@@ -3,13 +3,8 @@
 import pytest
 
 import litmus
-from litmus import PASS, ContractViolation, LitmusTest, Verdict
+from litmus import PASS, ContractViolation, LitmusTest, TestUtils, Verdict
 from litmus.lifecycle import State
-
-
-class StubUtils:
-    def __init__(self) -> None:
-        self.ctx: dict[str, object] = {}
 
 
 class TestLitmusTestPublicSurface:
@@ -23,7 +18,7 @@ class TestLitmusTestPublicSurface:
 
             class OverridesMain(LitmusTest):  # pyright: ignore[reportUnusedClass]
                 async def main(  # pyright: ignore[reportIncompatibleMethodOverride]
-                    self, utils: object
+                    self, utils: TestUtils
                 ) -> Verdict:
                     return PASS
 
@@ -74,12 +69,15 @@ class TestLitmusTestMain:
                 self.calls.append(utils)
                 return PASS
 
-        marker = StubUtils()
+        marker = TestUtils()
 
         outcome = await Suite(name="rack").main(marker)
 
         assert outcome.state is State.PASS
-        assert calls == [marker]
+        assert len(calls) == 1
+        assert calls[0] is not marker
+        assert isinstance(calls[0], TestUtils)
+        assert calls[0].ctx is marker.ctx
 
     async def test_instance_cannot_run_twice(self) -> None:
         class Suite(LitmusTest):
@@ -91,8 +89,8 @@ class TestLitmusTestMain:
 
         suite = Suite(name="rack")
 
-        outcome = await suite.main(StubUtils())
+        outcome = await suite.main(TestUtils())
 
         assert outcome.state is State.PASS
         with pytest.raises(ContractViolation, match="may run only once"):
-            await suite.main(StubUtils())
+            await suite.main(TestUtils())

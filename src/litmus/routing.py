@@ -4,8 +4,8 @@
 endpoints does this test touch" and never writes the router. Children inherit a
 route through `RouterRunParams`, never through ctx.
 
-Suite authors do not import this module. TestUtils will wrap `ExecRouting` once
-that surface exists. Self-tests import it directly.
+Suite authors do not import this module. `TestUtils` owns one `ExecRouting` per node;
+self-tests import the policy machinery directly.
 """
 
 from __future__ import annotations

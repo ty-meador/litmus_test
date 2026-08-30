@@ -2,13 +2,8 @@
 
 import asyncio
 
-from litmus import PASS, LitmusTest, Verdict
+from litmus import PASS, LitmusTest, TestUtils, Verdict
 from litmus.lifecycle import State
-
-
-class StubUtils:
-    def __init__(self, **ctx: object) -> None:
-        self.ctx: dict[str, object] = dict(ctx)
 
 
 class TestContextLocality:
@@ -17,28 +12,28 @@ class TestContextLocality:
         parent_cleanup_seen: list[dict[str, object]] = []
 
         class Child(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 child_seen.append(dict(utils.ctx))
                 return {"child": "configured"}
 
             def build_suite(self) -> LitmusTest:
                 return self.case("child claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 child_seen.append(dict(utils.ctx))
                 return PASS
 
         class Parent(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 return {"parent": "configured"}
 
             def build_suite(self) -> LitmusTest:
                 return Child(name="child")
 
-            async def cleanup(self, utils: StubUtils) -> None:
+            async def cleanup(self, utils: TestUtils) -> None:
                 parent_cleanup_seen.append(dict(utils.ctx))
 
-        utils = StubUtils(station="west")
+        utils = TestUtils(ctx={"station": "west"})
 
         outcome = await Parent(name="parent").main(utils)
 
@@ -66,20 +61,20 @@ class TestContextLocality:
                 self.configured = configured
                 self.peer_configured = peer_configured
 
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 self.configured.set()
                 return {self.own_key: True}
 
             def build_suite(self) -> LitmusTest:
                 return self.case(f"{self.name} claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 await self.peer_configured.wait()
                 seen[self.name] = dict(utils.ctx)
                 return PASS
 
         class Parent(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 return {"parent": True}
 
             def build_suite(self) -> LitmusTest:
@@ -101,7 +96,7 @@ class TestContextLocality:
                     ],
                 )
 
-        outcome = await Parent(name="parent").main(StubUtils(injected=True))
+        outcome = await Parent(name="parent").main(TestUtils(ctx={"injected": True}))
 
         assert outcome.state is State.PASS
         assert seen == {"left": {"left": True}, "right": {"right": True}}
@@ -110,26 +105,26 @@ class TestContextLocality:
         seen: list[dict[str, object]] = []
 
         class Child(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 seen.append(dict(utils.ctx))
                 return {"serial": "SN-0042"}
 
             def build_suite(self) -> LitmusTest:
                 return self.case("claim", self._claim)
 
-            async def _claim(self, utils: StubUtils) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 seen.append(dict(utils.ctx))
                 return PASS
 
         class Parent(LitmusTest):
-            async def configure(self, utils: StubUtils) -> dict[str, object]:
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
                 return {"parent-only": True}
 
             def build_suite(self) -> LitmusTest:
                 return Child(name="nested child")
 
-        nested = await Parent(name="parent").main(StubUtils())
-        standalone = await Child(name="standalone child").main(StubUtils())
+        nested = await Parent(name="parent").main(TestUtils())
+        standalone = await Child(name="standalone child").main(TestUtils())
 
         assert nested.state is State.PASS
         assert standalone.state is State.PASS
