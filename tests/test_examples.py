@@ -1,6 +1,5 @@
-"""Executable Phase 1 examples and the terminal states they promise readers."""
+"""Executable examples and the terminal states they promise readers."""
 
-from types import SimpleNamespace
 from typing import cast
 
 from examples.hello_world import HelloWorld
@@ -14,7 +13,7 @@ class TestHelloWorldExample:
     """Pin the minimum authored suite to an explicit Pass verdict."""
 
     async def test_hello_world_passes(self) -> None:
-        outcome = await HelloWorld(name="hello world").main(SimpleNamespace(ctx={}))
+        outcome = await HelloWorld(name="hello world").run()
 
         assert outcome.state is State.PASS
 
@@ -28,7 +27,7 @@ class TestCompositionExample:
             service_active=False,
             firmware_version="2.4.1",
             application_pid=412,
-        ).main(SimpleNamespace(ctx={}))
+        ).run()
         children = cast("tuple[Outcome, ...]", outcome.value)
 
         assert outcome.state is State.FAIL
@@ -43,7 +42,7 @@ class TestCompositionExample:
             temperature_c=92,
             voltage_v=3.3,
             fan_rpm=800,
-        ).main(SimpleNamespace(ctx={}))
+        ).run()
         children = cast("tuple[Outcome, ...]", outcome.value)
 
         assert outcome.state is State.FAIL
@@ -64,13 +63,13 @@ class TestCompositionExample:
             service_active=True,
             firmware_version="release-2.4.1",
             application_pid=412,
-        ).main(SimpleNamespace(ctx={}))
+        ).run()
         group = await GroupedDevice(
             name="sensor checks",
             temperature_c=42,
             voltage_v=3.3,
             fan_rpm=1800,
-        ).main(SimpleNamespace(ctx={}))
+        ).run()
 
         assert sequence.state is State.PASS
         assert group.state is State.PASS
