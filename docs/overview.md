@@ -22,7 +22,7 @@ Litmus gives the SEs a framework that allows them to focus on getting the test r
 
 ## The Litmus Success Metric
 
-A Floor Technician can accurately categorize a failure and initiate the correct recovery protocol within 60 seconds of opening the Inspector, without needing to Slack the Software Engineer.
+A Floor Technician (the "FT" of the source docstrings) can accurately categorize a failure and initiate the correct recovery protocol within 60 seconds of opening the Inspector, without needing to Slack the Software Engineer.
 
 ## The Problem It Solves
 
