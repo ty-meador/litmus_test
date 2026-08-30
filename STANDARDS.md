@@ -62,6 +62,9 @@ rules and pyright strict — an unannotated def fails `make check`.
 
 - Every public class and method gets a docstring stating its **contract** (what it
   guarantees, what it raises), not a paraphrase of its name.
+- Docstrings open with a one-line summary. Parameter documentation, when needed, follows
+  as an indented Google-style `Args:` block after a blank line — `Args:` never stands in
+  for the summary line.
 - Comments state constraints the code can't show ("shielded: a second cancel here would
   orphan hardware state"). No narration, no changelog comments.
 

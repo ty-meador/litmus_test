@@ -224,6 +224,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             object.__setattr__(utils, "ctx", {})
 
         if children is not None:
+            # Sealing forbids subclass dispatch, so the engine names its two internal
+            # composite shapes here; a third shape earns a real strategy seam.
             if isinstance(self, _Sequence):
                 return await self._run_sequence(utils, run_abort, children)
             return await self._run_group(utils, run_abort, children)
@@ -269,16 +271,18 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         if all(outcome.state is State.PASS for outcome in outcomes):
             return Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=outcomes)
 
-        first_nonpass = next(outcome for outcome in outcomes if outcome.state is not State.PASS)
-        state = State.FAIL
+        # Aborted outranks Fail, and the first child in that state tells the group's story.
         if any(outcome.state is State.ABORTED for outcome in outcomes):
             state = State.ABORTED
-            first_nonpass = next(outcome for outcome in outcomes if outcome.state is State.ABORTED)
+            reported = next(outcome for outcome in outcomes if outcome.state is State.ABORTED)
+        else:
+            state = State.FAIL
+            reported = next(outcome for outcome in outcomes if outcome.state is not State.PASS)
         return Outcome(
             Slot.TEST_METHOD,
             self.name,
             state,
-            failure=first_nonpass.failure,
+            failure=reported.failure,
             value=outcomes,
         )
 
