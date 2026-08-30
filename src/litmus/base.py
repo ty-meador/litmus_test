@@ -2,9 +2,8 @@
 
 import asyncio
 import contextlib
-import copy
 import inspect
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, final
 
 from litmus.errors import (
@@ -14,9 +13,10 @@ from litmus.errors import (
 )
 from litmus.hooks import AuditHook, HookFunction, SurveyHook
 from litmus.lifecycle import ChildBoundary, Outcome, RunAbort, Slot, State
+from litmus.utils import TestUtils
 from litmus.verdict import Verdict
 
-type _TestFunction = Callable[[Any], Awaitable[Verdict]]
+type _TestFunction = Callable[[TestUtils], Awaitable[Verdict]]
 
 _SEALED_METHODS = frozenset(
     {
@@ -186,7 +186,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             raise ContractViolation(self.name, "hooks may be registered only during construction")
         self._audits.append(AuditHook(interval=interval, fn=fn))
 
-    async def configure(self, utils: Any) -> dict[str, Any]:
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Prepare the test and return context for its suite and cleanup."""
         return {}
 
@@ -199,18 +199,24 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         detail = "build_suite() must return a case, sequence, or group composition"
         raise ContractViolation(self.name, detail)
 
-    async def cleanup(self, utils: Any) -> None:
+    async def cleanup(self, utils: TestUtils) -> None:
         """Restore state after the suite settles, regardless of its outcome."""
 
     @final
-    async def main(self, utils: Any) -> Outcome:
-        """Execute the sealed lifecycle exactly once."""
-        return await self._run_lifecycle(utils, RunAbort(), isolate_context=False)
+    async def run(self, *, env: Mapping[str, str] | None = None) -> Outcome:
+        """Execute once with framework-owned utilities and an environment snapshot."""
+        return await self.main(TestUtils(env=env))
+
+    @final
+    async def main(self, utils: TestUtils | None = None) -> Outcome:
+        """Execute the sealed lifecycle with an optional framework test seed."""
+        seed = TestUtils() if utils is None else utils
+        return await self._run_lifecycle(seed, RunAbort(), isolate_context=False)
 
     @final
     async def _run_lifecycle(
         self,
-        utils: Any,
+        utils: TestUtils,
         run_abort: RunAbort,
         *,
         isolate_context: bool = True,
@@ -222,10 +228,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
         children = self._children
         test = self._test
-        if isolate_context and children is None and test is None:
-            # Utilities remain shared services; mutable context belongs to one authored instance.
-            utils = copy.copy(utils)
-            object.__setattr__(utils, "ctx", {})
+        authored_instance = children is None and test is None
+        utils = utils._for_node(  # pyright: ignore[reportPrivateUsage]
+            self.name,
+            run_abort,
+            isolate_context=isolate_context and authored_instance,
+        )
 
         if children is not None:
             # Sealing forbids subclass dispatch, so the engine names its two internal
@@ -236,9 +244,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
         if test is not None:
             # ChildBoundary is the sole enforcement point for authored verdicts.
-            return await ChildBoundary(self.name, run_abort).run(Slot.TEST_METHOD, test(utils))
+            return await ChildBoundary(self.name, run_abort, utils.logger).run(
+                Slot.TEST_METHOD, test(utils)
+            )
 
-        boundary = ChildBoundary(self.name, run_abort)
+        boundary = ChildBoundary(self.name, run_abort, utils.logger)
         try:
             configured = await boundary.run(
                 Slot.CONFIGURE, self._configure_and_merge_context(utils)
@@ -254,7 +264,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     async def _run_group(
         self,
-        utils: Any,
+        utils: TestUtils,
         run_abort: RunAbort,
         children: tuple[LitmusTest, ...],
     ) -> Outcome:
@@ -293,7 +303,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     async def _run_sequence(
         self,
-        utils: Any,
+        utils: TestUtils,
         run_abort: RunAbort,
         children: tuple[LitmusTest, ...],
     ) -> Outcome:
@@ -326,14 +336,14 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         return Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=tuple(outcomes))
 
     @final
-    async def _configure_and_merge_context(self, utils: Any) -> dict[str, Any]:
+    async def _configure_and_merge_context(self, utils: TestUtils) -> dict[str, Any]:
         """Keep configure and its required ctx merge inside one child boundary."""
         configured = await self.configure(utils)
         utils.ctx.update(configured)
         return configured
 
     @final
-    async def _run_cleanup(self, boundary: ChildBoundary, utils: Any) -> None:
+    async def _run_cleanup(self, boundary: ChildBoundary, utils: TestUtils) -> None:
         """Finish cleanup before allowing cancellation to leave this node."""
         cleanup = asyncio.create_task(boundary.run(Slot.CLEANUP, self.cleanup(utils)))
         try:

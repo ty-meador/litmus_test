@@ -5,13 +5,15 @@ from typing import cast
 
 import pytest
 
-from litmus import PASS, ExternalIntegrationFailure, LitmusTest, TestFailure, Verdict
+from litmus import (
+    PASS,
+    ExternalIntegrationFailure,
+    LitmusTest,
+    TestFailure,
+    TestUtils,
+    Verdict,
+)
 from litmus.lifecycle import Outcome, State
-
-
-class StubUtils:
-    def __init__(self) -> None:
-        self.ctx: dict[str, object] = {}
 
 
 class TestGroupStructuredConcurrency:
@@ -39,7 +41,7 @@ class TestGroupStructuredConcurrency:
                 healthy_completed.set()
                 return PASS
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
         children = cast("tuple[Outcome, ...]", outcome.value)
 
         assert healthy_completed.is_set()
@@ -60,7 +62,7 @@ class TestGroupStructuredConcurrency:
             async def _claim(self, utils: object) -> Verdict:
                 return PASS
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
 
         assert outcome.state is State.PASS
 
@@ -85,7 +87,7 @@ class TestGroupStructuredConcurrency:
                 sibling_completed.set()
                 return PASS
 
-        outcome = await Suite(name="rack").main(StubUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
         children = cast("tuple[Outcome, ...]", outcome.value)
 
         assert sibling_completed.is_set()
@@ -122,7 +124,7 @@ class TestGroupStructuredConcurrency:
                 raise failure
 
         with pytest.raises(ExternalIntegrationFailure) as caught:
-            await Suite(name="rack").main(StubUtils())
+            await Suite(name="rack").main(TestUtils())
 
         assert caught.value is failure
         assert sibling_cancelled.is_set()

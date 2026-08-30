@@ -1,14 +1,12 @@
 """Sequence and group composition translated from the legacy Litmus example.
 
 The values are deterministic stand-ins for device readings. This keeps the example
-runnable before the Phase 2 utility surface arrives while preserving the lesson:
 dependent claims belong in a sequence; independent claims belong in a group.
 """
 
 import asyncio
-from types import SimpleNamespace
 
-from litmus import PASS, LitmusTest, TestFailure, Verdict
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 
 
 class SequencedDevice(LitmusTest):
@@ -39,12 +37,12 @@ class SequencedDevice(LitmusTest):
             ],
         )
 
-    async def _boot_check(self, _utils: object) -> Verdict:
+    async def _boot_check(self, _utils: TestUtils) -> Verdict:
         if not self._service_active:
             raise TestFailure("service not active", "active", "inactive")
         return PASS
 
-    async def _firmware_version_check(self, _utils: object) -> Verdict:
+    async def _firmware_version_check(self, _utils: TestUtils) -> Verdict:
         if "2.4.1" not in self._firmware_version:
             raise TestFailure(
                 "firmware version mismatch",
@@ -53,7 +51,7 @@ class SequencedDevice(LitmusTest):
             )
         return PASS
 
-    async def _application_running(self, _utils: object) -> Verdict:
+    async def _application_running(self, _utils: TestUtils) -> Verdict:
         if self._application_pid is None:
             raise TestFailure("application not running", "pid present", "(none)")
         return PASS
@@ -87,7 +85,7 @@ class GroupedDevice(LitmusTest):
             ],
         )
 
-    async def _temperature(self, _utils: object) -> Verdict:
+    async def _temperature(self, _utils: TestUtils) -> Verdict:
         if self._temperature_c > 85:
             raise TestFailure(
                 "temperature over limit",
@@ -96,7 +94,7 @@ class GroupedDevice(LitmusTest):
             )
         return PASS
 
-    async def _voltage(self, _utils: object) -> Verdict:
+    async def _voltage(self, _utils: TestUtils) -> Verdict:
         if abs(self._voltage_v - 3.3) > 0.1:
             raise TestFailure(
                 "voltage out of spec",
@@ -105,7 +103,7 @@ class GroupedDevice(LitmusTest):
             )
         return PASS
 
-    async def _fan_speed(self, _utils: object) -> Verdict:
+    async def _fan_speed(self, _utils: TestUtils) -> Verdict:
         if self._fan_rpm < 1000:
             raise TestFailure(
                 "fan speed below minimum",
@@ -126,13 +124,13 @@ class CompositionExample:
             service_active=True,
             firmware_version="2.4.1",
             application_pid=412,
-        ).main(SimpleNamespace(ctx={}))
+        ).run()
         await GroupedDevice(
             name="sensor checks",
             temperature_c=92,
             voltage_v=3.3,
             fan_rpm=800,
-        ).main(SimpleNamespace(ctx={}))
+        ).run()
 
 
 if __name__ == "__main__":
