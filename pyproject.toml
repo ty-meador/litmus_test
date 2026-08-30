@@ -60,7 +60,7 @@ ignore = [
 "src/litmus/errors.py" = ["N818"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "examples"]
 typeCheckingMode = "strict"
 pythonVersion = "3.14"
 venvPath = "."
@@ -68,5 +68,6 @@ venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
