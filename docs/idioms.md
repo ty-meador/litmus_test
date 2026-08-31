@@ -24,7 +24,14 @@ The static no-self-mutation rule remains defense in depth.
 **Scope note:** ctx is strictly instance-local. A parent's ctx never flows into composed children — composition is the only coupling mechanism, and ctx inheritance would smuggle hidden state across it.
 
 ## run_data — Automatic Structured Evidence
-The default `run_data` returns all serializable values from `utils.ctx`. Primitives, plain dicts, and lists survive; class instances (`SshInterface`, etc.), functions, and live handles are stripped automatically.
+The default `run_data` returns a detached snapshot of all serializable values from
+`utils.ctx`. JSON primitives (with finite numbers), plain dicts with string keys, and
+lists survive; class instances (`SshInterface`, etc.), functions, live handles,
+non-finite floats, and cycles are stripped automatically.
+
+Stripping is deterministic and all-or-nothing at each top-level ctx entry. If a list or
+dict contains one invalid nested value, that complete entry is absent from `run_data`.
+Litmus does not remove only the handle and leave a plausible-looking partial record.
 
 ```python
 # configure returns data — it appears in run_data automatically
@@ -33,7 +40,11 @@ async def configure(self, utils: TestUtils) -> dict[str, Any]:
     return {"ip": ip, "hostname": "switch-01"}
 
 
-# RunResult.run_data => {"ip": "10.0.0.1", "hostname": "switch-01"}
+# RunResult.run_data => {
+#     "measurements": [],
+#     "ip": "10.0.0.1",
+#     "hostname": "switch-01",
+# }
 ```
 
 Override `run_data` only when you need computed or filtered output:
@@ -45,7 +56,15 @@ def run_data(self) -> object:
     return {**base, "within_spec": self._check_spec(base)}
 ```
 
-**Note:** non-JSON-safe objects (`datetime`, sets, arbitrary classes) are stripped by default. Override `run_data` if you need custom serialization for these types.
+**Note:** non-JSON-safe objects (`datetime`, sets, arbitrary classes) are stripped by
+default. Override `run_data` if you need custom serialization for these types, and
+return only JSON-safe data from the override.
+
+Every default snapshot includes an empty `run_data["measurements"]` list reserved for
+parametric measurements. It is framework-owned: a ctx entry with that key does not
+populate or replace it. Measurement limits, units, aggregation, SPC, and Cpk require a
+later shared design. The empty slot preserves that boundary without pretending those
+semantics exist today.
 
 ## Composition Factories: `self.case`, `self.sequence`, `self.group`
 
