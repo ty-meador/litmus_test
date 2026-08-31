@@ -1,8 +1,9 @@
 """litmus — React-for-hardware HIL testing framework.
 
-The public surface. Suite authors need `LitmusTest`, `TestUtils`, `Artifact`, `PASS`,
-`Verdict`, and `TestFailure`; the rest of the taxonomy is exported because it appears in
-artifacts and logs, where a reader will follow a name back to its meaning.
+The public surface. Suite authors need `LitmusTest`, `TestUtils`, `ExecResult`,
+`Artifact`, `PASS`, `Verdict`, and `TestFailure`; the rest of the taxonomy is
+exported because it appears in artifacts and logs, where a reader will follow a
+name back to its meaning.
 
 The lifecycle machinery (`litmus.lifecycle`) is deliberately absent. The child
 boundary, its slots, and its policies are the framework's internal organs — a suite
@@ -21,6 +22,7 @@ from litmus.errors import (
     MissingVerdict,
     TestFailure,
 )
+from litmus.executor import ExecResult
 from litmus.results import RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
 from litmus.verdict import PASS, Verdict
@@ -29,6 +31,7 @@ __all__ = [
     "PASS",
     "Artifact",
     "ContractViolation",
+    "ExecResult",
     "ExternalIntegrationFailure",
     "Failure",
     "FrameworkContractViolation",
