@@ -6,13 +6,15 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, final
 
+from litmus.artifacts import Artifact
 from litmus.errors import (
     ContractViolation,
     ExternalIntegrationFailure,
     FrameworkContractViolation,
+    TestFailure,
 )
 from litmus.hooks import AuditHook, HookFunction, SurveyHook
-from litmus.lifecycle import ChildBoundary, Outcome, RunAbort, Slot, State
+from litmus.lifecycle import AuditSignal, ChildBoundary, Outcome, RunAbort, Slot, State
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
 from litmus.verdict import Verdict
@@ -36,6 +38,10 @@ _SEALED_METHODS = frozenset(
         "_pending_summary_tree",
         "_to_result",
         "_configure_and_merge_context",
+        "_capture_hook_result",
+        "_run_audit_loop",
+        "_run_surveys",
+        "_run_suite_with_audits",
         "_run_cleanup",
         "use_survey",
         "use_audit",
@@ -224,6 +230,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         run_abort: RunAbort,
         *,
         isolate_context: bool = True,
+        audit_signal: AuditSignal | None = None,
     ) -> RunResult:
         """Execute one node while preserving the tree's shared halt signal."""
         if self._has_run:
@@ -233,10 +240,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         children = self._children
         test = self._test
         authored_instance = children is None and test is None
+        node_audit_signal = AuditSignal(audit_signal) if self._audits else audit_signal
         utils = utils._for_node(  # pyright: ignore[reportPrivateUsage]
             self.name,
             run_abort,
             isolate_context=isolate_context and authored_instance,
+            audit_signal=node_audit_signal,
         )
 
         if not authored_instance:
@@ -248,18 +257,21 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             # Sealing forbids subclass dispatch, so the engine names its two internal
             # composite shapes here; a third shape earns a real strategy seam.
             if isinstance(self, _Sequence):
-                return await self._run_sequence(utils, run_abort, children)
-            return await self._run_group(utils, run_abort, children)
+                return await self._run_sequence(
+                    utils, run_abort, children, audit_signal=node_audit_signal
+                )
+            return await self._run_group(utils, run_abort, children, audit_signal=node_audit_signal)
 
         if test is not None:
             # ChildBoundary is the sole enforcement point for authored verdicts.
-            outcome = await ChildBoundary(self.name, run_abort, utils.logger).run(
-                Slot.TEST_METHOD, test(utils)
-            )
+            outcome = await ChildBoundary(
+                self.name, run_abort, utils.logger, node_audit_signal
+            ).run(Slot.TEST_METHOD, test(utils))
             return self._to_result(outcome, utils)
 
-        boundary = ChildBoundary(self.name, run_abort, utils.logger)
+        boundary = ChildBoundary(self.name, run_abort, utils.logger, node_audit_signal)
         try:
+            await self._run_surveys(boundary, utils, "pre-configure")
             configured = await boundary.run(
                 Slot.CONFIGURE, self._configure_and_merge_context(utils)
             )
@@ -267,8 +279,37 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 return self._to_result(configured, utils)
 
             utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+            await self._run_surveys(boundary, utils, "post-configure")
             suite = self.build_suite()
-            suite_result = await suite._run_lifecycle(utils, run_abort)
+            await self._run_surveys(boundary, utils, "pre-test")
+            if self._audits:
+                if node_audit_signal is None:
+                    raise FrameworkContractViolation(
+                        self.name, detail="registered audits have no cancellation signal"
+                    )
+                suite_result, audit_outcome = await self._run_suite_with_audits(
+                    suite,
+                    utils,
+                    run_abort,
+                    node_audit_signal,
+                )
+            else:
+                suite_result = await suite._run_lifecycle(
+                    utils, run_abort, audit_signal=node_audit_signal
+                )
+                audit_outcome = None
+            await self._run_surveys(boundary, utils, "post-test")
+
+            if audit_outcome is not None:
+                return self._to_result(
+                    audit_outcome,
+                    utils,
+                    children=(suite._pending_summary_tree(),),
+                )
+            if suite_result is None:
+                raise FrameworkContractViolation(
+                    self.name, detail="suite settled without a result or audit verdict"
+                )
             outcome = Outcome(
                 Slot.TEST_METHOD,
                 self.name,
@@ -282,7 +323,13 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 children=(suite_result.summary_tree,),
             )
         finally:
-            await self._run_cleanup(boundary, utils)
+            try:
+                await self._run_surveys(boundary, utils, "pre-cleanup")
+            finally:
+                try:
+                    await self._run_cleanup(boundary, utils)
+                finally:
+                    await self._run_surveys(boundary, utils, "post-cleanup")
 
     @final
     async def _run_group(
@@ -290,13 +337,17 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         utils: TestUtils,
         run_abort: RunAbort,
         children: tuple[LitmusTest, ...],
+        *,
+        audit_signal: AuditSignal | None = None,
     ) -> RunResult:
         """Run every child to settlement unless a harness-level halt escapes."""
         tasks: list[asyncio.Task[RunResult]] = []
         try:
             async with asyncio.TaskGroup() as task_group:
                 tasks.extend(
-                    task_group.create_task(child._run_lifecycle(utils, run_abort))
+                    task_group.create_task(
+                        child._run_lifecycle(utils, run_abort, audit_signal=audit_signal)
+                    )
                     for child in children
                 )
         except* ExternalIntegrationFailure as failures:
@@ -339,11 +390,13 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         utils: TestUtils,
         run_abort: RunAbort,
         children: tuple[LitmusTest, ...],
+        *,
+        audit_signal: AuditSignal | None = None,
     ) -> RunResult:
         """Run dependent children in order and stop at the first non-pass verdict."""
         outcomes: list[RunResult] = []
         for index, child in enumerate(children):
-            outcome = await child._run_lifecycle(utils, run_abort)
+            outcome = await child._run_lifecycle(utils, run_abort, audit_signal=audit_signal)
             outcomes.append(outcome)
             if outcome.state in (State.FAIL, State.ABORTED):
                 aggregate = Outcome(
@@ -454,6 +507,125 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         configured = await self.configure(utils)
         utils.ctx.update(configured)
         return configured
+
+    @final
+    async def _capture_hook_result(
+        self,
+        hook: SurveyHook | AuditHook,
+        utils: TestUtils,
+        *,
+        artifact_name: str,
+        description: str,
+    ) -> object:
+        """Run one hook and publish exactly the value its return statement produced."""
+        value = await hook.fn(utils)
+        if value is None and not hook.captures_none:
+            utils.logger.info("%s returned no value; skipping artifact capture", description)
+            return value
+        await utils.capture_artifact(Artifact(name=artifact_name, type="survey", data=value))
+        return value
+
+    @final
+    async def _run_surveys(
+        self,
+        boundary: ChildBoundary,
+        utils: TestUtils,
+        phase: str,
+    ) -> None:
+        """Dispatch every survey at one phase boundary without masking the verdict."""
+        for index, hook in enumerate(self._surveys, start=1):
+            description = f"survey {phase} hook #{index}"
+            utils.logger.debug("dispatching %s", description)
+            await boundary.run(
+                Slot.SURVEY,
+                self._capture_hook_result(
+                    hook,
+                    utils,
+                    artifact_name=f"{phase}-{index}",
+                    description=description,
+                ),
+            )
+            utils.logger.debug("%s complete", description)
+
+    @final
+    async def _run_audit_loop(
+        self,
+        hook: AuditHook,
+        hook_index: int,
+        utils: TestUtils,
+        run_abort: RunAbort,
+        audit_signal: AuditSignal,
+    ) -> Outcome:
+        """Run one audit on its own interval until it produces a failure verdict."""
+        boundary = ChildBoundary(self.name, run_abort, utils.logger, audit_signal)
+        count = 0
+        while True:
+            await asyncio.sleep(hook.interval)
+            count += 1
+            description = f"audit hook #{hook_index} dispatch #{count}"
+            utils.logger.debug("dispatching %s", description)
+            outcome = await boundary.run(
+                Slot.AUDIT,
+                self._capture_hook_result(
+                    hook,
+                    utils,
+                    artifact_name=f"audit-{hook_index}-{count}",
+                    description=description,
+                ),
+            )
+            if outcome.state is State.FAIL:
+                return outcome
+            utils.logger.debug("%s complete", description)
+
+    @final
+    async def _run_suite_with_audits(
+        self,
+        suite: LitmusTest,
+        utils: TestUtils,
+        run_abort: RunAbort,
+        audit_signal: AuditSignal,
+    ) -> tuple[RunResult | None, Outcome | None]:
+        """Race the authored suite against independent framework-owned audit loops."""
+        suite_task = asyncio.create_task(
+            suite._run_lifecycle(utils, run_abort, audit_signal=audit_signal)
+        )
+        audit_tasks = [
+            asyncio.create_task(self._run_audit_loop(hook, index, utils, run_abort, audit_signal))
+            for index, hook in enumerate(self._audits, start=1)
+        ]
+        try:
+            done, _ = await asyncio.wait(
+                [suite_task, *audit_tasks],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            completed_audits = [task for task in audit_tasks if task in done]
+            if completed_audits:
+                # An audit verdict cannot be discarded merely because the suite
+                # settled in the same event-loop turn. Evidence outranks timing luck.
+                outcome = await completed_audits[0]
+                failure = outcome.failure
+                if not isinstance(failure, TestFailure):
+                    raise FrameworkContractViolation(
+                        self.name,
+                        detail="an audit stopped without a TestFailure verdict",
+                    )
+                audit_signal.fire(failure)
+                suite_task.cancel()
+                await asyncio.gather(suite_task, return_exceptions=True)
+                return None, outcome
+
+            result = await suite_task
+            audit_signal.stop()
+            return result, None
+        finally:
+            if audit_signal.reason is None:
+                audit_signal.stop()
+            if not suite_task.done():
+                suite_task.cancel()
+            for task in audit_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(suite_task, *audit_tasks, return_exceptions=True)
 
     @final
     async def _run_cleanup(self, boundary: ChildBoundary, utils: TestUtils) -> None:
