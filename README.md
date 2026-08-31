@@ -14,8 +14,9 @@ make check     # CI gate: format check, lint, pyright strict, pytest
 
 Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
 `overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
-patterns), and `contracts.md` (the non-negotiable developer↔framework invariants),
-translated from the legacy docs and updated to the port's semantics.
+patterns), `contracts.md` (the non-negotiable developer↔framework invariants), and
+`inspector-json.md` (the versioned downstream result contract), translated from the
+legacy docs and updated to the port's semantics.
 
 The port design lives in the workspace plan
 (`../PLAN.md`); the TypeScript original is the `../litmus-test-legacy/` design reference,
