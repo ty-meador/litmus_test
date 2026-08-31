@@ -112,7 +112,7 @@ class TestUtils:
         self._scope: tuple[str, ...] = ()
         self._logger = ScopedLogger(self._base_logger, self._scope)
         self._local_exec = LocalExec()
-        self._routing = ExecRouting(self._local_exec.run)
+        self._routing = ExecRouting(self._local_exec.run, logger=self._logger)
         self._signal = RunSignal(RunAbort())
 
     @property
@@ -230,6 +230,14 @@ class TestUtils:
             propagate=propagate,
         )
 
+    def _log_exec_routing(self) -> None:
+        """Record this node's topology line. The engine calls it once per executed node.
+
+        Placed after `configure` for an authored node, since `use_shell` lives there
+        and the route is not final until it returns.
+        """
+        self._logger.info("exec routing: %s", self._routing.routing_line())
+
     def _for_node(
         self,
         node: str,
@@ -246,6 +254,10 @@ class TestUtils:
         scoped._logger = ScopedLogger(self._base_logger, scoped._scope)
         scoped._local_exec = self._local_exec
         inherited = self._routing.child_run_params().router
-        scoped._routing = ExecRouting(self._local_exec.run, inherited=inherited)
+        scoped._routing = ExecRouting(
+            self._local_exec.run,
+            inherited=inherited,
+            logger=scoped._logger,
+        )
         scoped._signal = RunSignal(run_abort)
         return scoped
