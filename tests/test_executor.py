@@ -123,6 +123,8 @@ class TestPublicSurface:
 
         assert not hasattr(litmus, "LocalExec")
         assert "LocalExec" not in litmus.__all__
+        assert litmus.ExecResult is ExecResult
+        assert "ExecResult" in litmus.__all__
 
 
 class TestLocalExecNeverThrows:
