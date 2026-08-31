@@ -19,7 +19,7 @@ run tree.
 | `bread_crumbs` | string | Display path, exactly `ancestor_names.join("/")`. |
 | `summary_tree` | object | Recursive snapshot rooted at this node. |
 | `physical_location` | string | `PHYSICAL_LOCATION`, or `unknown` when absent. |
-| `env` | object | Environment snapshot taken at the start of the run. |
+| `env` | object | Environment snapshot taken at the start of the run. Published verbatim; see below. |
 | `run_data` | object | Detached structured evidence snapshot. It always contains a framework-owned `measurements` array reserved for a future parametric-measurement protocol. |
 
 Version 1 does not define measurement entries, limits, units, aggregation, SPC, or Cpk;
@@ -29,6 +29,15 @@ statistical semantics from its presence.
 Python-only lifecycle details such as the internal slot and raw return value are not
 part of this payload. Consumers must treat unknown fields as additive and select a
 decoder by `format_version`.
+
+### The `env` snapshot is verbatim
+
+Version 1 publishes the process environment exactly as the run found it. Nothing is
+filtered, redacted, or hashed: any value present in the environment at run start —
+including tokens or credentials injected by CI or the shell — is serialized into the
+artifact. Until the redaction question is settled (issue #53), keeping secrets out of
+the run environment is the operator's obligation. Decoders must not depend on the
+snapshot remaining unfiltered in future format versions.
 
 ## Summary tree node
 

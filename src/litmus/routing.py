@@ -10,6 +10,7 @@ self-tests import the policy machinery directly.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,17 @@ from litmus.ssh import SshInterface
 
 type ExecFn = Callable[[str], Awaitable[ExecResult]]
 type RouterProvenance = Literal["local", "inherited", "declared", "isolated"]
+
+LOGGER = logging.getLogger("litmus")
+
+_ROUTING_REASONS: dict[RouterProvenance, str] = {
+    "declared": "declared via use_shell",
+    "inherited": "inherited from parent",
+    "isolated": "declared via use_shell(inherit=False)",
+}
+"""Why the active route is where it is, in the words of the call that put it there.
+A node that never declared one has no reason to give, so `"local"` is deliberately
+absent and renders bare."""
 
 
 @final
@@ -146,15 +158,8 @@ class ExecRouter:
 
     @classmethod
     def for_ssh(cls, ssh: RemoteInterface) -> ExecRouter:
-        """Commands run through `ssh`. Label follows `ssh.host` when present."""
-        return cls(cls._label_for(ssh), ssh, ssh.exec)
-
-    @staticmethod
-    def _label_for(ssh: RemoteInterface) -> str:
-        host = getattr(ssh, "host", None)
-        if isinstance(host, str) and host:
-            return f"via {host}"
-        return "via remote"
+        """Commands run through `ssh`. Label names the hop this route attaches to."""
+        return cls(f"via {ssh.endpoint}", ssh, ssh.exec)
 
 
 @final
@@ -188,6 +193,7 @@ class ExecRouting:
     __slots__ = (
         "_connector",
         "_local_exec",
+        "_logger",
         "_opened",
         "_propagate",
         "_provenance",
@@ -200,9 +206,19 @@ class ExecRouting:
         *,
         inherited: ExecRouter | None = None,
         connector: ShellConnector | None = None,
+        logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
     ) -> None:
-        """Start local, or already inherited from a parent's `RouterRunParams`."""
+        """Start local, or already inherited from a parent's `RouterRunParams`.
+
+        Args:
+            local_exec: Where `exec` lands before any topology is declared.
+            inherited: A parent's route, handed down through `RouterRunParams`.
+            connector: Opens connection-form shells. Defaults to real SSH.
+            logger: Where connect provenance is recorded. A node's scoped adapter
+                keeps the line in that node's evidence trail.
+        """
         self._local_exec = local_exec
+        self._logger = logger if logger is not None else LOGGER
         self._router = inherited
         self._propagate = True
         if inherited is not None:
@@ -346,7 +362,25 @@ class ExecRouting:
         )
         remote = await self._connector.open(request)
         self._opened.append(remote)
+        # Logged on the way up, not on the way in: what is recorded is a connection
+        # that exists, with the credential path the transport actually selected.
+        self._logger.info("%s", remote.connect_provenance)
         return Shell(remote.exec, remote)
+
+    def routing_line(self) -> str:
+        """Where this node's `exec` lands, and why it lands there.
+
+        The via chain is rendered in full rather than summarized to its last hop: the
+        FT reconstructs the path from the test host to the DUT out of this line alone.
+        """
+        router = self._router
+        where = "local"
+        if router is not None and router.ssh is not None:
+            where = f"via {router.ssh.route_label}"
+        reason = _ROUTING_REASONS.get(self._provenance)
+        if reason is None:
+            return where
+        return f"{where} ({reason})"
 
     def _active_shell(self) -> Shell:
         router = self._router

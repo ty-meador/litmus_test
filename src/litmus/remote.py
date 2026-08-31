@@ -36,6 +36,10 @@ class RemoteInterface(ABC):
       - Default `_cancel_in_flight` is `_disconnect`. SSH will override with a
         hard destroy so pending streams die at the socket, not at the next
         poll.
+      - `endpoint`, `hop`, and `route_label` state where this transport sits in
+        the topology; `connect_provenance` is the line the router logs when it
+        comes up. The Floor Technician reconstructs the path to the DUT from
+        those lines, so a transport that hides its hop hides the topology.
     """
 
     def __init__(self) -> None:
@@ -48,6 +52,51 @@ class RemoteInterface(ABC):
     def connected(self) -> bool:
         """True if the transport is open and `exec` is allowed to proceed."""
         return self._connected
+
+    @property
+    def hop(self) -> RemoteInterface | None:
+        """The upstream transport this one dials through, or `None` for a direct link.
+
+        Ownership is not the question here: an owned via hop and a borrowed tunnel
+        answer alike. This is the topology edge a provenance chain walks.
+        """
+        return None
+
+    @property
+    def endpoint(self) -> str:
+        """How this transport's peer is named in route labels and provenance chains.
+
+        Falls back to the subclass's `host` where it exposes one, so a peer with no
+        address of its own — a UART on a local device node — is still named.
+        """
+        host = getattr(self, "host", None)
+        if isinstance(host, str) and host:
+            return host
+        return "remote"
+
+    @property
+    def route_label(self) -> str:
+        """The full path from the test host to this peer: `bastion -> edge -> dut`.
+
+        Rendered test-host-first and never summarized. Reconstructing topology from
+        the artifact is the whole point of the line this feeds.
+        """
+        chain: list[str] = []
+        transport: RemoteInterface | None = self
+        while transport is not None:
+            chain.append(transport.endpoint)
+            transport = transport.hop
+        chain.reverse()
+        return " -> ".join(chain)
+
+    @property
+    def connect_provenance(self) -> str:
+        """The evidence line the router logs when this transport comes up.
+
+        Subclasses name their protocol and the credential path they selected; the
+        default states the route alone.
+        """
+        return f"connect: {self.route_label}"
 
     @final
     async def connect(self) -> None:

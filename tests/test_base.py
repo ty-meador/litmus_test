@@ -1,10 +1,16 @@
 """The public LitmusTest atom and its framework-owned execution path."""
 
+from typing import Protocol, cast
+
 import pytest
 
 import litmus
 from litmus import PASS, ContractViolation, LitmusTest, TestUtils, Verdict
 from litmus.lifecycle import State
+
+
+class _ScopedLogRecord(Protocol):
+    litmus_scope: tuple[str, ...]
 
 
 class TestLitmusTestPublicSurface:
@@ -94,3 +100,36 @@ class TestLitmusTestMain:
         assert outcome.state is State.PASS
         with pytest.raises(ContractViolation, match="may run only once"):
             await suite.main(TestUtils())
+
+
+class TestExecRoutingProvenance:
+    async def test_every_executed_node_records_where_its_exec_lands(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.sequence(
+                    "claims",
+                    [self.case("first", self._first), self.case("second", self._second)],
+                )
+
+            async def _first(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def _second(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        with caplog.at_level("INFO", logger="litmus"):
+            outcome = await Suite(name="rack").run()
+
+        assert outcome.state is State.PASS
+        routing = [
+            record for record in caplog.records if record.getMessage().startswith("exec routing:")
+        ]
+        assert [record.getMessage() for record in routing] == ["exec routing: local"] * 4
+        assert [cast("_ScopedLogRecord", record).litmus_scope for record in routing] == [
+            ("rack",),
+            ("rack", "claims"),
+            ("rack", "claims", "first"),
+            ("rack", "claims", "second"),
+        ]

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Protocol, cast
+
 import pytest
 
 from litmus.executor import ExecResult
@@ -14,6 +17,11 @@ from litmus.routing import (
     SshConnector,
 )
 from litmus.ssh import SshInterface
+from litmus.utils import ScopedLogger
+
+
+class _ScopedLogRecord(Protocol):
+    litmus_scope: tuple[str, ...]
 
 
 class _Local:
@@ -28,12 +36,17 @@ class _Local:
 
 
 class _NamedRemote(RemoteInterface):
-    """A hop with a host name, so ExecRouter labels match production SSH."""
+    """A hop with a host name and an upstream, so labels match production SSH."""
 
-    def __init__(self, host: str) -> None:
+    def __init__(self, host: str, hop: RemoteInterface | None = None) -> None:
         super().__init__()
         self.host = host
         self.commands: list[str] = []
+        self._hop = hop
+
+    @property
+    def hop(self) -> RemoteInterface | None:
+        return self._hop
 
     async def _connect(self) -> None:
         return
@@ -55,7 +68,9 @@ class _Connector:
 
     async def open(self, request: ShellOpenRequest) -> RemoteInterface:
         self.requests.append(request)
-        remote = _NamedRemote(request.host)
+        # Mirrors SshConnector: the resolved hop is threaded through as the tunnel,
+        # so the opened remote reports the same chain production would.
+        remote = _NamedRemote(request.host, request.via)
         await remote.connect()
         self.opened.append(remote)
         return remote
@@ -298,3 +313,78 @@ class TestSshConnector:
         request = ShellOpenRequest(host="10.0.0.2", username="root", via=hop)
         with pytest.raises(ConnectionError, match="must be live"):
             await SshConnector().open(request)
+
+
+class TestRoutingProvenance:
+    """One line per node: where exec lands, and the call that put it there."""
+
+    def test_a_node_that_never_declared_a_route_reports_the_test_host(self) -> None:
+        harness = _Routing()
+
+        assert harness.routing.routing_line() == "local"
+
+    async def test_a_declared_route_names_the_call_that_declared_it(self) -> None:
+        harness = _Routing()
+
+        await harness.routing.use_shell(host="10.0.0.1", username="root")
+
+        assert harness.routing.routing_line() == "via 10.0.0.1 (declared via use_shell)"
+
+    async def test_an_inherited_route_says_where_it_came_from(self) -> None:
+        parent = _Routing()
+        await parent.routing.use_shell(host="10.0.0.1", username="root")
+        child = _Routing()
+
+        child.routing.apply_run_params(parent.routing.child_run_params())
+
+        assert child.routing.routing_line() == "via 10.0.0.1 (inherited from parent)"
+
+    async def test_forcing_local_exec_names_the_opt_out(self) -> None:
+        parent = _Routing()
+        await parent.routing.use_shell(host="10.0.0.1", username="root")
+        child = _Routing()
+        child.routing.apply_run_params(parent.routing.child_run_params())
+
+        await child.routing.use_shell(inherit=False)
+
+        assert child.routing.routing_line() == "local (declared via use_shell(inherit=False))"
+
+    async def test_the_via_chain_is_rendered_whole_not_summarized(self) -> None:
+        harness = _Routing()
+        jump = await harness.routing.use_shell(host="bastion", username="ops")
+
+        await harness.routing.use_shell(host="dut", username="root", via=jump)
+
+        assert harness.routing.routing_line() == "via bastion -> dut (declared via use_shell)"
+
+
+class TestConnectProvenance:
+    """Every transport the router opens records its own line as it comes up."""
+
+    async def test_opening_a_shell_records_the_endpoint_and_its_chain(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        harness = _Routing()
+
+        with caplog.at_level("INFO", logger="litmus"):
+            jump = await harness.routing.use_shell(host="bastion", username="ops")
+            await harness.routing.get_shell(host="dut", username="root", via=jump)
+
+        assert [record.getMessage() for record in caplog.records] == [
+            "connect: bastion",
+            "connect: bastion -> dut",
+        ]
+
+    async def test_the_line_lands_on_the_node_that_opened_the_connection(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        local = _Local()
+        connector = _Connector()
+        logger = ScopedLogger(logging.getLogger("litmus"), ("rack", "dut"))
+        routing = ExecRouting(local.run, connector=connector, logger=logger)
+
+        with caplog.at_level("INFO", logger="litmus"):
+            await routing.use_shell(host="10.0.0.1", username="root")
+
+        scoped = [cast("_ScopedLogRecord", record) for record in caplog.records]
+        assert [record.litmus_scope for record in scoped] == [("rack", "dut")]
