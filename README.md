@@ -18,6 +18,18 @@ patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
 `inspector-json.md` (the versioned downstream result contract), translated from the
 legacy docs and updated to the port's semantics.
 
+## Deployment requirement
+
+Every test VM must synchronize its system clock with NTP before Litmus runs. The scoped
+log is the authoritative chronology for a run, including structured pointers to captured
+artifacts, and may be used to establish event order in customer disputes. A station with
+an unsynchronized clock cannot produce trustworthy evidence and must not execute tests.
+
+Set `LITMUS_ARTIFACT_ROOT` to the run-specific evidence directory. Point-in-time evidence
+is an immutable `Artifact` value and has no public file-writing method; persist it only
+with `await utils.capture_artifact(artifact)`, which writes the file and then appends its
+pointer to the scoped log timeline.
+
 The port design lives in the workspace plan
 (`../PLAN.md`); the TypeScript original is the `../litmus-test-legacy/` design reference,
 and its language server is `../litmus-language-server-legacy/`. Both are read-only —
