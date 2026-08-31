@@ -21,6 +21,7 @@ from litmus.errors import (
     MissingVerdict,
     TestFailure,
 )
+from litmus.results import RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
 from litmus.verdict import PASS, Verdict
 
@@ -34,6 +35,8 @@ __all__ = [
     "LitmusError",
     "LitmusTest",
     "MissingVerdict",
+    "RunResult",
+    "SummaryTreeNode",
     "TestFailure",
     "TestUtils",
     "Verdict",
