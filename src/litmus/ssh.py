@@ -22,14 +22,38 @@ from __future__ import annotations
 
 import contextlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import final
+from typing import Literal, final
 
 import asyncssh
 from asyncssh import Error as SshError
 
 from litmus.executor import ExecResult
 from litmus.remote import RemoteInterface
+
+type AuthPath = Literal["agent", "key", "key-file", "password", "none"]
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class AuthChoice:
+    """The credential path `connect` will take, and the exact credential it names.
+
+    `source` is the file or socket that path reads — an agent socket, a key file. It
+    is `None` where the path names no file (an in-memory key, a password) or where no
+    credential exists at all. A password value never lands here: this object is
+    rendered into the log artifact.
+    """
+
+    label: AuthPath
+    source: str | None = None
+
+    def __str__(self) -> str:
+        """`key-file(/home/ops/id_ed25519)` — the path, and the credential it selected."""
+        if self.source is None:
+            return self.label
+        return f"{self.label}({self.source})"
 
 
 @final
@@ -52,6 +76,10 @@ class SshInterface(RemoteInterface):
         never both.
       - Auth resolution, in order: explicit `agent` path, in-memory
         `private_key`, `private_key_path`, `password`, then `SSH_AUTH_SOCK`.
+        That order is declared once, in `_auth_choice`, and both the dialed
+        options and the provenance line read it — what is logged is what was used.
+      - `connect_provenance` names the endpoint, the credential path selected,
+        and the full via chain. The credential's *value* is never rendered.
       - `skip_host_verification` is `known_hosts=None` (lab hosts without
         known_hosts entries). Default is to verify.
     """
@@ -109,17 +137,29 @@ class SshInterface(RemoteInterface):
     @property
     def auth_label(self) -> str:
         """Which credential path `connect` will use. For provenance logging."""
-        if self._agent is not None:
-            return "agent"
-        if self._private_key is not None:
-            return "key"
-        if self._private_key_path is not None:
-            return "key-file"
-        if self._password is not None:
-            return "password"
-        if os.environ.get("SSH_AUTH_SOCK"):
-            return "agent"
-        return "none"
+        return self._auth_choice().label
+
+    @property
+    def hop(self) -> SshInterface | None:
+        """The upstream hop this connection dials through, owned (`via`) or borrowed."""
+        if self._via is not None:
+            return self._via
+        return self._tunnel
+
+    @property
+    def connect_provenance(self) -> str:
+        """The `ssh connect:` line: endpoint, credential path, and the full via chain.
+
+        `via=direct` means this connection dials out from the test host itself. Any
+        other value is the whole chain, test host first — the FT reconstructs the
+        topology and the auth decision from this line without reading the suite.
+        """
+        hop = self.hop
+        via = "direct" if hop is None else hop.route_label
+        return (
+            f"ssh connect: {self._username}@{self._host}:{self._port} "
+            f"auth={self._auth_choice()} via={via}"
+        )
 
     async def reconnect_to(self, host: str, port: int | None = None) -> None:
         """Point this handle at a new address and replace the socket.
@@ -198,23 +238,42 @@ class SshInterface(RemoteInterface):
         options.update(self._auth_options())
         return options
 
-    def _auth_options(self) -> dict[str, object]:
+    def _auth_choice(self) -> AuthChoice:
+        """Resolve the credential path. The documented order lives here and nowhere else.
+
+        Pure: it reads the stored credentials and parses nothing, so provenance can be
+        rendered before — and without risking — a connect.
+        """
         if self._agent is not None:
-            return {"agent_path": self._agent, "client_keys": []}
+            return AuthChoice("agent", self._agent)
         if self._private_key is not None:
+            return AuthChoice("key")
+        if self._private_key_path is not None:
+            return AuthChoice("key-file", str(self._private_key_path))
+        if self._password is not None:
+            return AuthChoice("password")
+        sock = os.environ.get("SSH_AUTH_SOCK")
+        if sock:
+            return AuthChoice("agent", sock)
+        return AuthChoice("none")
+
+    def _auth_options(self) -> dict[str, object]:
+        # Translation only — `_auth_choice` already decided. The credential re-reads
+        # narrow what the choice guarantees; they cannot be false for their label.
+        choice = self._auth_choice()
+        if choice.label == "agent":
+            return {"agent_path": choice.source, "client_keys": []}
+        if choice.label == "key" and self._private_key is not None:
             key = asyncssh.import_private_key(self._private_key, passphrase=self._passphrase)
             return {"client_keys": [key], "agent_path": None}
-        if self._private_key_path is not None:
+        if choice.label == "key-file":
             return {
-                "client_keys": [str(self._private_key_path)],
+                "client_keys": [choice.source],
                 "agent_path": None,
                 "passphrase": self._passphrase,
             }
-        if self._password is not None:
+        if choice.label == "password" and self._password is not None:
             return {"password": self._password, "client_keys": [], "agent_path": None}
-        sock = os.environ.get("SSH_AUTH_SOCK")
-        if sock:
-            return {"agent_path": sock, "client_keys": []}
         raise ConnectionError(
             "SshInterface requires password, private_key, private_key_path, or SSH_AUTH_SOCK"
         )

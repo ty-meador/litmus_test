@@ -66,6 +66,11 @@ static analysis.
   - Context annotations do not bypass this filter. A `TypedDict` is an ordinary dict at runtime, and each value still has to satisfy the same serialization rules.
 - Every `RunResult` includes `ancestor_names: list[str]` (path from root) and `bread_crumbs: str` (joined for display), plus a `summary_tree` snapshot of the node's subtree state at completion. Downstream integrators can reconstruct the full Inspector tree from the root's RunResult alone.
 - `TestFailure` and `ExternalIntegrationFailure` both implement `to_json()`. Serializing a `RunResult` produces clean JSON for downstream integrators without any custom serializer.
+- **Provenance.** Every executed node records one `exec routing: <where> (<why>)` line — `where` is `local` or `via <chain>`, `why` names the call that put it there (`declared via use_shell`, `inherited from parent`, `declared via use_shell(inherit=False)`). A node that never declared a route renders `where` alone. The line is emitted after `configure` returns, since `use_shell` lives there and the route is not final until it does.
+- Every transport the router opens records one line as it comes up. SSH renders `ssh connect: <user>@<host>:<port> auth=<label> via=<chain>`; `via=direct` means the connection dials out from the test host itself.
+- Via chains are rendered **in full and test-host-first** (`bastion -> edge -> dut`), never summarized to the last hop.
+- The credential path is named exactly — `key-file(/path)`, `agent(/socket)`, `password`, `key`, `none` — and the credential's *value* never appears. What is logged is what was dialed: the resolution order is declared once, in `SshInterface._auth_choice`, and both the connect options and the provenance line read it.
+- **Consequence:** the Floor Technician reconstructs the run's topology and its auth decisions from the artifacts alone, without opening the suite source.
 
 **Developer obligation:** Instrument appropriately.
 - Use `utils.logger` (never `print`) so evidence is captured in artifacts.
@@ -144,6 +149,8 @@ static analysis.
 - `propagate=False` on `use_shell` stops this node's router from flowing to children; they start local. `propagate` on `get_shell` is a documented no-op.
 - Children inherit the route through run params (`RouterRunParams`), never through ctx. ctx is instance-local domain data, not infrastructure.
 - Routed tunnels are borrowed; the router owns hop lifecycle. Every hop the router resolves — an explicit `via=` Shell or an inherited route — is already live, so the connector threads it through the transport's borrowed `tunnel=` channel, never the owned `via=` one. The opened interface must not disconnect, cancel, or collapse its hop. What a node opened is recorded on the node (`opened`) and closes before the hop it tunnels through; a hard abort on the hop kills everything tunneled through it at the socket (In-Flight Termination Contract). A dead hop at open time is an error, not something the router silently brings up.
+
+- The router logs what it opens and where every node's exec lands (see the Evidence Contract). A transport that hides its hop hides the topology: `endpoint`, `hop`, and `route_label` on `RemoteInterface` are how a transport states its place in the chain, and `connect_provenance` is the line the router records for it.
 
 **Developer obligation:** Call `use_shell` when this node's `utils.exec` should land somewhere other than the test host. Call `get_shell` for auxiliary endpoints. Do not stuff SSH handles into ctx and expect routing to notice.
 
