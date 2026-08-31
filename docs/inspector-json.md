@@ -20,7 +20,11 @@ run tree.
 | `summary_tree` | object | Recursive snapshot rooted at this node. |
 | `physical_location` | string | `PHYSICAL_LOCATION`, or `unknown` when absent. |
 | `env` | object | Environment snapshot taken at the start of the run. |
-| `run_data` | JSON value or null | Structured evidence slot; auto-capture is specified separately. Future parametric measurements are reserved inside this structure. |
+| `run_data` | object | Detached structured evidence snapshot. It always contains a framework-owned `measurements` array reserved for a future parametric-measurement protocol. |
+
+Version 1 does not define measurement entries, limits, units, aggregation, SPC, or Cpk;
+the reserved `measurements` array is therefore empty. Integrators must not infer
+statistical semantics from its presence.
 
 Python-only lifecycle details such as the internal slot and raw return value are not
 part of this payload. Consumers must treat unknown fields as additive and select a

@@ -50,8 +50,11 @@ async def configure(self, utils: TestUtils) -> dict[str, Any]:
 Override `run_data` only when you need computed or filtered output:
 
 ```python
+from litmus.evidence import JsonObject
+
+
 @property
-def run_data(self) -> object:
+def run_data(self) -> JsonObject:
     base = super().run_data
     return {**base, "within_spec": self._check_spec(base)}
 ```
