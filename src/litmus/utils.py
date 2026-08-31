@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, final
 
+from litmus.artifacts import Artifact
 from litmus.errors import ExternalIntegrationFailure, TestFailure
 from litmus.executor import ExecResult, LocalExec
 from litmus.lifecycle import RunAbort
@@ -19,6 +22,59 @@ from litmus.routing import ExecRouting, Shell
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
 
 LOGGER = logging.getLogger("litmus")
+
+
+@final
+class _ArtifactStore:
+    """Private persistence boundary shared by every node in one run."""
+
+    __slots__ = ("_root",)
+
+    def __init__(self, root: str | Path) -> None:
+        self._root = Path(root).expanduser().resolve()
+
+    @property
+    def root(self) -> Path:
+        """Absolute directory where this run's captured evidence is stored."""
+        return self._root
+
+    async def capture(self, artifact: Artifact) -> Path:
+        """Persist one artifact without blocking the event loop or overwriting evidence."""
+        return await asyncio.to_thread(self._capture_sync, artifact)
+
+    def _capture_sync(self, artifact: Artifact) -> Path:
+        """Serialize and atomically publish one artifact from an executor thread."""
+        serialized = json.dumps(
+            artifact.to_json(),
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        serialized = f"{serialized}\n"
+        self._root.mkdir(parents=True, exist_ok=True)
+
+        temporary = self._root / f".{uuid.uuid4().hex}.artifact.tmp"
+        try:
+            with temporary.open("x", encoding="utf-8", newline="\n") as artifact_file:
+                artifact_file.write(serialized)
+                artifact_file.flush()
+                os.fsync(artifact_file.fileno())
+
+            timestamp = artifact.timestamp.strftime("%Y%m%dT%H%M%S.%fZ")
+            base_name = f"{artifact.name}.{artifact.type}.{timestamp}"
+            collision = 0
+            while True:
+                suffix = "" if collision == 0 else f".{collision}"
+                destination = self._root / f"{base_name}{suffix}.artifact"
+                try:
+                    os.link(temporary, destination)
+                except FileExistsError:
+                    collision += 1
+                    continue
+                return destination
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 @final
@@ -81,6 +137,7 @@ class TestUtils:
 
     __test__ = False
     __slots__ = (
+        "_artifact_store",
         "_base_logger",
         "_ctx",
         "_env",
@@ -97,6 +154,7 @@ class TestUtils:
         ctx: dict[str, Any] | None = None,
         env: Mapping[str, str] | None = None,
         logger: logging.Logger | None = None,
+        artifact_root: str | Path | None = None,
     ) -> None:
         """Create an unscoped run seed; lifecycle execution creates node views.
 
@@ -104,10 +162,18 @@ class TestUtils:
             ctx: Initial root context. The framework mutates this dict in place.
             env: Environment snapshot. A defensive, immutable copy is retained.
             logger: Logging sink beneath the per-node scope adapter.
+            artifact_root: Directory for point-in-time evidence. Defaults to the
+                ``LITMUS_ARTIFACT_ROOT`` environment snapshot, then ``./artifacts``.
         """
         self._ctx = {} if ctx is None else ctx
         source_env = os.environ if env is None else env
         self._env = MappingProxyType(dict(source_env))
+        configured_artifact_root = artifact_root
+        if configured_artifact_root is None:
+            configured_artifact_root = self._env.get(
+                "LITMUS_ARTIFACT_ROOT", Path.cwd() / "artifacts"
+            )
+        self._artifact_store = _ArtifactStore(configured_artifact_root)
         self._base_logger = LOGGER if logger is None else logger
         self._scope: tuple[str, ...] = ()
         self._logger = ScopedLogger(self._base_logger, self._scope)
@@ -135,9 +201,49 @@ class TestUtils:
         """Read-only view of the run-level integration halt signal."""
         return self._signal
 
+    @property
+    def artifact_root(self) -> Path:
+        """Absolute directory where this run's captured evidence is stored."""
+        return self._artifact_store.root
+
+    async def capture_artifact(self, artifact: Artifact) -> Path:
+        """Persist evidence and append its structured pointer to the scoped timeline.
+
+        The file is durably published before the pointer is logged. Serialization or
+        persistence failures therefore produce neither a misleading pointer nor a
+        partially published artifact.
+        """
+        artifact_path = await self._artifact_store.capture(artifact)
+        timestamp = artifact.timestamp.isoformat().replace("+00:00", "Z")
+        self._logger.info(
+            "artifact captured [%s:%s] -> %s",
+            artifact.type,
+            artifact.name,
+            artifact_path,
+            extra={
+                "artifact_name": artifact.name,
+                "artifact_path": str(artifact_path),
+                "artifact_timestamp": timestamp,
+                "artifact_type": artifact.type,
+            },
+        )
+        return artifact_path
+
     async def exec(self, command: str) -> ExecResult:
-        """Run ``command`` through this node's active route."""
-        return await self._routing.exec(command)
+        """Run ``command`` through this node's active route.
+
+        Never raises for the command's own exit status. A non-zero `exit_code`
+        is evidence for the test method to judge, not an exception. Signal-killed
+        and aborted commands settle as `exit_code == -1`. `CancelledError` still
+        propagates: that is TaskGroup teardown, not a command outcome.
+        """
+        self._logger.info("attempting to run command >%s<", command)
+        result = await self._routing.exec(command)
+        if result.stderr:
+            self._logger.error("stderr: \n%s", result.stderr)
+        self._logger.info("exit code: %s", result.exit_code)
+        self._logger.info("stdout: \n%s", result.stdout)
+        return result
 
     async def wait_for(
         self,
@@ -247,6 +353,7 @@ class TestUtils:
     ) -> TestUtils:
         """Create one node-owned view from this node's child inheritance policy."""
         scoped = object.__new__(TestUtils)
+        scoped._artifact_store = self._artifact_store
         scoped._ctx = {} if isolate_context else self._ctx
         scoped._env = self._env
         scoped._base_logger = self._base_logger
