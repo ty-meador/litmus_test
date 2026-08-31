@@ -230,8 +230,20 @@ class TestUtils:
         return artifact_path
 
     async def exec(self, command: str) -> ExecResult:
-        """Run ``command`` through this node's active route."""
-        return await self._routing.exec(command)
+        """Run ``command`` through this node's active route.
+
+        Never raises for the command's own exit status. A non-zero `exit_code`
+        is evidence for the test method to judge, not an exception. Signal-killed
+        and aborted commands settle as `exit_code == -1`. `CancelledError` still
+        propagates: that is TaskGroup teardown, not a command outcome.
+        """
+        self._logger.info("attempting to run command >%s<", command)
+        result = await self._routing.exec(command)
+        if result.stderr:
+            self._logger.error("stderr: \n%s", result.stderr)
+        self._logger.info("exit code: %s", result.exit_code)
+        self._logger.info("stdout: \n%s", result.stdout)
+        return result
 
     async def wait_for(
         self,
