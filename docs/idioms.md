@@ -244,12 +244,38 @@ the run; the halt signal is read-only from suite code.
 - Artifacts captured automatically
 - `discrete_log_file=False` rolls log entries into the parent logger. `discrete_log_file=True` (the default on class-based tests) gives the node its own log file. Inline `self.case()` bodies default to `False`.
 
+### Point-in-Time Artifacts
+
+Construct an immutable `Artifact` and pass it to `utils.capture_artifact()`. The method
+persists the JSON artifact under `LITMUS_ARTIFACT_ROOT`, then emits a structured pointer
+through the same scoped logger that records the surrounding test events. `Artifact`
+deliberately has no `write()` or `write_file()` method: a file without its pointer would
+be absent from the authoritative chronology.
+
+```python
+from litmus import Artifact
+
+snapshot = Artifact(
+    name="pre-flash",
+    type="hardware-survey",
+    data={"firmware": "2.4.1", "healthy": True},
+)
+artifact_path = await utils.capture_artifact(snapshot)
+```
+
+Artifact names and types accept letters, numbers, dashes, and underscores. Payloads must
+be JSON serializable. Capture is async, never overwrites an existing artifact, and
+returns the absolute path recorded in the pointer entry.
+
 ## RunResult Navigation — `ancestor_names` and `bread_crumbs`
 Every `RunResult` carries the node's position in the tree:
 
 - `ancestor_names: list[str]` — canonical form, root-to-this inclusive. Use for programmatic aggregation (DB keys, leaf identity).
 - `bread_crumbs: str` — `"/".join(ancestor_names)` precomputed. Use for display, log lines, error messages.
 - `summary_tree: SummaryTreeNode` — snapshot of this node's subtree at completion. Enables downstream integrators to reconstruct the full Inspector tree from the root's RunResult alone.
+
+The versioned payload and recursive node fields are defined in
+[`inspector-json.md`](inspector-json.md).
 
 ## Fractal Design: Litmus exposes a single class
 | Need | Use |

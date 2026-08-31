@@ -102,7 +102,9 @@ The log artifact is the authoritative chronological record of a test run. Two co
 - **Structural** (inspector tree): what ran, what passed, what failed, how tests compose
 - **Temporal** (log backbone): what happened, in what order, what state at each moment
 
-`capture_artifact()` stitches artifacts onto the timeline via pointer log entries. Never write an artifact file directly — it orphans the artifact from the timeline.
+`await utils.capture_artifact(artifact)` stitches artifacts onto the timeline via
+structured pointer log entries. The public `Artifact` value has no file-writing method,
+so the framework cannot persist evidence without also recording that pointer.
 
 **Timestamp integrity is a system requirement.** NTP sync on the test VM is not optional. The log backbone is used as a legal instrument in customer disputes ("did failures start before your 2pm firmware push?").
 
