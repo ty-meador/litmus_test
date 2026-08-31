@@ -941,7 +941,14 @@ class TestTopologyFromArtifacts:
             await jump_peer.aclose()
 
         assert outcome.state is State.PASS
-        lines = [record.getMessage() for record in caplog.records]
+        # The rest of the run's instrumentation is not this test's subject. Filter to
+        # the provenance lines: the claim is that they are all present and in order,
+        # not that nothing else is ever logged alongside them.
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith(("ssh connect:", "exec routing:"))
+        ]
         assert lines == [
             f"ssh connect: ops@127.0.0.1:{jump_port} auth=password via=direct",
             f"ssh connect: root@127.0.0.1:{dut_port} auth=password via=127.0.0.1",
