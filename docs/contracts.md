@@ -69,7 +69,10 @@ static analysis.
 
 **Developer obligation:** Instrument appropriately.
 - Use `utils.logger` (never `print`) so evidence is captured in artifacts.
-- Use `self.use_survey()` for periodic state snapshots; use `capture_artifact()` for point-in-time captures.
+- Use `self.use_survey()` for periodic state snapshots; use
+  `await utils.capture_artifact(artifact)` for point-in-time captures. `Artifact` is a
+  write-free value on the public surface: the utility method is the only framework API
+  that persists it, and it always emits the chronological pointer after publication.
 - Return structured data from `use_survey` / `use_audit` hooks to capture it as an artifact.
 - Populate `ctx` with structured evidence during lifecycle methods so that values appear in `run_data` automatically.
 
