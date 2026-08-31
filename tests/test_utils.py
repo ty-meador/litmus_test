@@ -1,14 +1,18 @@
 """Per-node TestUtils ownership and scoped evidence logging."""
 
 import ast
+import asyncio
 import inspect
+import shlex
+import sys
+import time
 from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
 
 import litmus
-from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
+from litmus import PASS, ExecResult, LitmusTest, TestFailure, TestUtils, Verdict
 from litmus.lifecycle import Outcome, State
 
 
@@ -22,6 +26,9 @@ class TestTestUtilsPublicSurface:
     def test_test_utils_is_the_exported_lifecycle_surface(self) -> None:
         assert litmus.TestUtils is TestUtils
         assert "TestUtils" in litmus.__all__
+        assert litmus.ExecResult is ExecResult
+        assert "ExecResult" in litmus.__all__
+        assert not hasattr(litmus, "LocalExec")
 
         utils = TestUtils()
 
@@ -195,3 +202,135 @@ class TestFrameworkLoggingDiscipline:
                     violations.append(f"{relative}:{node.lineno}")
 
         assert violations == []
+
+
+class _HostChild:
+    """Start a host process `utils.exec` can sit on. Not production API."""
+
+    @staticmethod
+    def pid_sleep_command(pid_path: Path, seconds: int = 60) -> str:
+        script = (
+            "import os, time; "
+            f"open({str(pid_path)!r}, 'w').write(str(os.getpid())); "
+            f"time.sleep({seconds})"
+        )
+        return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    @staticmethod
+    def pidfile_ready(pid_path: Path) -> bool:
+        if not pid_path.exists():
+            return False
+        return bool(pid_path.read_text().strip())
+
+    @staticmethod
+    async def wait_for_pidfile(pid_path: Path, seconds: float = 2.0) -> None:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if _HostChild.pidfile_ready(pid_path):
+                return
+            await asyncio.sleep(0.02)
+        raise AssertionError("child never wrote its pid")
+
+
+class TestUtilsExecNeverThrows:
+    """A failed command is evidence. The test method decides the verdict."""
+
+    async def test_a_successful_command_returns_stdout(self) -> None:
+        result = await TestUtils().exec("echo hello")
+
+        assert result.exit_code == 0
+        assert result.stdout.strip() == "hello"
+        assert result.stderr == ""
+
+    async def test_a_nonzero_exit_is_evidence_not_an_exception(self) -> None:
+        result = await TestUtils().exec("exit 7")
+
+        assert result == ExecResult(stdout="", stderr="", exit_code=7)
+
+    async def test_stderr_is_captured(self) -> None:
+        result = await TestUtils().exec("echo err >&2")
+
+        assert result.exit_code == 0
+        assert result.stderr.strip() == "err"
+
+    async def test_a_missing_command_is_still_a_result(self) -> None:
+        result = await TestUtils().exec("litmus-no-such-command-on-purpose")
+
+        assert result.exit_code != 0
+        assert result.exit_code != -1
+
+    async def test_a_signal_killed_child_yields_minus_one(self) -> None:
+        # `kill -TERM $$` delivers SIGTERM to the shell — the direct child —
+        # so settlement sees a signal death rather than a numeric exit status.
+        result = await TestUtils().exec("kill -TERM $$")
+
+        assert result.exit_code == -1
+
+    async def test_abort_settles_as_minus_one_not_an_exception(self, tmp_path: Path) -> None:
+        utils = TestUtils()
+        pid_path = tmp_path / "pid"
+        task = asyncio.create_task(utils.exec(_HostChild.pid_sleep_command(pid_path)))
+        await _HostChild.wait_for_pidfile(pid_path)
+
+        # Abort is a framework action on the seed's executor, not an author API.
+        await object.__getattribute__(utils, "_local_exec").cancel_in_flight()
+        result = await task
+
+        assert result.exit_code == -1
+
+    async def test_task_cancellation_still_propagates(self, tmp_path: Path) -> None:
+        utils = TestUtils()
+        pid_path = tmp_path / "pid"
+        task = asyncio.create_task(utils.exec(_HostChild.pid_sleep_command(pid_path)))
+        await _HostChild.wait_for_pidfile(pid_path)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    async def test_a_suite_method_inspects_failure_and_decides_the_verdict(self) -> None:
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("service", self._service)
+
+            async def _service(self, utils: TestUtils) -> Verdict:
+                result = await utils.exec("exit 1")
+                if result.exit_code != 0:
+                    raise TestFailure("service down", "0", str(result.exit_code))
+                return PASS
+
+        outcome = await Suite(name="service").run()
+
+        assert outcome.state is State.FAIL
+        assert isinstance(outcome.failure, TestFailure)
+        assert outcome.failure.expected == "0"
+        assert outcome.failure.received == "1"
+
+    async def test_exec_logs_land_on_the_leaf(self, caplog: pytest.LogCaptureFixture) -> None:
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("probe", self._probe)
+
+            async def _probe(self, utils: TestUtils) -> Verdict:
+                await utils.exec("echo observed")
+                return PASS
+
+        with caplog.at_level("INFO", logger="litmus"):
+            outcome = await Suite(name="rack").run()
+
+        assert outcome.state is State.PASS
+        records = [
+            record
+            for record in caplog.records
+            if "attempting to run command" in record.message
+            or "exit code:" in record.message
+            or "stdout:" in record.message
+        ]
+        assert [cast("_ScopedLogRecord", record).litmus_node for record in records] == [
+            "probe",
+            "probe",
+            "probe",
+        ]
+        messages = [record.message for record in records]
+        assert any("echo observed" in message for message in messages)
+        assert any("exit code: 0" in message for message in messages)
