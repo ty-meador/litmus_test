@@ -229,3 +229,55 @@ class TestCancelInFlight:
         assert transport.hard_closed is True
         assert transport.disconnected is False
         assert transport.connected is False
+
+
+class _Hopped(RemoteInterface):
+    """A transport that dials through an upstream one, the way a tunnel does."""
+
+    def __init__(self, host: str, hop: RemoteInterface | None = None) -> None:
+        super().__init__()
+        self.host = host
+        self._hop = hop
+
+    @property
+    def hop(self) -> RemoteInterface | None:
+        return self._hop
+
+    async def _connect(self) -> None:
+        return
+
+    async def _disconnect(self) -> None:
+        return
+
+    async def _exec(self, command: str) -> ExecResult:
+        return ExecResult(stdout=command, stderr="", exit_code=0)
+
+
+class TestTopologySeams:
+    """`endpoint`, `hop`, and `route_label` are what provenance lines are built from."""
+
+    def test_a_transport_with_no_address_is_still_named(self) -> None:
+        transport = _UartStub()
+
+        assert transport.endpoint == "remote"
+        assert transport.hop is None
+        assert transport.route_label == "remote"
+
+    def test_a_host_bearing_transport_names_its_peer(self) -> None:
+        transport = _Hopped("dut")
+
+        assert transport.endpoint == "dut"
+        assert transport.route_label == "dut"
+
+    def test_the_chain_renders_test_host_first_and_in_full(self) -> None:
+        bastion = _Hopped("bastion")
+        edge = _Hopped("edge", bastion)
+        dut = _Hopped("dut", edge)
+
+        assert dut.route_label == "bastion -> edge -> dut"
+        assert edge.route_label == "bastion -> edge"
+
+    def test_the_default_connect_line_states_the_route(self) -> None:
+        dut = _Hopped("dut", _Hopped("bastion"))
+
+        assert dut.connect_provenance == "connect: bastion -> dut"
