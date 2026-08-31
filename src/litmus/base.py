@@ -13,6 +13,7 @@ from litmus.errors import (
 )
 from litmus.hooks import AuditHook, HookFunction, SurveyHook
 from litmus.lifecycle import ChildBoundary, Outcome, RunAbort, Slot, State
+from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
 from litmus.verdict import Verdict
 
@@ -31,6 +32,9 @@ _SEALED_METHODS = frozenset(
         "_run_lifecycle",
         "_run_group",
         "_run_sequence",
+        "_node_type",
+        "_pending_summary_tree",
+        "_to_result",
         "_configure_and_merge_context",
         "_run_cleanup",
         "use_survey",
@@ -203,12 +207,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """Restore state after the suite settles, regardless of its outcome."""
 
     @final
-    async def run(self, *, env: Mapping[str, str] | None = None) -> Outcome:
+    async def run(self, *, env: Mapping[str, str] | None = None) -> RunResult:
         """Execute once with framework-owned utilities and an environment snapshot."""
         return await self.main(TestUtils(env=env))
 
     @final
-    async def main(self, utils: TestUtils | None = None) -> Outcome:
+    async def main(self, utils: TestUtils | None = None) -> RunResult:
         """Execute the sealed lifecycle with an optional framework test seed."""
         seed = TestUtils() if utils is None else utils
         return await self._run_lifecycle(seed, RunAbort(), isolate_context=False)
@@ -220,7 +224,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         run_abort: RunAbort,
         *,
         isolate_context: bool = True,
-    ) -> Outcome:
+    ) -> RunResult:
         """Execute one node while preserving the tree's shared halt signal."""
         if self._has_run:
             raise ContractViolation(self.name, "a LitmusTest instance may run only once")
@@ -244,9 +248,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
         if test is not None:
             # ChildBoundary is the sole enforcement point for authored verdicts.
-            return await ChildBoundary(self.name, run_abort, utils.logger).run(
+            outcome = await ChildBoundary(self.name, run_abort, utils.logger).run(
                 Slot.TEST_METHOD, test(utils)
             )
+            return self._to_result(outcome, utils)
 
         boundary = ChildBoundary(self.name, run_abort, utils.logger)
         try:
@@ -254,10 +259,22 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 Slot.CONFIGURE, self._configure_and_merge_context(utils)
             )
             if configured.state is not None:
-                return configured
+                return self._to_result(configured, utils)
 
             suite = self.build_suite()
-            return await suite._run_lifecycle(utils, run_abort)
+            suite_result = await suite._run_lifecycle(utils, run_abort)
+            outcome = Outcome(
+                Slot.TEST_METHOD,
+                self.name,
+                suite_result.state,
+                failure=suite_result.failure,
+                value=suite_result.value,
+            )
+            return self._to_result(
+                outcome,
+                utils,
+                children=(suite_result.summary_tree,),
+            )
         finally:
             await self._run_cleanup(boundary, utils)
 
@@ -267,9 +284,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         utils: TestUtils,
         run_abort: RunAbort,
         children: tuple[LitmusTest, ...],
-    ) -> Outcome:
+    ) -> RunResult:
         """Run every child to settlement unless a harness-level halt escapes."""
-        tasks: list[asyncio.Task[Outcome]] = []
+        tasks: list[asyncio.Task[RunResult]] = []
         try:
             async with asyncio.TaskGroup() as task_group:
                 tasks.extend(
@@ -283,7 +300,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
         outcomes = tuple(task.result() for task in tasks)
         if all(outcome.state is State.PASS for outcome in outcomes):
-            return Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=outcomes)
+            aggregate = Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=outcomes)
+            return self._to_result(
+                aggregate,
+                utils,
+                children=tuple(outcome.summary_tree for outcome in outcomes),
+            )
 
         # Aborted outranks Fail, and the first child in that state tells the group's story.
         if any(outcome.state is State.ABORTED for outcome in outcomes):
@@ -292,12 +314,17 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         else:
             state = State.FAIL
             reported = next(outcome for outcome in outcomes if outcome.state is not State.PASS)
-        return Outcome(
+        aggregate = Outcome(
             Slot.TEST_METHOD,
             self.name,
             state,
             failure=reported.failure,
             value=outcomes,
+        )
+        return self._to_result(
+            aggregate,
+            utils,
+            children=tuple(outcome.summary_tree for outcome in outcomes),
         )
 
     @final
@@ -306,19 +333,28 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         utils: TestUtils,
         run_abort: RunAbort,
         children: tuple[LitmusTest, ...],
-    ) -> Outcome:
+    ) -> RunResult:
         """Run dependent children in order and stop at the first non-pass verdict."""
-        outcomes: list[Outcome] = []
-        for child in children:
+        outcomes: list[RunResult] = []
+        for index, child in enumerate(children):
             outcome = await child._run_lifecycle(utils, run_abort)
             outcomes.append(outcome)
             if outcome.state in (State.FAIL, State.ABORTED):
-                return Outcome(
+                aggregate = Outcome(
                     Slot.TEST_METHOD,
                     self.name,
                     outcome.state,
                     failure=outcome.failure,
                     value=tuple(outcomes),
+                )
+                pending = tuple(child._pending_summary_tree() for child in children[index + 1 :])
+                return self._to_result(
+                    aggregate,
+                    utils,
+                    children=(
+                        *(result.summary_tree for result in outcomes),
+                        *pending,
+                    ),
                 )
             if outcome.state is not State.PASS:
                 raise FrameworkContractViolation(
@@ -333,7 +369,78 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 self.name,
                 detail="a sequence reached no explicit terminal verdict",
             )
-        return Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=tuple(outcomes))
+        aggregate = Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=tuple(outcomes))
+        return self._to_result(
+            aggregate,
+            utils,
+            children=tuple(outcome.summary_tree for outcome in outcomes),
+        )
+
+    @final
+    def _node_type(self) -> NodeType:
+        """Name the framework-owned node shape for the Inspector contract."""
+        if isinstance(self, _Case):
+            return NodeType.TEST_CASE
+        if isinstance(self, _Group):
+            return NodeType.TEST_GROUP
+        if isinstance(self, _Sequence):
+            return NodeType.TEST_SEQUENCE
+        return NodeType.TEST_SUITE
+
+    @final
+    def _pending_summary_tree(self) -> SummaryTreeNode:
+        """Snapshot a declared node that a failed sequence did not execute."""
+        children = self._children
+        if children is not None:
+            child_trees = tuple(child._pending_summary_tree() for child in children)
+        elif self._test is not None:
+            child_trees = ()
+        else:
+            # build_suite is a pure table of contents by contract. Inspecting it here
+            # preserves the entire declared tree without touching lifecycle methods.
+            child_trees = (self.build_suite()._pending_summary_tree(),)
+        return SummaryTreeNode(
+            name=self.name,
+            type=self._node_type(),
+            state=None,
+            children=child_trees,
+        )
+
+    @final
+    def _to_result(
+        self,
+        outcome: Outcome,
+        utils: TestUtils,
+        *,
+        children: tuple[SummaryTreeNode, ...] = (),
+    ) -> RunResult:
+        """Seal one terminal boundary outcome into self-contained run evidence."""
+        if outcome.state is None:
+            raise FrameworkContractViolation(
+                self.name,
+                detail="a completed test node settled without a terminal state",
+            )
+        node_type = self._node_type()
+        summary_tree = SummaryTreeNode(
+            name=self.name,
+            type=node_type,
+            state=outcome.state,
+            failure=outcome.failure,
+            children=children,
+        )
+        return RunResult(
+            slot=outcome.slot,
+            node=self.name,
+            state=outcome.state,
+            failure=outcome.failure,
+            value=outcome.value,
+            swallowed=outcome.swallowed,
+            ancestor_names=list(utils.logger.scope),
+            bread_crumbs=utils.logger.bread_crumbs,
+            summary_tree=summary_tree,
+            type=node_type,
+            env=utils.env,
+        )
 
     @final
     async def _configure_and_merge_context(self, utils: TestUtils) -> dict[str, Any]:
