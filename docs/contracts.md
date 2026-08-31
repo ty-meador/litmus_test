@@ -67,8 +67,9 @@ static analysis.
   - Filtering is all-or-nothing for each top-level ctx entry. A nested instance, handle,
     function, cycle, non-string mapping key, or non-finite float strips that complete
     entry; the framework never emits partial evidence or silently coerces it.
-  - `run_data` is a detached snapshot. Later ctx mutation cannot rewrite evidence
-    already captured in a `RunResult`.
+  - `run_data` is a detached snapshot taken after cleanup. Later ctx mutation cannot
+    rewrite evidence already captured in a `RunResult`; serializable cleanup evidence
+    is included.
   - `run_data["measurements"]` is a framework-owned empty list reserved for future
     parametric measurements. An authored ctx entry with that name cannot populate or
     replace the slot. Limit evaluation, aggregation, SPC, and Cpk are deliberately out

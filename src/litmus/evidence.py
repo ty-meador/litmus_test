@@ -20,6 +20,11 @@ class _Unserializable:
 _UNSERIALIZABLE = _Unserializable()
 
 
+def default_run_data() -> JsonObject:
+    """Return a fresh default evidence object with its reserved design slots."""
+    return {_MEASUREMENTS_KEY: []}
+
+
 def _json_snapshot(
     value: object,
     active_containers: set[int],
@@ -76,7 +81,7 @@ def snapshot_run_data(ctx: Mapping[str, object]) -> JsonObject:
     when it is not. Context is typed with string keys; a runtime value that violates
     that contract is stripped rather than coerced into a different JSON key.
     """
-    snapshot: JsonObject = {_MEASUREMENTS_KEY: []}
+    snapshot = default_run_data()
     for key, value in ctx.items():
         if type(key) is not str or key == _MEASUREMENTS_KEY:
             continue

@@ -9,11 +9,8 @@ from types import MappingProxyType
 from typing import cast, final
 
 from litmus.errors import Failure
+from litmus.evidence import JsonObject, default_run_data
 from litmus.lifecycle import Slot, State
-
-type JsonScalar = bool | int | float | str | None
-type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
-type JsonObject = dict[str, JsonValue]
 
 FORMAT_VERSION = 1
 
@@ -85,7 +82,7 @@ class RunResult:
     value: object = None
     swallowed: BaseException | None = None
     env: Mapping[str, str] = field(default_factory=_empty_env)
-    run_data: JsonValue = None
+    run_data: JsonObject = field(default_factory=default_run_data)
 
     def __post_init__(self) -> None:
         """Defensively snapshot containers and enforce the navigation invariants."""

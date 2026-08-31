@@ -276,24 +276,22 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 Slot.CONFIGURE, self._configure_and_merge_context(utils)
             )
             if configured.state is not None:
-                return self._to_result(configured, utils)
-
-            suite = self.build_suite()
-            suite_result = await suite._run_lifecycle(utils, run_abort)
-            outcome = Outcome(
-                Slot.TEST_METHOD,
-                self.name,
-                suite_result.state,
-                failure=suite_result.failure,
-                value=suite_result.value,
-            )
-            return self._to_result(
-                outcome,
-                utils,
-                children=(suite_result.summary_tree,),
-            )
+                outcome = configured
+                summary_children: tuple[SummaryTreeNode, ...] = ()
+            else:
+                suite = self.build_suite()
+                suite_result = await suite._run_lifecycle(utils, run_abort)
+                outcome = Outcome(
+                    Slot.TEST_METHOD,
+                    self.name,
+                    suite_result.state,
+                    failure=suite_result.failure,
+                    value=suite_result.value,
+                )
+                summary_children = (suite_result.summary_tree,)
         finally:
             await self._run_cleanup(boundary, utils)
+        return self._to_result(outcome, utils, children=summary_children)
 
     @final
     async def _run_group(
@@ -457,6 +455,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             summary_tree=summary_tree,
             type=node_type,
             env=utils.env,
+            run_data=self.run_data,
         )
 
     @final

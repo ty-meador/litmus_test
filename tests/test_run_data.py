@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from litmus import PASS, LitmusTest, TestUtils, Verdict
-from litmus.evidence import snapshot_run_data
+from litmus.evidence import JsonObject, snapshot_run_data
 
 
 class _Handle:
@@ -102,13 +102,16 @@ class TestLitmusTestRunData:
 
         suite = Suite(name="power-supply")
 
-        await suite.main()
+        result = await suite.main()
 
-        assert suite.run_data == {
+        expected: JsonObject = {
             "measurements": [],
             "serial": "SN-0042",
             "voltage": 12.1,
         }
+        assert suite.run_data == expected
+        assert result.run_data == expected
+        assert result.to_json()["run_data"] == expected
 
     async def test_run_data_is_a_detached_snapshot_of_node_local_context(self) -> None:
         samples = [1]
@@ -122,9 +125,9 @@ class TestLitmusTestRunData:
                 return PASS
 
         suite = Suite(name="rack")
-        await suite.main(seed)
+        result = await suite.main(seed)
 
-        first_snapshot = suite.run_data
+        first_snapshot = result.run_data
         samples.append(2)
 
         assert first_snapshot == {"measurements": [], "evidence": {"samples": [1]}}
@@ -132,6 +135,21 @@ class TestLitmusTestRunData:
             "measurements": [],
             "evidence": {"samples": [1, 2]},
         }
+
+    async def test_cleanup_context_is_included_in_the_completed_result(self) -> None:
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                utils.ctx["restored"] = True
+
+        result = await Suite(name="rack").main()
+
+        assert result.run_data == {"measurements": [], "restored": True}
 
     async def test_composed_authored_nodes_capture_only_their_own_context(self) -> None:
         class Child(LitmusTest):
