@@ -274,6 +274,9 @@ Every `RunResult` carries the node's position in the tree:
 - `bread_crumbs: str` — `"/".join(ancestor_names)` precomputed. Use for display, log lines, error messages.
 - `summary_tree: SummaryTreeNode` — snapshot of this node's subtree at completion. Enables downstream integrators to reconstruct the full Inspector tree from the root's RunResult alone.
 
+The versioned payload and recursive node fields are defined in
+[`inspector-json.md`](inspector-json.md).
+
 ## Fractal Design: Litmus exposes a single class
 | Need | Use |
 |---|---|
