@@ -111,7 +111,7 @@ class TestInspectorJsonContract:
         assert payload["bread_crumbs"] == "power"
         assert payload["env"] == {"LOT": "42"}
         assert payload["physical_location"] == "unknown"
-        assert payload["run_data"] is None
+        assert payload["run_data"] == {"measurements": []}
         leaf = payload["summary_tree"]["children"][0]
         assert leaf["name"] == "voltage"
         assert leaf["failure"]["fail_message"] == "rail outside tolerance"
@@ -137,6 +137,7 @@ class TestInspectorJsonContract:
 
         payload = json.loads(json.dumps(result.to_json()))
 
+        assert payload["run_data"] == {"measurements": []}
         assert payload["failure"] == {
             "name": "ExternalIntegrationFailure",
             "fail_message": (
