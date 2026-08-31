@@ -16,7 +16,7 @@ from typing import Any, final
 from litmus.artifacts import Artifact
 from litmus.errors import ExternalIntegrationFailure, TestFailure
 from litmus.executor import ExecResult, LocalExec
-from litmus.lifecycle import RunAbort
+from litmus.lifecycle import AuditSignal, RunAbort
 from litmus.routing import ExecRouting, Shell
 
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
@@ -79,23 +79,26 @@ class _ArtifactStore:
 
 @final
 class RunSignal:
-    """Read-only view of the shared halt signal for one test run."""
+    """Read-only view of the cancellation signals affecting one test node."""
 
-    __slots__ = ("_run_abort",)
+    __slots__ = ("_audit_signal", "_run_abort")
 
-    def __init__(self, run_abort: RunAbort) -> None:
-        """Expose observation without exposing the framework's ``fire`` method."""
+    def __init__(self, run_abort: RunAbort, audit_signal: AuditSignal | None = None) -> None:
+        """Expose observation without exposing either framework writer."""
         self._run_abort = run_abort
+        self._audit_signal = audit_signal
 
     @property
     def fired(self) -> bool:
-        """Whether an external integration failure has halted the run."""
-        return self._run_abort.fired
+        """Whether integration or audit control flow has asked this node to stop."""
+        return self.reason is not None
 
     @property
-    def reason(self) -> ExternalIntegrationFailure | None:
-        """The first integration failure that halted the run, if one exists."""
-        return self._run_abort.reason
+    def reason(self) -> ExternalIntegrationFailure | TestFailure | None:
+        """The failure that asked this node to stop, if one exists."""
+        if self._run_abort.reason is not None:
+            return self._run_abort.reason
+        return None if self._audit_signal is None else self._audit_signal.reason
 
 
 @final
@@ -350,6 +353,7 @@ class TestUtils:
         run_abort: RunAbort,
         *,
         isolate_context: bool,
+        audit_signal: AuditSignal | None = None,
     ) -> TestUtils:
         """Create one node-owned view from this node's child inheritance policy."""
         scoped = object.__new__(TestUtils)
@@ -366,5 +370,5 @@ class TestUtils:
             inherited=inherited,
             logger=scoped._logger,
         )
-        scoped._signal = RunSignal(run_abort)
+        scoped._signal = RunSignal(run_abort, audit_signal)
         return scoped

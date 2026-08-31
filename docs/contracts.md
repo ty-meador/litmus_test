@@ -60,6 +60,14 @@ static analysis.
 **Framework obligation:** Every run produces scoped, structured evidence automatically.
 - Logging is scoped to the current leaf test.
 - Survey and audit hooks share the same artifact contract: if the SE returns a value, it is faithfully recorded as an Artifact — including empty or `None`-valued data. If the SE returns nothing, an info-level log entry notes the hook fired but no artifact is written. The return statement is the signal of intent to capture an artifact from the SE.
+  - Python resolves both an explicit `return None` and a fall-through to `None`; hook
+    registration records whether the author wrote the explicit return so the runtime can
+    preserve that distinction. An explicit `None` is evidence. A fall-through is not.
+  - Survey dispatch points are `pre-configure`, `post-configure`, `pre-test`,
+    `post-test`, `pre-cleanup`, and `post-cleanup`, limited to the phases the lifecycle
+    reaches. The artifact name identifies the dispatch point and registered-hook index;
+    audit names identify both the hook and interval dispatch. Both use artifact type
+    `survey`, keeping one Inspector evidence contract.
 - Log artifacts are co-located with their test case.
 - All serializable values (primitives, plain dicts, lists) added to `ctx` are automatically added to `run_data`.
   - Functions, class instances, and live handles (e.g. SSH connections) are stripped.
@@ -86,11 +94,18 @@ static analysis.
 ## Audit Contract
 **Framework obligation:** When `self.use_audit(interval=..., fn=...)` is called in the constructor, the framework runs `fn` concurrently with the test methods on the specified interval.
 - Multiple audit hooks are supported — each runs on its own interval.
+- Every audit interval is validated during construction as positive and finite. An
+  invalid registration cannot survive long enough to touch hardware.
 - Audit start/stop is framework-controlled, not caller-controlled: the loop begins immediately before the first test method runs and ends immediately after the last test method returns. No delayed start, no manual trigger. The lifecycle contract (test in runnable state before `configure()` returns) guarantees the audit's preconditions are met by start.
 - If the audit `fn` raises a `TestFailure`, the running test method is immediately cancelled and the test fails with the audit's failure.
 - Audit errors are **not swallowed** — unlike survey hooks, a throwing audit is a real failure. Survey and cleanup errors are swallowed to protect the hardware verdict; `ExternalIntegrationFailure` is exempt from swallowing everywhere — swallowing it would kill the halt signal.
 - Audit follows the same artifact contract as survey (see Evidence Contract above).
 - Cancellation is cooperative and asyncio-native. The run-level abort (`RunAbort` in `lifecycle.py`) fires when an integration hook aborts the run; a throwing audit cancels the in-flight test method; test-method completion stops the audit loop. Suite code must let `asyncio.CancelledError` propagate — swallowing it breaks the wind-down.
+- The read-only `utils.signal` combines the run-level integration halt with the nearest
+  authored audit scope. Audit scope is inherited only by that node's composed suite: an
+  audit failure cancels its own in-flight work and produces Fail without cancelling an
+  independent group sibling. If an audit verdict and suite completion occur in the same
+  event-loop turn, the audit verdict wins; evidence is not discarded by timing luck.
 - `utils.exec` threads cancellation to the underlying child process. When a cancellation fires, in-flight shell commands are killed (SIGTERM) immediately — no zombie processes outlive the test.
 
 **Developer obligation:**
