@@ -1,7 +1,7 @@
 """litmus — React-for-hardware HIL testing framework.
 
-The public surface. Suite authors need `LitmusTest`, `TestUtils`, `PASS`, `Verdict`,
-and `TestFailure`; the rest of the taxonomy is exported because it appears in
+The public surface. Suite authors need `LitmusTest`, `TestUtils`, `Artifact`, `PASS`,
+`Verdict`, and `TestFailure`; the rest of the taxonomy is exported because it appears in
 artifacts and logs, where a reader will follow a name back to its meaning.
 
 The lifecycle machinery (`litmus.lifecycle`) is deliberately absent. The child
@@ -10,6 +10,7 @@ author never holds an instance of any of them, so they do not belong in the outw
 API. The framework and its self-tests import them from `litmus.lifecycle` directly.
 """
 
+from litmus.artifacts import Artifact
 from litmus.base import LitmusTest
 from litmus.errors import (
     ContractViolation,
@@ -25,6 +26,7 @@ from litmus.verdict import PASS, Verdict
 
 __all__ = [
     "PASS",
+    "Artifact",
     "ContractViolation",
     "ExternalIntegrationFailure",
     "Failure",
