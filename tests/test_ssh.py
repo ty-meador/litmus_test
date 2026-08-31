@@ -11,7 +11,9 @@ from pathlib import Path
 import asyncssh
 import pytest
 
+from litmus import PASS, LitmusTest, TestUtils, Verdict
 from litmus.executor import ExecResult
+from litmus.lifecycle import State
 from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouter, ExecRouting, ShellOpenRequest, SshConnector
 from litmus.ssh import SshInterface
@@ -741,3 +743,215 @@ class TestReconnect:
             await ssh.disconnect()
             await first.aclose()
             await second.aclose()
+
+
+class TestAuthProvenance:
+    """The credential path is named exactly, and the credential value never is."""
+
+    def test_a_key_file_names_the_file_it_will_read(self) -> None:
+        transport = SshInterface(
+            host="10.0.0.1",
+            username="ops",
+            private_key_path="/home/ops/.ssh/id_ed25519",
+            skip_host_verification=True,
+        )
+
+        assert transport.auth_label == "key-file"
+        assert transport.connect_provenance == (
+            "ssh connect: ops@10.0.0.1:22 auth=key-file(/home/ops/.ssh/id_ed25519) via=direct"
+        )
+
+    def test_an_explicit_agent_names_its_socket(self) -> None:
+        transport = SshInterface(
+            host="10.0.0.1",
+            username="ops",
+            agent="/run/user/1000/keyring/ssh",
+            skip_host_verification=True,
+        )
+
+        assert transport.connect_provenance == (
+            "ssh connect: ops@10.0.0.1:22 auth=agent(/run/user/1000/keyring/ssh) via=direct"
+        )
+
+    def test_the_inherited_agent_socket_is_named_as_the_path_selected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/1000/inherited.sock")
+        transport = SshInterface(host="10.0.0.1", username="ops", skip_host_verification=True)
+
+        assert transport.auth_label == "agent"
+        assert "auth=agent(/run/user/1000/inherited.sock)" in transport.connect_provenance
+
+    def test_a_password_is_named_by_path_and_never_by_value(self) -> None:
+        transport = SshInterface(
+            host="10.0.0.1",
+            username="ops",
+            port=2222,
+            password="hunter2",
+            skip_host_verification=True,
+        )
+
+        line = transport.connect_provenance
+        assert line == "ssh connect: ops@10.0.0.1:2222 auth=password via=direct"
+        assert "hunter2" not in line
+
+    def test_an_in_memory_key_names_no_file(self) -> None:
+        transport = SshInterface(
+            host="10.0.0.1",
+            username="ops",
+            private_key="-----BEGIN OPENSSH PRIVATE KEY-----",
+            skip_host_verification=True,
+        )
+
+        line = transport.connect_provenance
+        assert line == "ssh connect: ops@10.0.0.1:22 auth=key via=direct"
+        assert "BEGIN OPENSSH" not in line
+
+    def test_no_credential_at_all_is_reported_rather_than_hidden(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+        transport = SshInterface(host="10.0.0.1", username="ops", skip_host_verification=True)
+
+        assert transport.auth_label == "none"
+        assert "auth=none" in transport.connect_provenance
+
+    def test_what_is_logged_is_what_is_dialed(self, tmp_path: Path) -> None:
+        key_file = tmp_path / "id_ed25519"
+        transport = SshInterface(
+            host="10.0.0.1",
+            username="ops",
+            password="admin",
+            private_key_path=key_file,
+            skip_host_verification=True,
+        )
+
+        options = transport._connect_options()  # pyright: ignore[reportPrivateUsage]
+
+        assert transport.auth_label == "key-file"
+        assert options["client_keys"] == [str(key_file)]
+        assert "password" not in options
+
+
+class TestChainProvenance:
+    """The via chain is rendered in full — an owned hop and a borrowed one alike."""
+
+    def test_an_owned_via_is_the_hop(self) -> None:
+        jump = SshInterface(
+            host="bastion", username="ops", password="admin", skip_host_verification=True
+        )
+        target = SshInterface(
+            host="dut",
+            username="root",
+            password="admin",
+            via=jump,
+            skip_host_verification=True,
+        )
+
+        assert target.hop is jump
+        assert target.route_label == "bastion -> dut"
+
+    def test_a_borrowed_tunnel_is_the_hop(self) -> None:
+        jump = SshInterface(
+            host="bastion", username="ops", password="admin", skip_host_verification=True
+        )
+        target = SshInterface(
+            host="dut",
+            username="root",
+            password="admin",
+            tunnel=jump,
+            skip_host_verification=True,
+        )
+
+        assert target.hop is jump
+        assert target.route_label == "bastion -> dut"
+
+    def test_a_multi_hop_chain_is_rendered_whole_not_summarized(self) -> None:
+        bastion = SshInterface(
+            host="bastion", username="ops", password="admin", skip_host_verification=True
+        )
+        edge = SshInterface(
+            host="edge",
+            username="ops",
+            password="admin",
+            tunnel=bastion,
+            skip_host_verification=True,
+        )
+        dut = SshInterface(
+            host="dut",
+            username="root",
+            password="admin",
+            tunnel=edge,
+            skip_host_verification=True,
+        )
+
+        assert dut.connect_provenance == (
+            "ssh connect: root@dut:22 auth=password via=bastion -> edge"
+        )
+        assert dut.route_label == "bastion -> edge -> dut"
+
+
+class TestTopologyFromArtifacts:
+    """The end the provenance lines exist for: no source-diving to read a run."""
+
+    async def test_a_run_records_its_route_its_chain_and_its_auth_decision(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        jump_peer = await _LoopbackSshd.start(username="ops", password="jump")
+        dut_peer = await _LoopbackSshd.start(username="root", password="admin")
+        # Read before the listeners close: a closed acceptor reports port 0.
+        jump_port = jump_peer.port
+        dut_port = dut_peer.port
+        opened: list[RemoteInterface] = []
+
+        class Suite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                jump = await utils.use_shell(
+                    host="127.0.0.1",
+                    port=jump_peer.port,
+                    username="ops",
+                    password="jump",
+                    skip_host_verification=True,
+                )
+                dut = await utils.use_shell(
+                    host="127.0.0.1",
+                    port=dut_peer.port,
+                    username="root",
+                    password="admin",
+                    skip_host_verification=True,
+                    via=jump,
+                )
+                opened.extend(shell.ssh for shell in (dut, jump) if shell.ssh is not None)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                assert (await utils.exec("uname")).exit_code == 0
+                return PASS
+
+        try:
+            with caplog.at_level("INFO", logger="litmus"):
+                outcome = await Suite(name="dut").run()
+        finally:
+            for remote in opened:
+                await remote.disconnect()
+            await dut_peer.aclose()
+            await jump_peer.aclose()
+
+        assert outcome.state is State.PASS
+        # The rest of the run's instrumentation is not this test's subject. Filter to
+        # the provenance lines: the claim is that they are all present and in order,
+        # not that nothing else is ever logged alongside them.
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith(("ssh connect:", "exec routing:"))
+        ]
+        assert lines == [
+            f"ssh connect: ops@127.0.0.1:{jump_port} auth=password via=direct",
+            f"ssh connect: root@127.0.0.1:{dut_port} auth=password via=127.0.0.1",
+            "exec routing: via 127.0.0.1 -> 127.0.0.1 (declared via use_shell)",
+            "exec routing: via 127.0.0.1 -> 127.0.0.1 (inherited from parent)",
+        ]

@@ -256,6 +256,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
         object.__setattr__(self, "_ctx", utils.ctx)
 
+        if not authored_instance:
+            # A composite or leaf node declares no route of its own, so its topology
+            # is final the moment its utils exist.
+            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+
         if children is not None:
             # Sealing forbids subclass dispatch, so the engine names its two internal
             # composite shapes here; a third shape earns a real strategy seam.
@@ -279,6 +284,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 outcome = configured
                 summary_children: tuple[SummaryTreeNode, ...] = ()
             else:
+                utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
                 suite = self.build_suite()
                 suite_result = await suite._run_lifecycle(utils, run_abort)
                 outcome = Outcome(
