@@ -19,7 +19,7 @@ from litmus.executor import ExecResult, LocalExec
 from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
 from litmus.remote import RemoteInterface
-from litmus.routing import ExecRouting, Shell
+from litmus.routing import ExecRouter, ExecRouting, RouterRunParams, Shell
 
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
 
@@ -404,6 +404,20 @@ class TestUtils:
         """
         self._logger.info("exec routing: %s", self._routing.routing_line())
 
+    def _inherit_router(self, router: ExecRouter | None) -> None:
+        """Install a via device's route so this node's exec borrows that hop."""
+        if router is None:
+            return
+        self._routing.apply_run_params(RouterRunParams(router))
+
+    async def _disconnect_opened(self) -> None:
+        """Close remotes this node opened. Inherited hops stay with their owner."""
+        await self._routing.disconnect_opened()
+
+    def _halt_signal(self) -> RunAbort:
+        """The run abort this node was scoped with. Framework lifecycle only."""
+        return self._signal._run_abort  # pyright: ignore[reportPrivateUsage]
+
     def _for_node(
         self,
         node: str,
@@ -411,6 +425,7 @@ class TestUtils:
         *,
         isolate_context: bool,
         audit_signal: AuditSignal | None = None,
+        inherit_route: bool = True,
     ) -> TestUtils:
         """Create one node-owned view from this node's child inheritance policy."""
         scoped = object.__new__(TestUtils)
@@ -423,7 +438,7 @@ class TestUtils:
         scoped._local_exec = self._local_exec
         scoped._transports = self._transports
         scoped._integration_hooks = self._integration_hooks
-        inherited = self._routing.child_run_params().router
+        inherited = self._routing.child_run_params().router if inherit_route else None
         scoped._routing = ExecRouting(
             self._local_exec.run,
             inherited=inherited,
