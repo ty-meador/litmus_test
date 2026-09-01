@@ -78,6 +78,11 @@ rules and pyright strict — an unannotated def fails `make check`.
 - Async tests are plain `async def` methods — pytest-asyncio auto mode picks them up.
 - `make check` green is the definition of done. No skipped/xfail tests without a linked
   reason.
+- **One green run proves nothing about a timing race.** A change that touches asyncio
+  timing, cancellation, hook scheduling, or transport teardown is attested with
+  `make soak` (the full suite eight times over; `SOAK_RUNS=n` overrides), not a single
+  pass — a race can fail 7 of 8 locally while CI's machine wins it every time. CI runs
+  the soak job on every MR as a second net; it does not replace running it at the bench.
 
 ## 7. Workflow
 
