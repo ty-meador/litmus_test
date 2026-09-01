@@ -270,6 +270,13 @@ class ChildBoundary:
                 self._logger.error("%s", violation.fail_message)
             return self._record(self._classify_thrown(slot, policy, violation))
         else:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                # Suite code can catch BaseException, but it cannot turn a consumed
+                # cancellation into a verdict. The task's cancellation count remains
+                # raised until an explicit uncancel(), so restore the control signal.
+                self._record(self._classify_cancellation(slot))
+                raise asyncio.CancelledError
             return self._record(self._classify_return(slot, policy, result))
 
     def _policy_for(self, slot: Slot) -> SlotPolicy:
