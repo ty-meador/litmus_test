@@ -64,6 +64,17 @@ static analysis.
 - All serializable values (primitives, plain dicts, lists) added to `ctx` are automatically added to `run_data`.
   - Functions, class instances, and live handles (e.g. SSH connections) are stripped.
   - Context annotations do not bypass this filter. A `TypedDict` is an ordinary dict at runtime, and each value still has to satisfy the same serialization rules.
+  - Filtering is all-or-nothing for each top-level ctx entry. A nested instance, handle,
+    function, cycle, non-string mapping key, or non-finite float strips that complete
+    entry; the framework never emits partial evidence or silently coerces it.
+  - `run_data` is a detached snapshot taken after cleanup. Later ctx mutation cannot
+    rewrite evidence already captured in a `RunResult`; serializable cleanup evidence
+    is included.
+  - `run_data["measurements"]` is a framework-owned empty list reserved for future
+    parametric measurements. An authored ctx entry with that name cannot populate or
+    replace the slot. Limit evaluation, aggregation, SPC, and Cpk are deliberately out
+    of scope; the reserved slot must not be mistaken for an implemented statistical
+    process-control model.
 - Every `RunResult` includes `ancestor_names: list[str]` (path from root) and `bread_crumbs: str` (joined for display), plus a `summary_tree` snapshot of the node's subtree state at completion. Downstream integrators can reconstruct the full Inspector tree from the root's RunResult alone.
 - `TestFailure` and `ExternalIntegrationFailure` both implement `to_json()`. Serializing a `RunResult` produces clean JSON for downstream integrators without any custom serializer.
 - **Provenance.** Every executed node records one `exec routing: <where> (<why>)` line — `where` is `local` or `via <chain>`, `why` names the call that put it there (`declared via use_shell`, `inherited from parent`, `declared via use_shell(inherit=False)`). A node that never declared a route renders `where` alone. The line is emitted after `configure` returns, since `use_shell` lives there and the route is not final until it does.
