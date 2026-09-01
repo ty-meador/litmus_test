@@ -21,6 +21,10 @@ static analysis.
 - If `configure()` raises a `TestFailure`: cleanup runs, test methods never run, the test lands in `Fail`. The verdict means "the device did not reach a testable state" — whether the underlying cause is hardware or infrastructure is **not knowable from code** and is the human triager's call.
 - If `configure()` raises anything else: wrapped as "THIS IS A BUG IN <name>" (`ContractViolation`) — configure must signal verdicts via `TestFailure`.
 - If a test method raises a plain exception: wrapped as "THIS IS A BUG IN <name>" — not a hardware failure.
+- A cancellation already delivered to suite code outranks any return value or different
+  exception produced after a pathological catch. The child boundary restores the
+  cancellation before classifying that settlement, so an aborted run cannot forge a
+  hardware or bug verdict.
 - `cleanup()` always runs regardless of any prior outcome — after configure failure and after abort. Framework finalization shields it from caller cancellation within its own bounded timeout; repeated cancellation cannot abandon that wait, and the original cancellation is re-raised after cleanup settles or exhausts the evidence budget.
 - Lifecycle execution order is enforced at runtime by the child boundary — the type system is not the enforcer.
 
