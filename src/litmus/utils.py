@@ -16,6 +16,7 @@ from typing import Any, final
 from litmus.artifacts import Artifact
 from litmus.errors import ExternalIntegrationFailure, TestFailure
 from litmus.executor import ExecResult, LocalExec
+from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import RunAbort
 from litmus.routing import ExecRouting, Shell
 
@@ -141,6 +142,7 @@ class TestUtils:
         "_base_logger",
         "_ctx",
         "_env",
+        "_integration_hooks",
         "_local_exec",
         "_logger",
         "_routing",
@@ -155,6 +157,7 @@ class TestUtils:
         env: Mapping[str, str] | None = None,
         logger: logging.Logger | None = None,
         artifact_root: str | Path | None = None,
+        _integration_hooks: IntegrationHooks | None = None,
     ) -> None:
         """Create an unscoped run seed; lifecycle execution creates node views.
 
@@ -178,6 +181,9 @@ class TestUtils:
         self._scope: tuple[str, ...] = ()
         self._logger = ScopedLogger(self._base_logger, self._scope)
         self._local_exec = LocalExec()
+        self._integration_hooks = (
+            IntegrationHooks() if _integration_hooks is None else _integration_hooks
+        )
         self._routing = ExecRouting(self._local_exec.run, logger=self._logger)
         self._signal = RunSignal(RunAbort())
 
@@ -360,6 +366,7 @@ class TestUtils:
         scoped._scope = (*self._scope, node)
         scoped._logger = ScopedLogger(self._base_logger, scoped._scope)
         scoped._local_exec = self._local_exec
+        scoped._integration_hooks = self._integration_hooks
         inherited = self._routing.child_run_params().router
         scoped._routing = ExecRouting(
             self._local_exec.run,
