@@ -11,6 +11,7 @@ from litmus.errors import (
     ExternalIntegrationFailure,
     FrameworkContractViolation,
 )
+from litmus.evidence import JsonObject, snapshot_run_data
 from litmus.hooks import AuditHook, HookFunction, SurveyHook
 from litmus.lifecycle import ChildBoundary, Outcome, RunAbort, Slot, State
 from litmus.results import NodeType, RunResult, SummaryTreeNode
@@ -88,7 +89,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     :class:`ContractViolation`, preserving the first run as evidence.
     """
 
-    __slots__ = ("_audits", "_children", "_frozen", "_has_run", "_name", "_surveys", "_test")
+    __slots__ = (
+        "_audits",
+        "_children",
+        "_ctx",
+        "_frozen",
+        "_has_run",
+        "_name",
+        "_surveys",
+        "_test",
+    )
 
     def __init__(self, *, name: str) -> None:
         """Create a named, not-yet-run test node."""
@@ -99,6 +109,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._audits: list[AuditHook] = []
         self._test: _TestFunction | None = None
         self._children: tuple[LitmusTest, ...] | None = None
+        self._ctx: dict[str, Any] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Reject malformed authored classes before an instance can touch hardware."""
@@ -155,6 +166,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     def name(self) -> str:
         """The stable node name used by logs, artifacts, and failures."""
         return self._name
+
+    @property
+    def run_data(self) -> JsonObject:
+        """A detached JSON-safe snapshot of this node's serializable context."""
+        return snapshot_run_data(self._ctx)
 
     def case(self, name: str, test: _TestFunction) -> LitmusTest:
         """Create an internal leaf node from an already-bound verdict method."""
@@ -238,6 +254,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             run_abort,
             isolate_context=isolate_context and authored_instance,
         )
+        object.__setattr__(self, "_ctx", utils.ctx)
 
         if not authored_instance:
             # A composite or leaf node declares no route of its own, so its topology
@@ -264,25 +281,23 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 Slot.CONFIGURE, self._configure_and_merge_context(utils)
             )
             if configured.state is not None:
-                return self._to_result(configured, utils)
-
-            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
-            suite = self.build_suite()
-            suite_result = await suite._run_lifecycle(utils, run_abort)
-            outcome = Outcome(
-                Slot.TEST_METHOD,
-                self.name,
-                suite_result.state,
-                failure=suite_result.failure,
-                value=suite_result.value,
-            )
-            return self._to_result(
-                outcome,
-                utils,
-                children=(suite_result.summary_tree,),
-            )
+                outcome = configured
+                summary_children: tuple[SummaryTreeNode, ...] = ()
+            else:
+                utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                suite = self.build_suite()
+                suite_result = await suite._run_lifecycle(utils, run_abort)
+                outcome = Outcome(
+                    Slot.TEST_METHOD,
+                    self.name,
+                    suite_result.state,
+                    failure=suite_result.failure,
+                    value=suite_result.value,
+                )
+                summary_children = (suite_result.summary_tree,)
         finally:
             await self._run_cleanup(boundary, utils)
+        return self._to_result(outcome, utils, children=summary_children)
 
     @final
     async def _run_group(
@@ -446,6 +461,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             summary_tree=summary_tree,
             type=node_type,
             env=utils.env,
+            run_data=self.run_data,
         )
 
     @final
