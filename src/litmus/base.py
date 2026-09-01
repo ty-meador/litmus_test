@@ -41,10 +41,17 @@ _SEALED_METHODS = frozenset(
         "group",
         "main",
         "run",
+        "run_configure_only",
+        "run_cleanup_only",
         "sequence",
         "_run_lifecycle",
         "_run_group",
         "_run_sequence",
+        "_run_configure_only",
+        "_run_cleanup_only",
+        "_bring_up_via",
+        "_tear_down_via",
+        "_adopt_via_outcome",
         "_node_type",
         "_pending_summary_tree",
         "_pending_children",
@@ -141,19 +148,30 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     __slots__ = (
         "_audits",
         "_children",
+        "_configure_only_utils",
         "_ctx",
         "_frozen",
         "_has_run",
         "_name",
         "_surveys",
         "_test",
+        "_via",
     )
 
-    def __init__(self, *, name: str) -> None:
-        """Create a named, not-yet-run test node."""
+    def __init__(self, *, name: str, via: LitmusTest | None = None) -> None:
+        """Create a named, not-yet-run test node.
+
+        Args:
+            name: Stable node name used by logs, artifacts, and failures.
+            via: Optional gateway Testable. The framework brings it up before this
+                node's configure, routes exec through its SSH hop, and cleans it up
+                after this node's cleanup. Authors never call configure/cleanup on it.
+        """
         self._frozen = False
         self._has_run = False
         self._name = name
+        self._via = via
+        self._configure_only_utils: TestUtils | None = None
         self._surveys: list[SurveyHook] = []
         self._audits: list[AuditHook] = []
         self._test: _TestFunction | None = None
@@ -301,6 +319,36 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         return result
 
     @final
+    async def run_configure_only(self, utils: TestUtils | None = None) -> dict[str, Any]:
+        """Bring this node and its via up without running the suite.
+
+        Idempotent. Framework-owned: Inspector isolation and via-device bring-up.
+        Suite authors pass ``via=`` at construction instead of calling this.
+        """
+        seed = TestUtils() if utils is None else utils
+        outcome = await self._run_configure_only(seed, RunAbort())
+        if outcome.state is None:
+            configured = self._configure_only_utils
+            if configured is None:
+                return {}
+            return dict(configured.ctx)
+        if outcome.failure is not None:
+            raise outcome.failure
+        raise FrameworkContractViolation(
+            self.name,
+            detail="configure-only settled in a terminal state without a failure",
+        )
+
+    @final
+    async def run_cleanup_only(self) -> None:
+        """Tear this node and its via down after :meth:`run_configure_only`.
+
+        Idempotent. Paired with :meth:`run_configure_only`; a full :meth:`run`
+        already performs this teardown.
+        """
+        await self._run_cleanup_only()
+
+    @final
     async def _run_lifecycle(
         self,
         utils: TestUtils,
@@ -312,6 +360,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """Execute one node while preserving the tree's shared halt signal."""
         if self._has_run:
             raise ContractViolation(self.name, "a LitmusTest instance may run only once")
+        if self._configure_only_utils is not None:
+            raise ContractViolation(self.name, "this instance is already up as a via target")
         object.__setattr__(self, "_has_run", True)
 
         children = self._children
@@ -383,55 +433,61 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 return await self._run_after_each(boundary, utils, run_abort, result)
 
             try:
-                await self._run_surveys(boundary, utils, "pre-configure")
-                configured = await boundary.run(
-                    Slot.CONFIGURE, self._configure_and_merge_context(utils)
-                )
-                if configured.state is not None:
-                    outcome = configured
+                # Hop first, teardown last: surveys and audits exec through the via,
+                # not the test host. Provenance (item 6) and via ownership (item 12).
+                via_failed = await self._bring_up_via(utils, run_abort)
+                if via_failed is not None:
+                    outcome = self._adopt_via_outcome(via_failed)
                 else:
-                    utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
-                    await self._run_surveys(boundary, utils, "post-configure")
-                    suite = self.build_suite()
-                    await self._run_surveys(boundary, utils, "pre-test")
-                    if self._audits:
-                        if node_audit_signal is None:
+                    await self._run_surveys(boundary, utils, "pre-configure")
+                    configured = await boundary.run(
+                        Slot.CONFIGURE, self._configure_and_merge_context(utils)
+                    )
+                    if configured.state is not None:
+                        outcome = configured
+                    else:
+                        utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                        await self._run_surveys(boundary, utils, "post-configure")
+                        suite = self.build_suite()
+                        await self._run_surveys(boundary, utils, "pre-test")
+                        if self._audits:
+                            if node_audit_signal is None:
+                                raise FrameworkContractViolation(
+                                    self.name,
+                                    detail="registered audits have no cancellation signal",
+                                )
+                            suite_result, audit_outcome = await self._run_suite_with_audits(
+                                suite,
+                                utils,
+                                run_abort,
+                                node_audit_signal,
+                            )
+                        else:
+                            suite_result = await suite._run_lifecycle(
+                                utils,
+                                run_abort,
+                                audit_signal=node_audit_signal,
+                            )
+                            audit_outcome = None
+                        await self._run_surveys(boundary, utils, "post-test")
+
+                        if audit_outcome is not None:
+                            outcome = audit_outcome
+                            summary_children = (suite._pending_summary_tree(),)
+                        elif suite_result is None:
                             raise FrameworkContractViolation(
                                 self.name,
-                                detail="registered audits have no cancellation signal",
+                                detail="suite settled without a result or audit verdict",
                             )
-                        suite_result, audit_outcome = await self._run_suite_with_audits(
-                            suite,
-                            utils,
-                            run_abort,
-                            node_audit_signal,
-                        )
-                    else:
-                        suite_result = await suite._run_lifecycle(
-                            utils,
-                            run_abort,
-                            audit_signal=node_audit_signal,
-                        )
-                        audit_outcome = None
-                    await self._run_surveys(boundary, utils, "post-test")
-
-                    if audit_outcome is not None:
-                        outcome = audit_outcome
-                        summary_children = (suite._pending_summary_tree(),)
-                    elif suite_result is None:
-                        raise FrameworkContractViolation(
-                            self.name,
-                            detail="suite settled without a result or audit verdict",
-                        )
-                    else:
-                        outcome = Outcome(
-                            Slot.TEST_METHOD,
-                            self.name,
-                            suite_result.state,
-                            failure=suite_result.failure,
-                            value=suite_result.value,
-                        )
-                        summary_children = (suite_result.summary_tree,)
+                        else:
+                            outcome = Outcome(
+                                Slot.TEST_METHOD,
+                                self.name,
+                                suite_result.state,
+                                failure=suite_result.failure,
+                                value=suite_result.value,
+                            )
+                            summary_children = (suite_result.summary_tree,)
             finally:
                 try:
                     await self._run_surveys(boundary, utils, "pre-cleanup")
@@ -439,7 +495,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                     try:
                         await self._run_cleanup(boundary, utils)
                     finally:
-                        await self._run_surveys(boundary, utils, "post-cleanup")
+                        try:
+                            await self._run_surveys(boundary, utils, "post-cleanup")
+                        finally:
+                            await self._tear_down_via()
             result = self._to_result(outcome, utils, children=summary_children)
             after_each_started = True
             return await self._run_after_each(boundary, utils, run_abort, result)
@@ -908,6 +967,87 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.shield(cleanup)
             raise
+        finally:
+            await utils._disconnect_opened()  # pyright: ignore[reportPrivateUsage]
+
+    @final
+    async def _run_configure_only(self, seed: TestUtils, run_abort: RunAbort) -> Outcome:
+        """Configure this node and its via, without building or running a suite.
+
+        Idempotent: a second call returns the already-merged context. Nested via
+        devices come up first so this node's configure already execs through them.
+        """
+        configured = self._configure_only_utils
+        if configured is not None:
+            return Outcome(Slot.CONFIGURE, self.name, None, value=dict(configured.ctx))
+
+        utils = seed._for_node(  # pyright: ignore[reportPrivateUsage]
+            self.name,
+            run_abort,
+            isolate_context=True,
+            inherit_route=False,
+        )
+        object.__setattr__(self, "_configure_only_utils", utils)
+
+        via_failed = await self._bring_up_via(utils, run_abort)
+        if via_failed is not None:
+            return via_failed
+
+        boundary = ChildBoundary(self.name, run_abort, utils.logger)
+        outcome = await boundary.run(Slot.CONFIGURE, self._configure_and_merge_context(utils))
+        if outcome.state is None:
+            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+        return outcome
+
+    @final
+    async def _run_cleanup_only(self) -> None:
+        """Idempotent teardown of a configure-only node and its via chain."""
+        utils = self._configure_only_utils
+        if utils is None:
+            return
+        object.__setattr__(self, "_configure_only_utils", None)
+        boundary = ChildBoundary(self.name, utils._halt_signal(), utils.logger)  # pyright: ignore[reportPrivateUsage]
+        try:
+            await self._run_cleanup(boundary, utils)
+        finally:
+            await self._tear_down_via()
+
+    @final
+    async def _bring_up_via(self, utils: TestUtils, run_abort: RunAbort) -> Outcome | None:
+        """Configure the via device, then borrow its exec hop for this node.
+
+        Returns a terminal outcome when the via failed to reach a testable state.
+        """
+        via = self._via
+        if via is None:
+            return None
+        outcome = await via._run_configure_only(utils, run_abort)
+        if outcome.state is not None:
+            return outcome
+        via_utils = via._configure_only_utils
+        if via_utils is not None:
+            utils._inherit_router(via_utils._routing.router)  # pyright: ignore[reportPrivateUsage]
+        return None
+
+    @final
+    async def _tear_down_via(self) -> None:
+        """Clean up the via device after this node's own cleanup has settled."""
+        via = self._via
+        if via is None:
+            return
+        await via._run_cleanup_only()
+
+    @final
+    def _adopt_via_outcome(self, outcome: Outcome) -> Outcome:
+        """Attribute a via bring-up failure to this consumer's configure slot."""
+        return Outcome(
+            Slot.CONFIGURE,
+            self.name,
+            outcome.state,
+            failure=outcome.failure,
+            value=outcome.value,
+            swallowed=outcome.swallowed,
+        )
 
 
 @final
