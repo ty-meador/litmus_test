@@ -255,10 +255,12 @@ class ChildBoundary:
             self._record(self._classify_cancellation(slot))
             raise
         except TestFailure as failure:
+            self._raise_if_cancellation_pending(slot)
             if policy.halts_run_on_error:
                 raise self._as_integration_failure(slot, failure) from failure
             return self._record(self._classify_thrown(slot, policy, failure))
         except Exception as error:
+            self._raise_if_cancellation_pending(slot)
             if policy.halts_run_on_error:
                 raise self._as_integration_failure(slot, error) from error
             # Suite code raised something that is not a verdict. It lands in Fail, but
@@ -270,7 +272,19 @@ class ChildBoundary:
                 self._logger.error("%s", violation.fail_message)
             return self._record(self._classify_thrown(slot, policy, violation))
         else:
+            self._raise_if_cancellation_pending(slot)
             return self._record(self._classify_return(slot, policy, result))
+
+    def _raise_if_cancellation_pending(self, slot: Slot) -> None:
+        current_task = asyncio.current_task()
+        if current_task is None or not current_task.cancelling():
+            return
+        # Suite code can catch BaseException, but it cannot turn a consumed
+        # cancellation into a return value or a different exception. The task's
+        # cancellation count remains raised until an explicit uncancel(), so restore
+        # the control signal before any verdict classification occurs.
+        self._record(self._classify_cancellation(slot))
+        raise asyncio.CancelledError
 
     def _policy_for(self, slot: Slot) -> SlotPolicy:
         policy = SLOT_POLICIES.get(slot)

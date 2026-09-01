@@ -407,6 +407,46 @@ class TestBugGuardLayers:
         assert isinstance(outcome.failure, FrameworkContractViolation)
         assert outcome.failure.BANNER == "FRAMEWORK CONTRACT VIOLATION"
 
+    @pytest.mark.parametrize(
+        "settlement",
+        [
+            None,
+            TestFailure("claim failed after cancellation"),
+            RuntimeError("suite broke after cancellation"),
+        ],
+        ids=["return", "test-failure", "plain-exception"],
+    )
+    async def test_a_pathological_catch_cannot_turn_an_abort_into_a_verdict(
+        self, settlement: BaseException | None
+    ) -> None:
+        started = asyncio.Event()
+        abort = ExternalIntegrationFailure(
+            "before_each", RuntimeError("shop-floor database refused the record")
+        )
+        run_abort = RunAbort()
+        boundary = ChildBoundary(NODE, run_abort)
+
+        async def catches_base_exception() -> object:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except BaseException:
+                if settlement is not None:
+                    raise settlement from None
+                return PASS
+
+        running = asyncio.create_task(boundary.run(Slot.TEST_METHOD, catches_base_exception()))
+        await started.wait()
+        run_abort.fire(abort)
+        running.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        outcome = boundary.outcome
+        assert outcome is not None
+        assert outcome.state is State.ABORTED
+        assert outcome.failure is abort
+
     async def test_the_two_layers_are_distinguishable_in_the_log(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
