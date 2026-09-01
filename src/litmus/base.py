@@ -43,6 +43,35 @@ _SEALED_METHODS = frozenset(
     }
 )
 _LIFECYCLE_COROUTINES = frozenset({"configure", "cleanup"})
+_FINALIZATION_TIMEOUT_SECONDS = 30.0
+
+
+def _consume_finalization_exception(future: asyncio.Future[object]) -> None:
+    """Retrieve a late exception from a timed-out finalizer without masking its log."""
+    if not future.cancelled():
+        future.exception()
+
+
+async def _bounded_finalization(call: Awaitable[object], *, node: str, operation: str) -> object:
+    """Run shielded user finalization within the framework's evidence budget."""
+
+    async def await_call() -> object:
+        return await call
+
+    task = asyncio.create_task(await_call())
+    try:
+        async with asyncio.timeout(_FINALIZATION_TIMEOUT_SECONDS):
+            return await asyncio.shield(task)
+    except TimeoutError as error:
+        detail = (
+            f"{operation} exceeded its {_FINALIZATION_TIMEOUT_SECONDS:g}-second "
+            "finalization timeout"
+        )
+        raise ContractViolation(node, detail=detail, cause=error) from error
+    finally:
+        if not task.done():
+            task.cancel()
+            task.add_done_callback(_consume_finalization_exception)
 
 
 def _function(member: object) -> object:
@@ -474,7 +503,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     async def _run_cleanup(self, boundary: ChildBoundary, utils: TestUtils) -> None:
         """Finish cleanup before allowing cancellation to leave this node."""
-        cleanup = asyncio.create_task(boundary.run(Slot.CLEANUP, self.cleanup(utils)))
+        cleanup = asyncio.create_task(
+            boundary.run(
+                Slot.CLEANUP,
+                _bounded_finalization(self.cleanup(utils), node=self.name, operation="cleanup"),
+            )
+        )
         try:
             await asyncio.shield(cleanup)
         except asyncio.CancelledError:
