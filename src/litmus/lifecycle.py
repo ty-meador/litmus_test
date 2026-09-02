@@ -144,10 +144,9 @@ class Outcome:
 class RunAbort:
     """The run-level halt signal.
 
-    Phase 0 carries only what the child boundary needs: whether a halt is in flight and
-    why. That is enough to tell an abort-driven `CancelledError` — a legitimate Aborted
-    — from a spurious one, which is a framework bug. The race machinery and transport
-    hard-close that ride this signal arrive in Phase 4.
+    The child boundary writes the first reason. Composite execution observes the state
+    to cancel sibling work, while every node reads the same reason when it seals its
+    Aborted evidence. Transport ownership remains outside this signal.
     """
 
     def __init__(self) -> None:
@@ -276,6 +275,13 @@ class ChildBoundary:
             return self._record(self._classify_return(slot, policy, result))
 
     def _raise_if_cancellation_pending(self, slot: Slot) -> None:
+        if self._run_abort.fired and slot not in (Slot.CLEANUP, Slot.SURVEY, Slot.AFTER_EACH):
+            # A sibling may have fired the run abort while this call was settling.
+            # Neither a return nor a transport error may forge a later verdict. The
+            # evidence/finalization slots are allowed to settle; an actual task
+            # cancellation is still restored below after their work completes.
+            self._record(self._classify_cancellation(slot))
+            raise asyncio.CancelledError
         current_task = asyncio.current_task()
         if current_task is None or not current_task.cancelling():
             return
