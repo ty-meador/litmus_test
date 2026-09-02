@@ -12,7 +12,17 @@ from litmus.errors import (
     FrameworkContractViolation,
 )
 from litmus.evidence import JsonObject, snapshot_run_data
-from litmus.hooks import AuditHook, HookFunction, SurveyHook
+from litmus.hooks import (
+    AfterEachContext,
+    AfterEachHook,
+    AuditHook,
+    BeforeEachContext,
+    BeforeEachHook,
+    HookFunction,
+    IntegrationHooks,
+    SurveyHook,
+    invoke_integration_hook,
+)
 from litmus.lifecycle import ChildBoundary, Outcome, RunAbort, Slot, State
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
@@ -37,6 +47,7 @@ _SEALED_METHODS = frozenset(
         "_pending_summary_tree",
         "_to_result",
         "_configure_and_merge_context",
+        "_run_after_each",
         "_run_cleanup",
         "use_survey",
         "use_audit",
@@ -252,9 +263,21 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """Restore state after the suite settles, regardless of its outcome."""
 
     @final
-    async def run(self, *, env: Mapping[str, str] | None = None) -> RunResult:
-        """Execute once with framework-owned utilities and an environment snapshot."""
-        return await self.main(TestUtils(env=env))
+    async def run(
+        self,
+        *,
+        env: Mapping[str, str] | None = None,
+        before_each: BeforeEachHook | None = None,
+        after_each: AfterEachHook | None = None,
+        allow_unpaired_hooks: bool = False,
+    ) -> RunResult:
+        """Execute once, fanning root-owned integration hooks across every node."""
+        hooks = IntegrationHooks(
+            before_each=before_each,
+            after_each=after_each,
+            allow_unpaired=allow_unpaired_hooks,
+        )
+        return await self.main(TestUtils(env=env, _integration_hooks=hooks))
 
     @final
     async def main(self, utils: TestUtils | None = None) -> RunResult:
@@ -285,6 +308,25 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
         object.__setattr__(self, "_ctx", utils.ctx)
 
+        integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
+        if len(utils.logger.scope) == 1:
+            integration_hooks.warn_if_unpaired(utils.logger)
+        if integration_hooks.before_each is not None:
+            await ChildBoundary(self.name, run_abort, utils.logger).run(
+                Slot.BEFORE_EACH,
+                invoke_integration_hook(
+                    "before_each",
+                    integration_hooks.before_each,
+                    BeforeEachContext(
+                        name=self.name,
+                        ancestor_names=utils.logger.scope,
+                        bread_crumbs=utils.logger.bread_crumbs,
+                        logger=utils.logger,
+                        env=utils.env,
+                    ),
+                ),
+            )
+
         if not authored_instance:
             # A composite or leaf node declares no route of its own, so its topology
             # is final the moment its utils exist.
@@ -294,15 +336,18 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             # Sealing forbids subclass dispatch, so the engine names its two internal
             # composite shapes here; a third shape earns a real strategy seam.
             if isinstance(self, _Sequence):
-                return await self._run_sequence(utils, run_abort, children)
-            return await self._run_group(utils, run_abort, children)
+                result = await self._run_sequence(utils, run_abort, children)
+            else:
+                result = await self._run_group(utils, run_abort, children)
+            return await self._run_after_each(utils, run_abort, result)
 
         if test is not None:
             # ChildBoundary is the sole enforcement point for authored verdicts.
             outcome = await ChildBoundary(self.name, run_abort, utils.logger).run(
                 Slot.TEST_METHOD, test(utils)
             )
-            return self._to_result(outcome, utils)
+            result = self._to_result(outcome, utils)
+            return await self._run_after_each(utils, run_abort, result)
 
         boundary = ChildBoundary(self.name, run_abort, utils.logger)
         try:
@@ -326,7 +371,35 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 summary_children = (suite_result.summary_tree,)
         finally:
             await self._run_cleanup(boundary, utils)
-        return self._to_result(outcome, utils, children=summary_children)
+        result = self._to_result(outcome, utils, children=summary_children)
+        return await self._run_after_each(utils, run_abort, result)
+
+    @final
+    async def _run_after_each(
+        self,
+        utils: TestUtils,
+        run_abort: RunAbort,
+        result: RunResult,
+    ) -> RunResult:
+        """Dispatch the root-owned completion hook for one settled node."""
+        integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
+        if integration_hooks.after_each is not None:
+            await ChildBoundary(self.name, run_abort, utils.logger).run(
+                Slot.AFTER_EACH,
+                invoke_integration_hook(
+                    "after_each",
+                    integration_hooks.after_each,
+                    AfterEachContext(
+                        name=self.name,
+                        ancestor_names=utils.logger.scope,
+                        bread_crumbs=utils.logger.bread_crumbs,
+                        logger=utils.logger,
+                        env=utils.env,
+                        result=result,
+                    ),
+                ),
+            )
+        return result
 
     @final
     async def _run_group(
