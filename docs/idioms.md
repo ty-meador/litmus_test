@@ -117,12 +117,7 @@ async def _check_reachable(self, utils: TestUtils) -> Verdict:
 - A test method raising `TestFailure` (or subclass) → test fails with structured data (state `Fail`)
 - A test method raising any other exception → BUG-signaled Fail: the developer didn't model this failure mode
 - A test method returning anything other than the `PASS` sentinel (including falling through with `None`) → node-local `Aborted`. No verdict was produced, so the framework refuses to forge one. Siblings are unaffected.
-- An integration hook (`before_each` / `after_each`) throwing anywhere in the tree → state `Aborted` on the enclosing node AND every ancestor (required failure-path behavior; implementation is tracked by [#36](https://gitlab.com/Tyler-Meador/litmus_test/-/work_items/36))
-
-> **Temporary implementation status after #35:** a hook exception currently escapes
-> `run()` as `ExternalIntegrationFailure`; no Aborted `RunResult` tree reaches the caller.
-> Do not build Inspector recovery around the required harness-level Aborted behavior until
-> #36 removes this caveat.
+- An integration hook (`before_each` / `after_each`) throwing anywhere in the tree → state `Aborted` on the enclosing node AND every ancestor
 
 `Aborted` is a peer state to `Pass` and `Fail`, not a flavor of failure. It signals that no verdict was produced — either the harness around the test broke, or the test method finished without rendering one. The Floor Technician's recovery protocol is "check the integration layer / the test method," not "check the hardware."
 
@@ -169,14 +164,9 @@ await root.run(
 
 Register once at the root — the framework fires them around every executed test in the tree. The hook context is deliberately narrow (node name, `ancestor_names`, `bread_crumbs`, `logger`, `env`) — NOT `exec` or `get_shell`. Integration hooks are for external coordination, not for exercising the hardware.
 
-**Pair invariant (required end state):** `after_each` fires even when `before_each` threw. Register them as a pair or pass `allow_unpaired_hooks=True` to opt out of the warning.
+**Pair invariant:** `after_each` fires even when `before_each` threw. Register them as a pair or pass `allow_unpaired_hooks=True` to opt out of the warning.
 
-The warning is implemented, but started/finished symmetry after a hook exception is not
-yet safe to rely on in the #35 increment. Issue
-[#36](https://gitlab.com/Tyler-Meador/litmus_test/-/work_items/36) implements that
-exception path and removes this caveat.
-
-The required exception-path behavior is: throw from either hook → run halts → every enclosing node transitions to `Aborted` → every in-flight SSH session and subprocess is killed immediately. A 30-minute firmware flash mid-abort must NOT continue to mutate the hardware. Until #36 lands, do not treat that chain as delivered behavior.
+The exception-path behavior is: throw from either hook → run halts → every enclosing node transitions to `Aborted` → every in-flight SSH session and subprocess is killed immediately. A 30-minute firmware flash mid-abort must NOT continue to mutate the hardware.
 
 ## Configure-Returns-Context Pattern
 `configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant test cases. No instance fields are needed for configure-phase data.
