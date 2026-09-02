@@ -1,7 +1,7 @@
 """Hook registrations and deliberately narrow integration contexts.
 
-Execution belongs to the Phase 2 hook engine. These immutable records establish the
-shape now, so an incomplete registration cannot survive construction and reach hardware.
+The lifecycle engine dispatches these hooks around every executed node. These immutable
+records keep incomplete registrations from surviving construction and reaching hardware.
 """
 
 import inspect
