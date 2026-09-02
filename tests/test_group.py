@@ -3,8 +3,6 @@
 import asyncio
 from typing import cast
 
-import pytest
-
 from litmus import (
     PASS,
     ExternalIntegrationFailure,
@@ -94,7 +92,7 @@ class TestGroupStructuredConcurrency:
         assert outcome.state is State.ABORTED
         assert [child.state for child in children] == [State.ABORTED, State.PASS]
 
-    async def test_harness_abort_cancels_the_group_and_propagates_class_intact(self) -> None:
+    async def test_harness_abort_cancels_group_and_returns_class_intact_evidence(self) -> None:
         sibling_started = asyncio.Event()
         sibling_cancelled = asyncio.Event()
         failure = ExternalIntegrationFailure(
@@ -123,8 +121,8 @@ class TestGroupStructuredConcurrency:
                 await sibling_started.wait()
                 raise failure
 
-        with pytest.raises(ExternalIntegrationFailure) as caught:
-            await Suite(name="rack").main(TestUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
 
-        assert caught.value is failure
+        assert outcome.state is State.ABORTED
+        assert outcome.failure is failure
         assert sibling_cancelled.is_set()
