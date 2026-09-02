@@ -134,10 +134,10 @@ class TestCleanupGuarantee:
             async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup")
 
-        with pytest.raises(ExternalIntegrationFailure) as caught:
-            await Suite(name="rack").main(TestUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
 
-        assert caught.value is abort
+        assert outcome.state is State.ABORTED
+        assert outcome.failure is abort
         assert calls == ["test", "cleanup"]
 
     async def test_cleanup_error_is_logged_and_does_not_mask_the_verdict(
