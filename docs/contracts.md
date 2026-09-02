@@ -26,6 +26,7 @@ static analysis.
   cancellation before classifying that settlement, so an aborted run cannot forge a
   hardware or bug verdict.
 - `cleanup()` always runs regardless of any prior outcome — after configure failure and after abort. Framework finalization shields it from caller cancellation within its own bounded timeout; repeated cancellation cannot abandon that wait, and the original cancellation is re-raised after cleanup settles or exhausts the evidence budget.
+- The evidence budget is 30 seconds, granted **per node**, not per run. Each node's cleanup draws its own allowance, so a deep tree tearing down after an abort can spend up to N × 30 seconds before the abort reaches the operator — plan teardown depth with that ceiling in mind. A cleanup that exhausts its allowance is a `ContractViolation` charged to that node.
 - Lifecycle execution order is enforced at runtime by the child boundary — the type system is not the enforcer.
 
 ---
