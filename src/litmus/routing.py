@@ -21,6 +21,7 @@ from litmus.remote import RemoteInterface
 from litmus.ssh import SshInterface
 
 type ExecFn = Callable[[str], Awaitable[ExecResult]]
+type TransportOpened = Callable[[RemoteInterface], None]
 type RouterProvenance = Literal["local", "inherited", "declared", "isolated"]
 
 LOGGER = logging.getLogger("litmus")
@@ -194,6 +195,7 @@ class ExecRouting:
         "_connector",
         "_local_exec",
         "_logger",
+        "_on_open",
         "_opened",
         "_propagate",
         "_provenance",
@@ -207,6 +209,7 @@ class ExecRouting:
         inherited: ExecRouter | None = None,
         connector: ShellConnector | None = None,
         logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
+        on_open: TransportOpened | None = None,
     ) -> None:
         """Start local, or already inherited from a parent's `RouterRunParams`.
 
@@ -216,9 +219,11 @@ class ExecRouting:
             connector: Opens connection-form shells. Defaults to real SSH.
             logger: Where connect provenance is recorded. A node's scoped adapter
                 keeps the line in that node's evidence trail.
+            on_open: Run-level observer for every successfully opened transport.
         """
         self._local_exec = local_exec
         self._logger = logger if logger is not None else LOGGER
+        self._on_open = on_open
         self._router = inherited
         self._propagate = True
         if inherited is not None:
@@ -362,6 +367,8 @@ class ExecRouting:
         )
         remote = await self._connector.open(request)
         self._opened.append(remote)
+        if self._on_open is not None:
+            self._on_open(remote)
         # Logged on the way up, not on the way in: what is recorded is a connection
         # that exists, with the credential path the transport actually selected.
         self._logger.info("%s", remote.connect_provenance)
