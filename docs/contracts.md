@@ -43,6 +43,11 @@ static analysis.
 
 **Framework obligation:** When a descendant's hook throws, the `ExternalIntegrationFailure` propagates up through every ancestor class-intact. Sequences and groups do not rewrap it. Every ancestor's state cascades to Aborted.
 
+> **Temporary implementation status after #35:** class-intact propagation out of
+> `run()` is implemented, but the Aborted `RunResult` tree is not yet returned to the
+> caller when a hook throws. That required harness-level settlement is tracked by
+> [#36](https://gitlab.com/Tyler-Meador/litmus_test/-/work_items/36).
+
 ---
 
 ## Failure Taxonomy Contract
@@ -118,6 +123,15 @@ static analysis.
 
 ## Integration Hook Contract
 **Framework obligation:** `before_each` and `after_each` are optional integration hooks registered at the root `run()` call. The framework threads them down to every executed descendant and dispatches them around every node's lifecycle.
+
+> **Temporary implementation status after #35:** root registration, narrow contexts,
+> and normal-path fractal dispatch are implemented. The exception-path obligations below
+> are specified but not yet implemented: `after_each` is not guaranteed after a throwing
+> `before_each`, the caller receives the `ExternalIntegrationFailure` rather than an
+> Aborted result tree, and the complete hard-transport halt is not yet enforced through
+> this path. Issue [#36](https://gitlab.com/Tyler-Meador/litmus_test/-/work_items/36)
+> owns that bounded increment. Integrators must not rely on started/finished symmetry
+> until it lands.
 
 - `before_each` fires immediately before a node's lifecycle begins.
 - `after_each` fires immediately after a node's lifecycle completes, receiving the node's `RunResult`.
