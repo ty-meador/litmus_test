@@ -113,11 +113,18 @@ so the framework cannot persist evidence without also recording that pointer.
 `before_each` and `after_each` on the run params are how Litmus composes with the world outside the test framework — shop-floor databases, lab coordinators, audit pipelines, any system that needs a "started" signal before each test and a "finished" signal after.
 
 - Registered once at the root `run()` call, fire around every executed test in the tree (fractal dispatch)
-- Throw from either hook → run halts → enclosing node transitions to `Aborted`
-- **Pair invariant**: `after_each` fires even when `before_each` threw, so "started" and "finished" records stay balanced in the external system. No orphan rows.
+- Throw from either hook → run halts → enclosing node transitions to `Aborted` (required failure-path behavior; implementation is tracked by [#36](https://gitlab.com/Tyler-Meador/litmus_test/-/work_items/36))
+- **Pair invariant**: `after_each` fires even when `before_each` threw, so "started" and "finished" records stay balanced in the external system. No orphan rows. This required guarantee is also tracked by [#36](https://gitlab.com/Tyler-Meador/litmus_test/-/work_items/36).
 - Hooks receive a narrow context (node name, ancestor chain, scoped logger, env snapshot) — NOT `utils.exec` or `get_shell`. The interface encodes "integration hooks don't touch the hardware."
 
-When a hook throws, the framework closes every in-flight transport across the whole tree immediately (SSH connections destroyed, subprocesses killed). A 30-minute firmware flash in flight when the integration layer halts does NOT continue to mutate the hardware. This is load-bearing for manufacturing test integrity.
+> **Temporary implementation status after #35:** registration, narrow contexts, and
+> normal-path fractal dispatch are implemented. Until #36 lands, a hook exception
+> escapes `run()` as `ExternalIntegrationFailure`: `after_each` is not guaranteed after
+> a throwing `before_each`, no Aborted `RunResult` tree reaches the caller, and the
+> exception path does not yet enforce the complete hard-transport halt. Integrators must
+> not rely on started/finished symmetry until #36 removes this caveat.
+
+When a hook throws, the required end state is for the framework to close every in-flight transport across the whole tree immediately (SSH connections destroyed, subprocesses killed). A 30-minute firmware flash in flight when the integration layer halts must NOT continue to mutate the hardware. This is load-bearing for manufacturing test integrity.
 
 ### The Pit of Success Model
 
