@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any, final
 
 from litmus.artifacts import Artifact
-from litmus.errors import ExternalIntegrationFailure, TestFailure
+from litmus.errors import ExternalIntegrationFailure, FrameworkContractViolation, TestFailure
 from litmus.executor import ExecResult, LocalExec
 from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
@@ -405,9 +405,17 @@ class TestUtils:
         self._logger.info("exec routing: %s", self._routing.routing_line())
 
     def _inherit_router(self, router: ExecRouter | None) -> None:
-        """Install a via device's route so this node's exec borrows that hop."""
+        """Install a via device's route so this node's exec borrows that hop.
+
+        A declared via with no hop is a framework bug, not a silent fall-through
+        to local exec. Lifecycle-only vias that never opened a shell do not call this.
+        """
         if router is None:
-            return
+            node = self._scope[-1] if self._scope else "<unknown>"
+            raise FrameworkContractViolation(
+                node,
+                detail="a via hop was declared but no exec route was supplied",
+            )
         self._routing.apply_run_params(RouterRunParams(router))
 
     async def _disconnect_opened(self) -> None:

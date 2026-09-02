@@ -56,7 +56,9 @@ target = MyDevice(name="target", mac="aa:bb:cc:dd:ee:ff", via=gateway)
 The via device's ctx stays instance-local. Cross-instance data still moves through
 constructor params. The hop itself is borrowed: a consumer `get_shell()` tunnels
 through it without owning it, so cancelling that tunnel leaves the gateway up until
-the framework tears the via device down.
+the framework tears the via device down. A via shared by more than one consumer
+stays up until the last consumer finishes — the first teardown does not drop the
+hop out from under a sibling.
 
 ## run_data — Automatic Structured Evidence
 The default `run_data` returns a detached snapshot of all serializable values from
