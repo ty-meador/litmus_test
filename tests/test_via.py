@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+import pytest
 from tests.loopback_sshd import LoopbackSshd
 
-from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
-from litmus.lifecycle import State
+from litmus import (
+    PASS,
+    FrameworkContractViolation,
+    LitmusTest,
+    TestFailure,
+    TestUtils,
+    Verdict,
+)
+from litmus.lifecycle import RunAbort, State
 from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouter
 
@@ -419,8 +428,152 @@ class TestViaHopContracts:
             assert configures == 1
             assert hops[0].connected is True
             await first.run_cleanup_only()
-            assert hops[0].connected is False
+            assert hops[0].connected is True
             assert configures == 1
             await second.run_cleanup_only()
+            assert hops[0].connected is False
         finally:
             await jump_peer.aclose()
+
+    async def test_a_second_consumer_waits_out_an_in_flight_via_handshake(self) -> None:
+        jump_peer = await LoopbackSshd.start(username="ops", password="jump")
+        handshake_entered = asyncio.Event()
+        handshake_continue = asyncio.Event()
+        configures = 0
+        hops: list[RemoteInterface] = []
+        routed: dict[str, str] = {}
+
+        class Gateway(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                nonlocal configures
+                configures += 1
+                handshake_entered.set()
+                await handshake_continue.wait()
+                await utils.use_shell(
+                    host="127.0.0.1",
+                    port=jump_peer.port,
+                    username="ops",
+                    password="jump",
+                    skip_host_verification=True,
+                )
+                hop = _router(utils)
+                assert hop is not None
+                assert hop.ssh is not None
+                hops.append(hop.ssh)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._unused)
+
+            async def _unused(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        class Probe(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                result = await utils.exec("id")
+                routed[self.name] = result.stdout
+                return {}
+
+        gateway = Gateway(name="gateway")
+        first = Probe(name="first", via=gateway)
+        second = Probe(name="second", via=gateway)
+        try:
+            first_task = asyncio.create_task(first.run_configure_only())
+            await handshake_entered.wait()
+            second_task = asyncio.create_task(second.run_configure_only())
+            await asyncio.sleep(0)
+            handshake_continue.set()
+            await first_task
+            await second_task
+            assert configures == 1
+            assert routed == {"first": "id", "second": "id"}
+            assert hops[0].connected is True
+            await first.run_cleanup_only()
+            assert hops[0].connected is True
+            await second.run_cleanup_only()
+            assert hops[0].connected is False
+        finally:
+            handshake_continue.set()
+            await first.run_cleanup_only()
+            await second.run_cleanup_only()
+            await jump_peer.aclose()
+
+    async def test_group_siblings_sharing_a_via_both_route_through_it(self) -> None:
+        jump_peer = await LoopbackSshd.start(username="ops", password="jump")
+        configures = 0
+        hops: list[RemoteInterface] = []
+        routed: dict[str, str] = {}
+        hop_up_at_cleanup: dict[str, bool] = {}
+
+        class Gateway(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                nonlocal configures
+                configures += 1
+                await utils.use_shell(
+                    host="127.0.0.1",
+                    port=jump_peer.port,
+                    username="ops",
+                    password="jump",
+                    skip_host_verification=True,
+                )
+                hop = _router(utils)
+                assert hop is not None
+                assert hop.ssh is not None
+                hops.append(hop.ssh)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._unused)
+
+            async def _unused(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        class Probe(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                result = await utils.exec("id")
+                routed[self.name] = result.stdout
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                hop_up_at_cleanup[self.name] = hops[0].connected
+
+        gateway = Gateway(name="gateway")
+
+        class Rack(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.group(
+                    "siblings",
+                    [
+                        Probe(name="alpha", via=gateway),
+                        Probe(name="bravo", via=gateway),
+                    ],
+                )
+
+        try:
+            outcome = await Rack(name="rack").main()
+        finally:
+            await jump_peer.aclose()
+
+        assert outcome.state is State.PASS
+        assert configures == 1
+        assert routed == {"alpha": "id", "bravo": "id"}
+        assert hop_up_at_cleanup == {"alpha": True, "bravo": True}
+        assert hops[0].connected is False
+
+    def test_inherit_router_rejects_a_missing_hop(self) -> None:
+        utils = TestUtils()._for_node(  # pyright: ignore[reportPrivateUsage]
+            "target",
+            RunAbort(),
+            isolate_context=True,
+        )
+        with pytest.raises(FrameworkContractViolation, match="no exec route"):
+            utils._inherit_router(None)  # pyright: ignore[reportPrivateUsage]

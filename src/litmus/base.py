@@ -148,6 +148,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     __slots__ = (
         "_audits",
         "_children",
+        "_configure_only_task",
         "_configure_only_utils",
         "_ctx",
         "_frozen",
@@ -156,6 +157,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         "_surveys",
         "_test",
         "_via",
+        "_via_lease_count",
+        "_via_leased",
     )
 
     def __init__(self, *, name: str, via: LitmusTest | None = None) -> None:
@@ -171,6 +174,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._has_run = False
         self._name = name
         self._via = via
+        self._via_leased = False
+        self._via_lease_count = 0
+        self._configure_only_task: asyncio.Task[Outcome] | None = None
         self._configure_only_utils: TestUtils | None = None
         self._surveys: list[SurveyHook] = []
         self._audits: list[AuditHook] = []
@@ -974,34 +980,53 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     async def _run_configure_only(self, seed: TestUtils, run_abort: RunAbort) -> Outcome:
         """Configure this node and its via, without building or running a suite.
 
-        Idempotent: a second call returns the already-merged context. Nested via
-        devices come up first so this node's configure already execs through them.
+        Idempotent: concurrent and later callers await the same bring-up rather than
+        reading a half-built hop. Nested via devices come up first so this node's
+        configure already execs through them.
         """
-        configured = self._configure_only_utils
-        if configured is not None:
-            return Outcome(Slot.CONFIGURE, self.name, None, value=dict(configured.ctx))
+        task = self._configure_only_task
+        if task is None:
 
-        utils = seed._for_node(  # pyright: ignore[reportPrivateUsage]
-            self.name,
-            run_abort,
-            isolate_context=True,
-            inherit_route=False,
-        )
-        object.__setattr__(self, "_configure_only_utils", utils)
+            async def bring_up() -> Outcome:
+                utils = seed._for_node(  # pyright: ignore[reportPrivateUsage]
+                    self.name,
+                    run_abort,
+                    isolate_context=True,
+                    inherit_route=False,
+                )
+                object.__setattr__(self, "_configure_only_utils", utils)
+                via_failed = await self._bring_up_via(utils, run_abort)
+                if via_failed is not None:
+                    return via_failed
+                boundary = ChildBoundary(self.name, run_abort, utils.logger)
+                outcome = await boundary.run(
+                    Slot.CONFIGURE, self._configure_and_merge_context(utils)
+                )
+                if outcome.state is None:
+                    utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                return outcome
 
-        via_failed = await self._bring_up_via(utils, run_abort)
-        if via_failed is not None:
-            return via_failed
-
-        boundary = ChildBoundary(self.name, run_abort, utils.logger)
-        outcome = await boundary.run(Slot.CONFIGURE, self._configure_and_merge_context(utils))
-        if outcome.state is None:
-            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
-        return outcome
+            task = asyncio.create_task(bring_up())
+            object.__setattr__(self, "_configure_only_task", task)
+        return await task
 
     @final
     async def _run_cleanup_only(self) -> None:
         """Idempotent teardown of a configure-only node and its via chain."""
+        task = self._configure_only_task
+        if task is not None:
+            if not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    while not task.done():
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await asyncio.shield(task)
+                    raise
+                except Exception:
+                    # Bring-up already failed; teardown still has to run.
+                    pass
+            object.__setattr__(self, "_configure_only_task", None)
         utils = self._configure_only_utils
         if utils is None:
             return
@@ -1017,25 +1042,43 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """Configure the via device, then borrow its exec hop for this node.
 
         Returns a terminal outcome when the via failed to reach a testable state.
+        A second consumer waits for bring-up to finish; teardown fires on last release.
         """
         via = self._via
         if via is None:
             return None
+        object.__setattr__(via, "_via_lease_count", via._via_lease_count + 1)
+        object.__setattr__(self, "_via_leased", True)
         outcome = await via._run_configure_only(utils, run_abort)
         if outcome.state is not None:
             return outcome
         via_utils = via._configure_only_utils
-        if via_utils is not None:
-            utils._inherit_router(via_utils._routing.router)  # pyright: ignore[reportPrivateUsage]
+        if via_utils is None:
+            raise FrameworkContractViolation(
+                self.name,
+                detail="a via hop was declared but the via device is not up",
+            )
+        router = via_utils._routing.router  # pyright: ignore[reportPrivateUsage]
+        if router is not None:
+            utils._inherit_router(router)  # pyright: ignore[reportPrivateUsage]
         return None
 
     @final
     async def _tear_down_via(self) -> None:
-        """Clean up the via device after this node's own cleanup has settled."""
+        """Release this consumer's via lease; the last holder tears the device down."""
         via = self._via
-        if via is None:
+        if via is None or not self._via_leased:
             return
-        await via._run_cleanup_only()
+        object.__setattr__(self, "_via_leased", False)
+        remaining = via._via_lease_count - 1
+        if remaining < 0:
+            raise FrameworkContractViolation(
+                self.name,
+                detail="a via lease was released more times than it was acquired",
+            )
+        object.__setattr__(via, "_via_lease_count", remaining)
+        if remaining == 0:
+            await via._run_cleanup_only()
 
     @final
     def _adopt_via_outcome(self, outcome: Outcome) -> Outcome:
