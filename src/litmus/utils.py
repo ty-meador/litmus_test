@@ -408,7 +408,7 @@ class TestUtils:
         """Install a via device's route so this node's exec borrows that hop.
 
         A declared via with no hop is a framework bug, not a silent fall-through
-        to local exec. Lifecycle-only vias that never opened a shell do not call this.
+        to local exec.
         """
         if router is None:
             node = self._scope[-1] if self._scope else "<unknown>"

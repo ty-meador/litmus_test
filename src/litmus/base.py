@@ -332,7 +332,15 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         Suite authors pass ``via=`` at construction instead of calling this.
         """
         seed = TestUtils() if utils is None else utils
-        outcome = await self._run_configure_only(seed, RunAbort())
+        try:
+            outcome = await self._run_configure_only(seed, RunAbort())
+        except asyncio.CancelledError:
+            # Shielded waiters do not cancel the shared via handshake. This node's
+            # own bring-up still has to stop so configure does not run after cancel.
+            task = self._configure_only_task
+            if task is not None and not task.done():
+                task.cancel()
+            raise
         if outcome.state is None:
             configured = self._configure_only_utils
             if configured is None:
@@ -1008,7 +1016,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
             task = asyncio.create_task(bring_up())
             object.__setattr__(self, "_configure_only_task", task)
-        return await task
+        # Shielded: cancelling one waiter must not cancel a shared via handshake.
+        return await asyncio.shield(task)
 
     @final
     async def _run_cleanup_only(self) -> None:
@@ -1059,8 +1068,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 detail="a via hop was declared but the via device is not up",
             )
         router = via_utils._routing.router  # pyright: ignore[reportPrivateUsage]
-        if router is not None:
-            utils._inherit_router(router)  # pyright: ignore[reportPrivateUsage]
+        utils._inherit_router(router)  # pyright: ignore[reportPrivateUsage]
         return None
 
     @final
