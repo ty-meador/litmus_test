@@ -25,13 +25,27 @@ def _router(utils: TestUtils) -> ExecRouter | None:
     return utils._routing.router  # pyright: ignore[reportPrivateUsage]
 
 
+async def _use_loopback(utils: TestUtils, peer: LoopbackSshd) -> None:
+    password = peer.password
+    assert password is not None
+    await utils.use_shell(
+        host="127.0.0.1",
+        port=peer.port,
+        username=peer.username,
+        password=password,
+        skip_host_verification=True,
+    )
+
+
 class TestViaLifecycleOrder:
     async def test_via_configures_before_the_consumer_and_cleans_up_after(self) -> None:
         calls: list[str] = []
+        peer = await LoopbackSshd.start(username="ops", password="jump")
 
         class Gateway(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append("gateway-configure")
+                await _use_loopback(utils, peer)
                 return {"gateway": "up"}
 
             def build_suite(self) -> LitmusTest:
@@ -59,8 +73,10 @@ class TestViaLifecycleOrder:
             async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("target-cleanup")
 
-        gateway = Gateway(name="gateway")
-        outcome = await Target(name="target", via=gateway).main()
+        try:
+            outcome = await Target(name="target", via=Gateway(name="gateway")).main()
+        finally:
+            await peer.aclose()
 
         assert outcome.state is State.PASS
         assert calls == [
@@ -75,6 +91,9 @@ class TestViaLifecycleOrder:
         self,
     ) -> None:
         calls: list[str] = []
+        jump_peer = await LoopbackSshd.start(username="ops", password="jump")
+        gateway_peer = await LoopbackSshd.start(username="root", password="admin")
+        peers = {"jump": jump_peer, "gateway": gateway_peer}
 
         class Hop(LitmusTest):
             def build_suite(self) -> LitmusTest:
@@ -82,6 +101,7 @@ class TestViaLifecycleOrder:
 
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append(f"{self.name}-configure")
+                await _use_loopback(utils, peers[self.name])
                 return {}
 
             async def cleanup(self, utils: TestUtils) -> None:
@@ -106,7 +126,11 @@ class TestViaLifecycleOrder:
 
         jump = Hop(name="jump")
         gateway = Hop(name="gateway", via=jump)
-        outcome = await Target(name="target", via=gateway).main()
+        try:
+            outcome = await Target(name="target", via=gateway).main()
+        finally:
+            await jump_peer.aclose()
+            await gateway_peer.aclose()
 
         assert outcome.state is State.PASS
         assert calls == [
@@ -120,9 +144,11 @@ class TestViaLifecycleOrder:
 
     async def test_via_context_does_not_cross_the_instance_boundary(self) -> None:
         seen: list[dict[str, object]] = []
+        peer = await LoopbackSshd.start(username="ops", password="jump")
 
         class Gateway(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
+                await _use_loopback(utils, peer)
                 return {"secret": "gateway-only"}
 
             def build_suite(self) -> LitmusTest:
@@ -143,7 +169,10 @@ class TestViaLifecycleOrder:
                 seen.append(dict(utils.ctx))
                 return PASS
 
-        outcome = await Target(name="target", via=Gateway(name="gateway")).main()
+        try:
+            outcome = await Target(name="target", via=Gateway(name="gateway")).main()
+        finally:
+            await peer.aclose()
 
         assert outcome.state is State.PASS
         assert seen == [{}, {"target": "up"}]
@@ -197,10 +226,12 @@ class TestViaFailurePaths:
 
     async def test_consumer_configure_failure_still_cleans_up_the_via(self) -> None:
         calls: list[str] = []
+        peer = await LoopbackSshd.start(username="ops", password="jump")
 
         class Gateway(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append("gateway-configure")
+                await _use_loopback(utils, peer)
                 return {}
 
             def build_suite(self) -> LitmusTest:
@@ -227,7 +258,10 @@ class TestViaFailurePaths:
             async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("target-cleanup")
 
-        outcome = await Target(name="target", via=Gateway(name="gateway")).main()
+        try:
+            outcome = await Target(name="target", via=Gateway(name="gateway")).main()
+        finally:
+            await peer.aclose()
 
         assert outcome.state is State.FAIL
         assert calls == [
@@ -239,11 +273,13 @@ class TestViaFailurePaths:
 
     async def test_a_via_can_be_brought_up_again_after_cleanup(self) -> None:
         configures = 0
+        peer = await LoopbackSshd.start(username="ops", password="jump")
 
         class Gateway(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 nonlocal configures
                 configures += 1
+                await _use_loopback(utils, peer)
                 return {}
 
             def build_suite(self) -> LitmusTest:
@@ -260,8 +296,11 @@ class TestViaFailurePaths:
                 return PASS
 
         gateway = Gateway(name="gateway")
-        first = await Target(name="first", via=gateway).main()
-        second = await Target(name="second", via=gateway).main()
+        try:
+            first = await Target(name="first", via=gateway).main()
+            second = await Target(name="second", via=gateway).main()
+        finally:
+            await peer.aclose()
 
         assert first.state is State.PASS
         assert second.state is State.PASS
@@ -577,3 +616,92 @@ class TestViaHopContracts:
         )
         with pytest.raises(FrameworkContractViolation, match="no exec route"):
             utils._inherit_router(None)  # pyright: ignore[reportPrivateUsage]
+
+    async def test_a_declared_via_that_opens_no_shell_is_a_contract_violation(self) -> None:
+        configured: list[str] = []
+        executed: list[str] = []
+
+        class Gateway(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._unused)
+
+            async def _unused(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        class Target(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                configured.append("target")
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                result = await utils.exec("id")
+                executed.append(result.stdout)
+                return PASS
+
+        with pytest.raises(FrameworkContractViolation, match="no exec route"):
+            await Target(name="target", via=Gateway(name="gateway")).main()
+
+        assert configured == []
+        assert executed == []
+
+    async def test_cancelling_one_consumer_does_not_abort_a_shared_via_handshake(
+        self,
+    ) -> None:
+        jump_peer = await LoopbackSshd.start(username="ops", password="jump")
+        handshake_entered = asyncio.Event()
+        handshake_continue = asyncio.Event()
+        configures = 0
+        routed: dict[str, str] = {}
+
+        class Gateway(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                nonlocal configures
+                configures += 1
+                handshake_entered.set()
+                await handshake_continue.wait()
+                await _use_loopback(utils, jump_peer)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._unused)
+
+            async def _unused(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        class Probe(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                result = await utils.exec("id")
+                routed[self.name] = result.stdout
+                return {}
+
+        gateway = Gateway(name="gateway")
+        first = Probe(name="first", via=gateway)
+        second = Probe(name="second", via=gateway)
+        try:
+            first_task = asyncio.create_task(first.run_configure_only())
+            await handshake_entered.wait()
+            second_task = asyncio.create_task(second.run_configure_only())
+            await asyncio.sleep(0)
+            first_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first_task
+            handshake_continue.set()
+            await second_task
+            assert configures == 1
+            assert routed == {"second": "id"}
+            await first.run_cleanup_only()
+            await second.run_cleanup_only()
+        finally:
+            handshake_continue.set()
+            await first.run_cleanup_only()
+            await second.run_cleanup_only()
+            await jump_peer.aclose()
