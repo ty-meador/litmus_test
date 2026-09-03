@@ -763,9 +763,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         artifact_name: str,
         description: str,
     ) -> object:
-        """Run one hook and publish exactly the value its return statement produced."""
+        """Run one hook and publish every non-``None`` observation it produced."""
         value = await hook.fn(utils)
-        if value is None and not hook.captures_none:
+        if value is None:
             utils.logger.info("%s returned no value; skipping artifact capture", description)
             return value
         await self._capture_hook_artifact(
@@ -875,7 +875,20 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             for task in audit_tasks:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(suite_task, *audit_tasks, return_exceptions=True)
+
+            async def settle_owned_tasks() -> None:
+                await asyncio.gather(suite_task, *audit_tasks, return_exceptions=True)
+
+            settled = asyncio.create_task(settle_owned_tasks())
+            try:
+                await asyncio.shield(settled)
+            except asyncio.CancelledError:
+                # Cancellation may arrive again while an accepted observation is
+                # publishing. Do not release this node until every owned task settles.
+                while not settled.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.shield(settled)
+                raise
 
     @final
     async def _run_cleanup(self, boundary: ChildBoundary, utils: TestUtils) -> None:
