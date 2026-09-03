@@ -6,9 +6,10 @@ records keep incomplete registrations from surviving construction and reaching h
 
 import inspect
 import logging
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from litmus.results import RunResult
 
@@ -42,6 +43,14 @@ class AuditHook:
 
     def __post_init__(self) -> None:
         _require_coroutine("audit", self.fn)
+        interval = cast("object", self.interval)
+        if (
+            isinstance(interval, bool)
+            or not isinstance(interval, int | float)
+            or not math.isfinite(interval)
+            or interval <= 0
+        ):
+            raise ValueError("audit interval must be a positive finite number")
 
 
 @dataclass(frozen=True, slots=True)

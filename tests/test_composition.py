@@ -14,11 +14,17 @@ from litmus import (
     TestUtils,
     Verdict,
 )
-from litmus.lifecycle import Outcome, RunAbort, Slot, State
+from litmus.lifecycle import AuditSignal, Outcome, RunAbort, Slot, State
 
 
 class _NonTerminalChild:
-    async def _run_lifecycle(self, _utils: TestUtils, _run_abort: RunAbort) -> Outcome:
+    async def _run_lifecycle(
+        self,
+        _utils: TestUtils,
+        _run_abort: RunAbort,
+        *,
+        audit_signal: AuditSignal | None = None,
+    ) -> Outcome:
         return Outcome(Slot.CONFIGURE, "corrupt child", None)
 
 

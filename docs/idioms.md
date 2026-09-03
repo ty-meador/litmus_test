@@ -142,6 +142,17 @@ Survey and audit are part of the test's *identity* — stable across runs, visib
 
 Survey errors are swallowed (never affect the verdict). Audit errors are real failures — a throwing audit cancels in-flight test methods immediately and fails the test.
 
+Survey artifacts are named for the lifecycle dispatch point and hook index. Audit
+artifacts use the same `survey` artifact type and add the audit hook and dispatch indexes
+to the name. Every non-`None` return is captured, including empty containers. Python
+cannot distinguish an explicit or delegated `None` return from fall-through at runtime,
+so `None` writes only an informational log entry. A hook that needs to preserve a
+deliberate null observation calls `await utils.capture_artifact(Artifact(..., data=None))`
+directly. Once a hook produces an observation, framework shutdown waits for its artifact
+publication within the bounded evidence budget, even under repeated cancellation. Audit
+intervals must be positive and finite, and the framework stops every audit loop as soon
+as the authored suite settles.
+
 ## Integration Hooks: `before_each` / `after_each` on the Run Params
 
 For composing Litmus into a larger harness (shop-floor DB, lab coordinator, audit pipeline), pass `before_each` and `after_each` to the root `run()` call:
