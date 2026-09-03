@@ -173,6 +173,42 @@ class RunAbort:
 
 
 @final
+class AuditSignal:
+    """A node-local audit cancellation signal inherited by its authored suite.
+
+    Signals form a parent chain: an audit may stop the work beneath its own authored
+    node without turning an ordinary Fail into a run-wide harness abort or disturbing
+    independent siblings.
+    """
+
+    def __init__(self, parent: AuditSignal | None = None) -> None:
+        self._parent = parent
+        self._reason: TestFailure | None = None
+        self._stopped = False
+
+    @property
+    def reason(self) -> TestFailure | None:
+        """The nearest audit failure affecting this node, if one exists."""
+        if self._reason is not None:
+            return self._reason
+        return None if self._parent is None else self._parent.reason
+
+    @property
+    def stopped(self) -> bool:
+        """Whether normal suite settlement has stopped this audit scope."""
+        return self._stopped or (self._parent is not None and self._parent.stopped)
+
+    def fire(self, reason: TestFailure) -> None:
+        """Record the first audit verdict for this scope."""
+        if self._reason is None:
+            self._reason = reason
+
+    def stop(self) -> None:
+        """Mark framework-controlled audit shutdown after the suite settles."""
+        self._stopped = True
+
+
+@final
 class ChildBoundary:
     """The wrapper around every call into suite code, for one node.
 
@@ -195,6 +231,7 @@ class ChildBoundary:
         node: str,
         run_abort: RunAbort | None = None,
         logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
+        audit_signal: AuditSignal | None = None,
     ) -> None:
         """Bind the boundary to the one node it guards.
 
@@ -208,6 +245,7 @@ class ChildBoundary:
         self._node = node
         self._run_abort = run_abort if run_abort is not None else RunAbort()
         self._logger = logger if logger is not None else LOGGER
+        self._audit_signal = audit_signal
         self._outcome: Outcome | None = None
 
     @property
@@ -328,6 +366,12 @@ class ChildBoundary:
         reason = self._run_abort.reason
         if reason is not None:
             return Outcome(slot, self._node, State.ABORTED, failure=reason)
+        if self._audit_signal is not None:
+            audit_reason = self._audit_signal.reason
+            if audit_reason is not None:
+                return Outcome(slot, self._node, State.FAIL, failure=audit_reason)
+            if self._audit_signal.stopped:
+                return Outcome(slot, self._node, None)
         # Cancelled with no halt in flight. The node is still Aborted — it produced no
         # verdict — but nothing in litmus asked for this, so the framework layer of the
         # bug guard fires.
