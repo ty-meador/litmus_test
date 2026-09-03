@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
+from litmus import PASS, Artifact, LitmusTest, TestFailure, TestUtils, Verdict
 from litmus.lifecycle import Slot, State
 
 
@@ -56,7 +56,7 @@ class TestSurveyHooks:
             "pre-test-1": {},
         }
 
-    async def test_explicit_none_is_captured_but_fallthrough_is_not(
+    async def test_none_returns_and_fallthrough_are_not_automatically_captured(
         self,
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
@@ -65,12 +65,19 @@ class TestSurveyHooks:
             def __init__(self, *, name: str) -> None:
                 super().__init__(name=name)
                 self.use_survey(self._explicit_none)
+                self.use_survey(self._delegated_none)
                 self.use_survey(self._fallthrough)
 
             def build_suite(self) -> LitmusTest:
                 return self.case("claim", self._claim)
 
             async def _explicit_none(self, utils: TestUtils) -> object:
+                return None
+
+            async def _delegated_none(self, utils: TestUtils) -> object:
+                return await self._sensor_without_reading()
+
+            async def _sensor_without_reading(self) -> object:
                 return None
 
             async def _fallthrough(self, utils: TestUtils) -> object:
@@ -85,14 +92,41 @@ class TestSurveyHooks:
             result = await Suite(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
 
         assert result.state is State.PASS
-        assert len(_artifact_payloads(tmp_path)) == 6
-        assert all(name.endswith("-1") for name in _artifact_payloads(tmp_path))
+        assert _artifact_payloads(tmp_path) == {}
         skipped = [
             record
             for record in caplog.records
             if "returned no value; skipping artifact capture" in record.getMessage()
         ]
-        assert len(skipped) == 6
+        assert len(skipped) == 18
+
+    async def test_deliberate_none_uses_explicit_artifact_capture(self, tmp_path: Path) -> None:
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_survey(self._null_reading)
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _null_reading(self, utils: TestUtils) -> object:
+                dispatch = int(utils.ctx.get("null_dispatch", 0)) + 1
+                utils.ctx["null_dispatch"] = dispatch
+                await utils.capture_artifact(
+                    Artifact(name=f"null-reading-{dispatch}", type="survey", data=None)
+                )
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                if True:
+                    return PASS
+                raise TestFailure("unreachable")
+
+        result = await Suite(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.PASS
+        assert _artifact_payloads(tmp_path) == {
+            f"null-reading-{dispatch}": None for dispatch in range(1, 7)
+        }
 
     async def test_survey_failures_are_logged_and_never_replace_the_verdict(
         self,
@@ -220,6 +254,56 @@ class TestAuditHooks:
         assert len(payloads) == dispatches
         assert all(name.startswith("audit-1-") for name in payloads)
         assert all(value == {} for value in payloads.values())
+
+    async def test_repeated_cancellation_cannot_orphan_an_accepted_audit_observation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        capture_started = asyncio.Event()
+        capture_release = asyncio.Event()
+        original_capture = TestUtils.capture_artifact
+
+        async def delayed_capture(self: TestUtils, artifact: Artifact) -> Path:
+            capture_started.set()
+            await capture_release.wait()
+            return await original_capture(self, artifact)
+
+        monkeypatch.setattr(TestUtils, "capture_artifact", delayed_capture)
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_audit(interval=0.001, fn=self._audit)
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _audit(self, utils: TestUtils) -> object:
+                return {"temperature": 42}
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                await asyncio.sleep(0.005)
+                if True:
+                    return PASS
+                raise TestFailure("unreachable")
+
+        running = asyncio.create_task(
+            Suite(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+        )
+        await capture_started.wait()
+        await asyncio.sleep(0.01)
+
+        assert not running.done()
+        running.cancel()
+        await asyncio.sleep(0)
+        assert not running.done()
+
+        capture_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        assert _artifact_payloads(tmp_path) == {"audit-1-1": {"temperature": 42}}
 
     async def test_a_child_audit_failure_does_not_cancel_group_siblings(
         self, tmp_path: Path

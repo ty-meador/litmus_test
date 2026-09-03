@@ -64,10 +64,16 @@ static analysis.
 ## Evidence Contract
 **Framework obligation:** Every run produces scoped, structured evidence automatically.
 - Logging is scoped to the current leaf test.
-- Survey and audit hooks share the same artifact contract: if the SE returns a value, it is faithfully recorded as an Artifact — including empty or `None`-valued data. If the SE returns nothing, an info-level log entry notes the hook fired but no artifact is written. The return statement is the signal of intent to capture an artifact from the SE.
-  - Python resolves both an explicit `return None` and a fall-through to `None`; hook
-    registration records whether the author wrote the explicit return so the runtime can
-    preserve that distinction. An explicit `None` is evidence. A fall-through is not.
+- Survey and audit hooks share the same automatic artifact contract: every non-`None`
+  return is faithfully recorded as an Artifact, including empty dicts, lists, and
+  strings. Python resolves an explicit `return None`, a delegated call that returns
+  `None`, and a fall-through to the same runtime value, so `None` writes only an
+  informational log entry and no automatic artifact. When `None` itself is meaningful
+  evidence, the SE must make that intent explicit with
+  `await utils.capture_artifact(Artifact(..., data=None))` inside the hook.
+  - Once a hook returns a non-`None` observation, its automatic artifact publication is
+    shielded from shutdown within its own 30-second evidence budget. Repeated
+    cancellation cannot orphan an accepted observation after the hardware was read.
   - Survey dispatch points are `pre-configure`, `post-configure`, `pre-test`,
     `post-test`, `pre-cleanup`, and `post-cleanup`, limited to the phases the lifecycle
     reaches. The artifact name identifies the dispatch point and registered-hook index;
