@@ -134,10 +134,10 @@ class TestCleanupGuarantee:
             async def cleanup(self, utils: TestUtils) -> None:
                 calls.append("cleanup")
 
-        with pytest.raises(ExternalIntegrationFailure) as caught:
-            await Suite(name="rack").main(TestUtils())
+        outcome = await Suite(name="rack").main(TestUtils())
 
-        assert caught.value is abort
+        assert outcome.state is State.ABORTED
+        assert outcome.failure is abort
         assert calls == ["test", "cleanup"]
 
     async def test_cleanup_error_is_logged_and_does_not_mask_the_verdict(
@@ -230,6 +230,48 @@ class TestCleanupGuarantee:
         with pytest.raises(asyncio.CancelledError):
             await running
         assert calls == ["test-started", "cleanup-started", "cleanup-finished"]
+
+    async def test_cancellation_is_re_raised_after_cleanup_reaches_its_timeout(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cleanup_started = asyncio.Event()
+        cleanup_cancelled = asyncio.Event()
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                cleanup_started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleanup_cancelled.set()
+
+        monkeypatch.setattr("litmus.base._FINALIZATION_TIMEOUT_SECONDS", 0.01)
+        running = asyncio.create_task(Suite(name="rack").main(TestUtils()))
+        await cleanup_started.wait()
+        running.cancel()
+
+        with (
+            caplog.at_level("ERROR", logger="litmus"),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await running
+
+        await cleanup_cancelled.wait()
+        assert len(caplog.records) == 1
+        assert "cleanup failed (verdict unaffected)" in caplog.records[0].getMessage()
+        assert "CONTRACT VIOLATION IN rack" in caplog.records[0].getMessage()
+        assert (
+            "cleanup exceeded its 0.01-second finalization timeout"
+            in caplog.records[0].getMessage()
+        )
 
 
 class TestBuildSuiteClassification:
