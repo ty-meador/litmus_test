@@ -167,8 +167,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         Args:
             name: Stable node name used by logs, artifacts, and failures.
             via: Optional gateway Testable. The framework brings it up before this
-                node's configure, routes exec through its SSH hop, and cleans it up
-                after this node's cleanup. Authors never call configure/cleanup on it.
+                node's pre-configure survey, routes exec through its SSH hop, and
+                tears it down after this node's post-cleanup survey. Authors never
+                call configure/cleanup on it.
         """
         self._frozen = False
         self._has_run = False

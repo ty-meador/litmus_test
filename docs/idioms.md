@@ -44,9 +44,10 @@ The static no-self-mutation rule remains defense in depth.
 
 Any Testable whose `configure()` calls `utils.use_shell()` can serve as a via target.
 Pass it as `via=` at construction. The framework brings the via device up before the
-consumer's `configure()`, routes `utils.exec` through that hop, and cleans the via
-device up after the consumer's cleanup. Authors never call `run_configure_only()` or
-`run_cleanup_only()` by hand.
+consumer's pre-configure survey, routes `utils.exec` through that hop for configure,
+surveys, tests, and audits, and tears the via down after the consumer's post-cleanup
+survey. A survey or in-flight audit that execs therefore measures the hop, not the
+test host. Authors never call `run_configure_only()` or `run_cleanup_only()` by hand.
 
 ```python
 gateway = Gateway(name="gateway")
