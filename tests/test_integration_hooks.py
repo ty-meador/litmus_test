@@ -283,6 +283,66 @@ async def test_group_abort_cancels_siblings_and_returns_one_aborted_tree() -> No
     }
 
 
+@pytest.mark.parametrize(
+    "caught_type",
+    [Exception, BaseException],
+    ids=["exception", "base-exception"],
+)
+async def test_suite_code_cannot_swallow_an_abort_and_forge_pass(
+    caught_type: type[BaseException],
+) -> None:
+    parked_started = asyncio.Event()
+    caught_cancellation = asyncio.Event()
+    cause = RuntimeError("shop-floor database refused the record")
+
+    class GroupedSuite(LitmusTest):
+        def build_suite(self) -> LitmusTest:
+            return self.group(
+                "parallel",
+                [
+                    self.case("parked", self._parked),
+                    self.case("halt", self._halt),
+                ],
+            )
+
+        async def _parked(self, utils: TestUtils) -> Verdict:
+            parked_started.set()
+            try:
+                await asyncio.Event().wait()
+            except caught_type:
+                caught_cancellation.set()
+                return PASS
+            raise AssertionError("parked test resumed without cancellation")
+
+        async def _halt(self, utils: TestUtils) -> Verdict:
+            return PASS
+
+    async def before_each(ctx: BeforeEachContext) -> None:
+        if ctx.name == "halt":
+            await parked_started.wait()
+            raise cause
+
+    async def after_each(ctx: AfterEachContext) -> None:
+        del ctx
+
+    result = await GroupedSuite(name="rack").run(
+        before_each=before_each,
+        after_each=after_each,
+    )
+
+    assert caught_cancellation.is_set() is (caught_type is BaseException)
+    assert result.state is State.ABORTED
+    assert isinstance(result.failure, ExternalIntegrationFailure)
+    assert result.failure.hook == "before_each"
+    assert result.failure.cause is cause
+    assert _summary_states(result.summary_tree) == {
+        "rack": State.ABORTED,
+        "parallel": State.ABORTED,
+        "parked": State.ABORTED,
+        "halt": State.ABORTED,
+    }
+
+
 class _ParkedTransport(RemoteInterface):
     def __init__(self) -> None:
         super().__init__()
