@@ -705,3 +705,133 @@ class TestViaHopContracts:
             await first.run_cleanup_only()
             await second.run_cleanup_only()
             await jump_peer.aclose()
+
+
+class TestViaSurveyAndAuditRouting:
+    """Surveys and in-flight audits exec through the via, not the test host."""
+
+    async def test_surveys_exec_through_the_via_and_the_hop_outlives_post_cleanup(
+        self,
+    ) -> None:
+        peer = await LoopbackSshd.start(username="ops", password="jump")
+        calls: list[str] = []
+
+        class Gateway(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                calls.append("gateway-configure")
+                await _use_loopback(utils, peer)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._unused)
+
+            async def _unused(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                calls.append("gateway-cleanup")
+
+        class Target(LitmusTest):
+            def __init__(self, *, name: str, via: LitmusTest | None = None) -> None:
+                super().__init__(name=name, via=via)
+                self.use_survey(self._survey)
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                calls.append("target-configure")
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _survey(self, utils: TestUtils) -> object:
+                result = await utils.exec("survey-on-hop")
+                calls.append(f"survey:{result.stdout}:{result.exit_code}")
+                return {"stdout": result.stdout}
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                calls.append("target-test")
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                calls.append("target-cleanup")
+
+        try:
+            outcome = await Target(name="target", via=Gateway(name="gateway")).main()
+        finally:
+            await peer.aclose()
+
+        assert outcome.state is State.PASS
+        hop_survey = "survey:survey-on-hop:0"
+        assert calls[0] == "gateway-configure"
+        assert calls[1] == hop_survey
+        assert calls[2] == "target-configure"
+        assert calls[-3] == "target-cleanup"
+        assert calls[-2] == hop_survey
+        assert calls[-1] == "gateway-cleanup"
+        assert calls.count(hop_survey) == 6
+
+    async def test_an_in_flight_audit_keeps_the_via_hop_until_it_settles(self) -> None:
+        peer = await LoopbackSshd.start(username="ops", password="jump")
+        calls: list[str] = []
+        hop_connected_at_cleanup: list[bool] = []
+        hops: list[RemoteInterface] = []
+        audit_started = asyncio.Event()
+
+        class Gateway(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                await _use_loopback(utils, peer)
+                hop = _router(utils)
+                assert hop is not None
+                assert hop.ssh is not None
+                hops.append(hop.ssh)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._unused)
+
+            async def _unused(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                calls.append("gateway-cleanup")
+
+        class Target(LitmusTest):
+            def __init__(self, *, name: str, via: LitmusTest | None = None) -> None:
+                super().__init__(name=name, via=via)
+                self.use_audit(interval=0.001, fn=self._audit)
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _audit(self, utils: TestUtils) -> object:
+                probe = await utils.exec("audit-on-hop")
+                calls.append(f"audit-probe:{probe.stdout}:{probe.exit_code}")
+                audit_started.set()
+                try:
+                    result = await utils.exec("sleep 5")
+                except asyncio.CancelledError:
+                    calls.append(f"audit-cancelled:hop={hops[0].connected}")
+                    raise
+                calls.append(f"audit-sleep:{result.stdout}:{result.exit_code}")
+                return {"stdout": result.stdout}
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                await audit_started.wait()
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                hop_connected_at_cleanup.append(hops[0].connected)
+                calls.append("target-cleanup")
+
+        try:
+            outcome = await Target(name="target", via=Gateway(name="gateway")).main()
+        finally:
+            await peer.aclose()
+
+        assert outcome.state is State.PASS
+        assert hop_connected_at_cleanup == [True]
+        assert calls[0] == "audit-probe:audit-on-hop:0"
+        assert calls[1] in {"audit-cancelled:hop=True", "audit-sleep:woke:0", "audit-sleep::255"}
+        assert calls[2] == "target-cleanup"
+        assert calls[3] == "gateway-cleanup"
+        assert hops[0].connected is False
