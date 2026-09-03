@@ -16,12 +16,58 @@ from typing import Any, final
 from litmus.artifacts import Artifact
 from litmus.errors import ExternalIntegrationFailure, TestFailure
 from litmus.executor import ExecResult, LocalExec
+from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
+from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouting, Shell
 
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
 
 LOGGER = logging.getLogger("litmus")
+
+
+@final
+class _RunTransports:
+    """Every transport opened during one run, without changing node ownership."""
+
+    __slots__ = ("_halted", "_late_closes", "_local_exec", "_remotes")
+
+    def __init__(self, local_exec: LocalExec) -> None:
+        self._local_exec = local_exec
+        self._remotes: list[RemoteInterface] = []
+        self._halted = False
+        self._late_closes: set[asyncio.Task[None]] = set()
+
+    def register(self, remote: RemoteInterface) -> None:
+        """Remember an opened resource and hard-close late arrivals after an abort."""
+        if all(known is not remote for known in self._remotes):
+            self._remotes.append(remote)
+        if self._halted and remote.connected:
+            close = asyncio.create_task(self._close_remote(remote))
+            self._late_closes.add(close)
+            close.add_done_callback(self._late_closes.discard)
+
+    async def cancel_in_flight(self) -> None:
+        """Close local work and every known remote; one broken close cannot mask another."""
+        self._halted = True
+        await asyncio.gather(
+            self._close_local(),
+            *(self._close_remote(remote) for remote in tuple(self._remotes)),
+        )
+        while self._late_closes:
+            await asyncio.gather(*tuple(self._late_closes))
+
+    async def _close_local(self) -> None:
+        try:
+            await self._local_exec.cancel_in_flight()
+        except Exception:
+            LOGGER.exception("run-abort could not terminate a local subprocess")
+
+    async def _close_remote(self, remote: RemoteInterface) -> None:
+        try:
+            await remote.cancel_in_flight()
+        except Exception:
+            LOGGER.exception("run-abort could not terminate remote %s", remote.endpoint)
 
 
 @final
@@ -144,11 +190,13 @@ class TestUtils:
         "_base_logger",
         "_ctx",
         "_env",
+        "_integration_hooks",
         "_local_exec",
         "_logger",
         "_routing",
         "_scope",
         "_signal",
+        "_transports",
     )
 
     def __init__(
@@ -158,6 +206,7 @@ class TestUtils:
         env: Mapping[str, str] | None = None,
         logger: logging.Logger | None = None,
         artifact_root: str | Path | None = None,
+        _integration_hooks: IntegrationHooks | None = None,
     ) -> None:
         """Create an unscoped run seed; lifecycle execution creates node views.
 
@@ -181,7 +230,15 @@ class TestUtils:
         self._scope: tuple[str, ...] = ()
         self._logger = ScopedLogger(self._base_logger, self._scope)
         self._local_exec = LocalExec()
-        self._routing = ExecRouting(self._local_exec.run, logger=self._logger)
+        self._transports = _RunTransports(self._local_exec)
+        self._integration_hooks = (
+            IntegrationHooks() if _integration_hooks is None else _integration_hooks
+        )
+        self._routing = ExecRouting(
+            self._local_exec.run,
+            logger=self._logger,
+            on_open=self._transports.register,
+        )
         self._signal = RunSignal(RunAbort())
 
     @property
@@ -364,11 +421,18 @@ class TestUtils:
         scoped._scope = (*self._scope, node)
         scoped._logger = ScopedLogger(self._base_logger, scoped._scope)
         scoped._local_exec = self._local_exec
+        scoped._transports = self._transports
+        scoped._integration_hooks = self._integration_hooks
         inherited = self._routing.child_run_params().router
         scoped._routing = ExecRouting(
             self._local_exec.run,
             inherited=inherited,
             logger=scoped._logger,
+            on_open=self._transports.register,
         )
         scoped._signal = RunSignal(run_abort, audit_signal)
         return scoped
+
+    async def _cancel_in_flight(self) -> None:
+        """Hard-close every framework-managed transport known to this run."""
+        await self._transports.cancel_in_flight()

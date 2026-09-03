@@ -117,7 +117,7 @@ so the framework cannot persist evidence without also recording that pointer.
 - **Pair invariant**: `after_each` fires even when `before_each` threw, so "started" and "finished" records stay balanced in the external system. No orphan rows.
 - Hooks receive a narrow context (node name, ancestor chain, scoped logger, env snapshot) — NOT `utils.exec` or `get_shell`. The interface encodes "integration hooks don't touch the hardware."
 
-When a hook throws, the framework closes every in-flight transport across the whole tree immediately (SSH connections destroyed, subprocesses killed). A 30-minute firmware flash in flight when the integration layer halts does NOT continue to mutate the hardware. This is load-bearing for manufacturing test integrity.
+When a hook throws, the required end state is for the framework to close every in-flight transport across the whole tree immediately (SSH connections destroyed, subprocesses killed). A 30-minute firmware flash in flight when the integration layer halts must NOT continue to mutate the hardware. This is load-bearing for manufacturing test integrity.
 
 ### The Pit of Success Model
 
