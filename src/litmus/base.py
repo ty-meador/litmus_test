@@ -13,7 +13,18 @@ from litmus.errors import (
     FrameworkContractViolation,
     TestFailure,
 )
-from litmus.hooks import AuditHook, HookFunction, SurveyHook
+from litmus.evidence import JsonObject, snapshot_run_data
+from litmus.hooks import (
+    AfterEachContext,
+    AfterEachHook,
+    AuditHook,
+    BeforeEachContext,
+    BeforeEachHook,
+    HookFunction,
+    IntegrationHooks,
+    SurveyHook,
+    invoke_integration_hook,
+)
 from litmus.lifecycle import AuditSignal, ChildBoundary, Outcome, RunAbort, Slot, State
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
@@ -36,18 +47,51 @@ _SEALED_METHODS = frozenset(
         "_run_sequence",
         "_node_type",
         "_pending_summary_tree",
+        "_pending_children",
         "_to_result",
+        "_aborted_result",
         "_configure_and_merge_context",
+        "_capture_hook_artifact",
         "_capture_hook_result",
         "_run_audit_loop",
         "_run_surveys",
         "_run_suite_with_audits",
+        "_run_after_each",
         "_run_cleanup",
         "use_survey",
         "use_audit",
     }
 )
 _LIFECYCLE_COROUTINES = frozenset({"configure", "cleanup"})
+_FINALIZATION_TIMEOUT_SECONDS = 30.0
+
+
+def _consume_finalization_exception(future: asyncio.Future[object]) -> None:
+    """Retrieve a late exception from a timed-out finalizer without masking its log."""
+    if not future.cancelled():
+        future.exception()
+
+
+async def _bounded_finalization(call: Awaitable[object], *, node: str, operation: str) -> object:
+    """Run shielded user finalization within the framework's evidence budget."""
+
+    async def await_call() -> object:
+        return await call
+
+    task = asyncio.create_task(await_call())
+    try:
+        async with asyncio.timeout(_FINALIZATION_TIMEOUT_SECONDS):
+            return await asyncio.shield(task)
+    except TimeoutError as error:
+        detail = (
+            f"{operation} exceeded its {_FINALIZATION_TIMEOUT_SECONDS:g}-second "
+            "finalization timeout"
+        )
+        raise ContractViolation(node, detail=detail, cause=error) from error
+    finally:
+        if not task.done():
+            task.cancel()
+            task.add_done_callback(_consume_finalization_exception)
 
 
 def _function(member: object) -> object:
@@ -94,7 +138,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     :class:`ContractViolation`, preserving the first run as evidence.
     """
 
-    __slots__ = ("_audits", "_children", "_frozen", "_has_run", "_name", "_surveys", "_test")
+    __slots__ = (
+        "_audits",
+        "_children",
+        "_ctx",
+        "_frozen",
+        "_has_run",
+        "_name",
+        "_surveys",
+        "_test",
+    )
 
     def __init__(self, *, name: str) -> None:
         """Create a named, not-yet-run test node."""
@@ -105,6 +158,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._audits: list[AuditHook] = []
         self._test: _TestFunction | None = None
         self._children: tuple[LitmusTest, ...] | None = None
+        self._ctx: dict[str, Any] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Reject malformed authored classes before an instance can touch hardware."""
@@ -162,6 +216,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """The stable node name used by logs, artifacts, and failures."""
         return self._name
 
+    @property
+    def run_data(self) -> JsonObject:
+        """A detached JSON-safe snapshot of this node's serializable context."""
+        return snapshot_run_data(self._ctx)
+
     def case(self, name: str, test: _TestFunction) -> LitmusTest:
         """Create an internal leaf node from an already-bound verdict method."""
         if not inspect.iscoroutinefunction(test):
@@ -213,15 +272,33 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """Restore state after the suite settles, regardless of its outcome."""
 
     @final
-    async def run(self, *, env: Mapping[str, str] | None = None) -> RunResult:
-        """Execute once with framework-owned utilities and an environment snapshot."""
-        return await self.main(TestUtils(env=env))
+    async def run(
+        self,
+        *,
+        env: Mapping[str, str] | None = None,
+        before_each: BeforeEachHook | None = None,
+        after_each: AfterEachHook | None = None,
+        allow_unpaired_hooks: bool = False,
+    ) -> RunResult:
+        """Execute once, fanning root-owned integration hooks across every node."""
+        hooks = IntegrationHooks(
+            before_each=before_each,
+            after_each=after_each,
+            allow_unpaired=allow_unpaired_hooks,
+        )
+        return await self.main(TestUtils(env=env, _integration_hooks=hooks))
 
     @final
     async def main(self, utils: TestUtils | None = None) -> RunResult:
         """Execute the sealed lifecycle with an optional framework test seed."""
         seed = TestUtils() if utils is None else utils
-        return await self._run_lifecycle(seed, RunAbort(), isolate_context=False)
+        run_abort = RunAbort()
+        result = await self._run_lifecycle(seed, run_abort, isolate_context=False)
+        if run_abort.fired:
+            # Sweep once more at the root so a transport that settled open while its
+            # task was being cancelled cannot outlive the returned Aborted tree.
+            await seed._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+        return result
 
     @final
     async def _run_lifecycle(
@@ -247,89 +324,218 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             isolate_context=isolate_context and authored_instance,
             audit_signal=node_audit_signal,
         )
+        object.__setattr__(self, "_ctx", utils.ctx)
 
-        if not authored_instance:
-            # A composite or leaf node declares no route of its own, so its topology
-            # is final the moment its utils exist.
-            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
-
-        if children is not None:
-            # Sealing forbids subclass dispatch, so the engine names its two internal
-            # composite shapes here; a third shape earns a real strategy seam.
-            if isinstance(self, _Sequence):
-                return await self._run_sequence(
-                    utils, run_abort, children, audit_signal=node_audit_signal
-                )
-            return await self._run_group(utils, run_abort, children, audit_signal=node_audit_signal)
-
-        if test is not None:
-            # ChildBoundary is the sole enforcement point for authored verdicts.
-            outcome = await ChildBoundary(
-                self.name, run_abort, utils.logger, node_audit_signal
-            ).run(Slot.TEST_METHOD, test(utils))
-            return self._to_result(outcome, utils)
-
+        integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
         boundary = ChildBoundary(self.name, run_abort, utils.logger, node_audit_signal)
+        after_each_started = False
+        summary_children: tuple[SummaryTreeNode, ...] = ()
+        if len(utils.logger.scope) == 1:
+            integration_hooks.warn_if_unpaired(utils.logger)
         try:
-            await self._run_surveys(boundary, utils, "pre-configure")
-            configured = await boundary.run(
-                Slot.CONFIGURE, self._configure_and_merge_context(utils)
-            )
-            if configured.state is not None:
-                return self._to_result(configured, utils)
+            if integration_hooks.before_each is not None:
+                await boundary.run(
+                    Slot.BEFORE_EACH,
+                    invoke_integration_hook(
+                        "before_each",
+                        integration_hooks.before_each,
+                        BeforeEachContext(
+                            name=self.name,
+                            ancestor_names=utils.logger.scope,
+                            bread_crumbs=utils.logger.bread_crumbs,
+                            logger=utils.logger,
+                            env=utils.env,
+                        ),
+                    ),
+                )
 
-            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
-            await self._run_surveys(boundary, utils, "post-configure")
-            suite = self.build_suite()
-            await self._run_surveys(boundary, utils, "pre-test")
-            if self._audits:
-                if node_audit_signal is None:
-                    raise FrameworkContractViolation(
-                        self.name, detail="registered audits have no cancellation signal"
+            if not authored_instance:
+                # A composite or leaf node declares no route of its own, so its topology
+                # is final the moment its utils exist.
+                utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+
+            if children is not None:
+                # Sealing forbids subclass dispatch, so the engine names its two internal
+                # composite shapes here; a third shape earns a real strategy seam.
+                if isinstance(self, _Sequence):
+                    result = await self._run_sequence(
+                        utils,
+                        run_abort,
+                        children,
+                        audit_signal=node_audit_signal,
                     )
-                suite_result, audit_outcome = await self._run_suite_with_audits(
-                    suite,
-                    utils,
-                    run_abort,
-                    node_audit_signal,
-                )
-            else:
-                suite_result = await suite._run_lifecycle(
-                    utils, run_abort, audit_signal=node_audit_signal
-                )
-                audit_outcome = None
-            await self._run_surveys(boundary, utils, "post-test")
+                else:
+                    result = await self._run_group(
+                        utils,
+                        run_abort,
+                        children,
+                        audit_signal=node_audit_signal,
+                    )
+                summary_children = result.summary_tree.children
+                after_each_started = True
+                return await self._run_after_each(boundary, utils, run_abort, result)
 
-            if audit_outcome is not None:
-                return self._to_result(
-                    audit_outcome,
-                    utils,
-                    children=(suite._pending_summary_tree(),),
-                )
-            if suite_result is None:
-                raise FrameworkContractViolation(
-                    self.name, detail="suite settled without a result or audit verdict"
-                )
-            outcome = Outcome(
-                Slot.TEST_METHOD,
-                self.name,
-                suite_result.state,
-                failure=suite_result.failure,
-                value=suite_result.value,
-            )
-            return self._to_result(
-                outcome,
-                utils,
-                children=(suite_result.summary_tree,),
-            )
-        finally:
+            if test is not None:
+                # ChildBoundary is the sole enforcement point for authored verdicts.
+                outcome = await boundary.run(Slot.TEST_METHOD, test(utils))
+                result = self._to_result(outcome, utils)
+                after_each_started = True
+                return await self._run_after_each(boundary, utils, run_abort, result)
+
             try:
-                await self._run_surveys(boundary, utils, "pre-cleanup")
+                await self._run_surveys(boundary, utils, "pre-configure")
+                configured = await boundary.run(
+                    Slot.CONFIGURE, self._configure_and_merge_context(utils)
+                )
+                if configured.state is not None:
+                    outcome = configured
+                else:
+                    utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                    await self._run_surveys(boundary, utils, "post-configure")
+                    suite = self.build_suite()
+                    await self._run_surveys(boundary, utils, "pre-test")
+                    if self._audits:
+                        if node_audit_signal is None:
+                            raise FrameworkContractViolation(
+                                self.name,
+                                detail="registered audits have no cancellation signal",
+                            )
+                        suite_result, audit_outcome = await self._run_suite_with_audits(
+                            suite,
+                            utils,
+                            run_abort,
+                            node_audit_signal,
+                        )
+                    else:
+                        suite_result = await suite._run_lifecycle(
+                            utils,
+                            run_abort,
+                            audit_signal=node_audit_signal,
+                        )
+                        audit_outcome = None
+                    await self._run_surveys(boundary, utils, "post-test")
+
+                    if audit_outcome is not None:
+                        outcome = audit_outcome
+                        summary_children = (suite._pending_summary_tree(),)
+                    elif suite_result is None:
+                        raise FrameworkContractViolation(
+                            self.name,
+                            detail="suite settled without a result or audit verdict",
+                        )
+                    else:
+                        outcome = Outcome(
+                            Slot.TEST_METHOD,
+                            self.name,
+                            suite_result.state,
+                            failure=suite_result.failure,
+                            value=suite_result.value,
+                        )
+                        summary_children = (suite_result.summary_tree,)
             finally:
                 try:
-                    await self._run_cleanup(boundary, utils)
+                    await self._run_surveys(boundary, utils, "pre-cleanup")
                 finally:
-                    await self._run_surveys(boundary, utils, "post-cleanup")
+                    try:
+                        await self._run_cleanup(boundary, utils)
+                    finally:
+                        await self._run_surveys(boundary, utils, "post-cleanup")
+            result = self._to_result(outcome, utils, children=summary_children)
+            after_each_started = True
+            return await self._run_after_each(boundary, utils, run_abort, result)
+        except ExternalIntegrationFailure:
+            await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+            result = self._aborted_result(
+                boundary,
+                utils,
+                run_abort,
+                children=summary_children or self._pending_children(),
+            )
+            if after_each_started:
+                return result
+            return await self._run_after_each(boundary, utils, run_abort, result)
+        except asyncio.CancelledError:
+            if not run_abort.fired:
+                raise
+            result = self._aborted_result(
+                boundary,
+                utils,
+                run_abort,
+                children=summary_children or self._pending_children(),
+            )
+            if after_each_started:
+                return result
+            return await self._run_after_each(boundary, utils, run_abort, result)
+
+    @final
+    async def _run_after_each(
+        self,
+        boundary: ChildBoundary,
+        utils: TestUtils,
+        run_abort: RunAbort,
+        result: RunResult,
+    ) -> RunResult:
+        """Dispatch the root-owned completion hook for one settled node."""
+        integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
+        if integration_hooks.after_each is not None:
+            try:
+                await boundary.run(
+                    Slot.AFTER_EACH,
+                    invoke_integration_hook(
+                        "after_each",
+                        integration_hooks.after_each,
+                        AfterEachContext(
+                            name=self.name,
+                            ancestor_names=utils.logger.scope,
+                            bread_crumbs=utils.logger.bread_crumbs,
+                            logger=utils.logger,
+                            env=utils.env,
+                            result=result,
+                        ),
+                    ),
+                )
+            except ExternalIntegrationFailure:
+                await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+                return self._aborted_result(
+                    boundary,
+                    utils,
+                    run_abort,
+                    children=result.summary_tree.children,
+                )
+            except asyncio.CancelledError:
+                if not run_abort.fired:
+                    raise
+                return self._aborted_result(
+                    boundary,
+                    utils,
+                    run_abort,
+                    children=result.summary_tree.children,
+                )
+        return result
+
+    @final
+    def _aborted_result(
+        self,
+        boundary: ChildBoundary,
+        utils: TestUtils,
+        run_abort: RunAbort,
+        *,
+        children: tuple[SummaryTreeNode, ...],
+    ) -> RunResult:
+        """Seal the shared integration failure at this node without rewrapping it."""
+        reason = run_abort.reason
+        if reason is None:
+            raise FrameworkContractViolation(
+                self.name,
+                detail="an integration abort reached a node without its reason",
+            )
+        boundary_outcome = boundary.outcome
+        slot = Slot.TEST_METHOD if boundary_outcome is None else boundary_outcome.slot
+        return self._to_result(
+            Outcome(slot, self.name, State.ABORTED, failure=reason),
+            utils,
+            children=children,
+        )
 
     @final
     async def _run_group(
@@ -350,6 +556,14 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                     )
                     for child in children
                 )
+                active = set(tasks)
+                while active:
+                    done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                    active.difference_update(done)
+                    if run_abort.fired:
+                        for task in active:
+                            task.cancel()
+                        break
         except* ExternalIntegrationFailure as failures:
             # TaskGroup has already cancelled and joined every sibling. Restore the
             # taxonomy's class-intact halt instead of leaking an ExceptionGroup.
@@ -466,6 +680,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
 
     @final
+    def _pending_children(self) -> tuple[SummaryTreeNode, ...]:
+        """Describe descendants that had no chance to produce terminal evidence."""
+        return self._pending_summary_tree().children
+
+    @final
     def _to_result(
         self,
         outcome: Outcome,
@@ -499,6 +718,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             summary_tree=summary_tree,
             type=node_type,
             env=utils.env,
+            run_data=self.run_data,
         )
 
     @final
@@ -507,6 +727,32 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         configured = await self.configure(utils)
         utils.ctx.update(configured)
         return configured
+
+    @final
+    async def _capture_hook_artifact(
+        self,
+        utils: TestUtils,
+        artifact: Artifact,
+        *,
+        description: str,
+    ) -> None:
+        """Finish an accepted observation's publication before cancellation escapes."""
+        capture = asyncio.create_task(
+            _bounded_finalization(
+                utils.capture_artifact(artifact),
+                node=self.name,
+                operation=f"{description} artifact capture",
+            )
+        )
+        try:
+            await asyncio.shield(capture)
+        except asyncio.CancelledError:
+            # Once a hook has produced an observation, its artifact belongs to the
+            # authoritative record. Repeated shutdown requests may not orphan it.
+            while not capture.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(capture)
+            raise
 
     @final
     async def _capture_hook_result(
@@ -522,7 +768,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         if value is None and not hook.captures_none:
             utils.logger.info("%s returned no value; skipping artifact capture", description)
             return value
-        await utils.capture_artifact(Artifact(name=artifact_name, type="survey", data=value))
+        await self._capture_hook_artifact(
+            utils,
+            Artifact(name=artifact_name, type="survey", data=value),
+            description=description,
+        )
         return value
 
     @final
@@ -630,7 +880,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     async def _run_cleanup(self, boundary: ChildBoundary, utils: TestUtils) -> None:
         """Finish cleanup before allowing cancellation to leave this node."""
-        cleanup = asyncio.create_task(boundary.run(Slot.CLEANUP, self.cleanup(utils)))
+        cleanup = asyncio.create_task(
+            boundary.run(
+                Slot.CLEANUP,
+                _bounded_finalization(self.cleanup(utils), node=self.name, operation="cleanup"),
+            )
+        )
         try:
             await asyncio.shield(cleanup)
         except asyncio.CancelledError:

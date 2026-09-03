@@ -11,7 +11,7 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
 
-check:
+.uv-job:
   image: ghcr.io/astral-sh/uv:python3.14-bookworm
   interruptible: true
   variables:
@@ -23,6 +23,17 @@ check:
         - uv.lock
     paths:
       - .uv-cache
+
+check:
+  extends: .uv-job
   script:
     - uv sync --locked
     - make check
+
+# Timing races don't lose the same way twice: a suite that passes once can fail
+# 7 of 8 on another machine (!42). Eight runs is a second net, not proof.
+soak:
+  extends: .uv-job
+  script:
+    - uv sync --locked
+    - make soak

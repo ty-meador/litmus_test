@@ -21,7 +21,12 @@ static analysis.
 - If `configure()` raises a `TestFailure`: cleanup runs, test methods never run, the test lands in `Fail`. The verdict means "the device did not reach a testable state" — whether the underlying cause is hardware or infrastructure is **not knowable from code** and is the human triager's call.
 - If `configure()` raises anything else: wrapped as "THIS IS A BUG IN <name>" (`ContractViolation`) — configure must signal verdicts via `TestFailure`.
 - If a test method raises a plain exception: wrapped as "THIS IS A BUG IN <name>" — not a hardware failure.
-- `cleanup()` always runs regardless of any prior outcome — after configure failure, after abort, and it is shielded from cancellation while it runs.
+- A cancellation already delivered to suite code outranks any return value or different
+  exception produced after a pathological catch. The child boundary restores the
+  cancellation before classifying that settlement, so an aborted run cannot forge a
+  hardware or bug verdict.
+- `cleanup()` always runs regardless of any prior outcome — after configure failure and after abort. Framework finalization shields it from caller cancellation within its own bounded timeout; repeated cancellation cannot abandon that wait, and the original cancellation is re-raised after cleanup settles or exhausts the evidence budget.
+- The evidence budget is 30 seconds, granted **per node**, not per run. Each node's cleanup draws its own allowance, so a deep tree tearing down after an abort can spend up to N × 30 seconds before the abort reaches the operator — plan teardown depth with that ceiling in mind. A cleanup that exhausts its allowance is a `ContractViolation` charged to that node.
 - Lifecycle execution order is enforced at runtime by the child boundary — the type system is not the enforcer.
 
 ---
@@ -72,6 +77,17 @@ static analysis.
 - All serializable values (primitives, plain dicts, lists) added to `ctx` are automatically added to `run_data`.
   - Functions, class instances, and live handles (e.g. SSH connections) are stripped.
   - Context annotations do not bypass this filter. A `TypedDict` is an ordinary dict at runtime, and each value still has to satisfy the same serialization rules.
+  - Filtering is all-or-nothing for each top-level ctx entry. A nested instance, handle,
+    function, cycle, non-string mapping key, or non-finite float strips that complete
+    entry; the framework never emits partial evidence or silently coerces it.
+  - `run_data` is a detached snapshot taken after cleanup. Later ctx mutation cannot
+    rewrite evidence already captured in a `RunResult`; serializable cleanup evidence
+    is included.
+  - `run_data["measurements"]` is a framework-owned empty list reserved for future
+    parametric measurements. An authored ctx entry with that name cannot populate or
+    replace the slot. Limit evaluation, aggregation, SPC, and Cpk are deliberately out
+    of scope; the reserved slot must not be mistaken for an implemented statistical
+    process-control model.
 - Every `RunResult` includes `ancestor_names: list[str]` (path from root) and `bread_crumbs: str` (joined for display), plus a `summary_tree` snapshot of the node's subtree state at completion. Downstream integrators can reconstruct the full Inspector tree from the root's RunResult alone.
 - `TestFailure` and `ExternalIntegrationFailure` both implement `to_json()`. Serializing a `RunResult` produces clean JSON for downstream integrators without any custom serializer.
 - **Provenance.** Every executed node records one `exec routing: <where> (<why>)` line — `where` is `local` or `via <chain>`, `why` names the call that put it there (`declared via use_shell`, `inherited from parent`, `declared via use_shell(inherit=False)`). A node that never declared a route renders `where` alone. The line is emitted after `configure` returns, since `use_shell` lives there and the route is not final until it does.
