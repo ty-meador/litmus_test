@@ -143,6 +143,7 @@ class TestHardClose:
             await ssh.cancel_in_flight()
             result = await task
             assert result.exit_code == -1
+            assert "transport closed" in result.stderr
             assert ssh.connected is False
             with pytest.raises(ConnectionError, match="not connected"):
                 await ssh.exec("uname")
@@ -356,6 +357,7 @@ class TestViaChain:
             await target.cancel_in_flight()
             result = await task
             assert result.exit_code == -1
+            assert "transport closed" in result.stderr
             assert target.connected is False
             assert jump.connected is False
         finally:
@@ -520,6 +522,7 @@ class TestBorrowedTunnel:
             await target.cancel_in_flight()
             result = await task
             assert result.exit_code == -1
+            assert "transport closed" in result.stderr
             assert target.connected is False
             assert jump.connected is True
             result = await jump.exec("id")
