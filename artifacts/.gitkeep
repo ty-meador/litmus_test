@@ -1,0 +1,2 @@
+Artifact output directory. A run from the repo root writes its evidence here;
+the contents are git-ignored, only this marker is tracked.
