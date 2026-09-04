@@ -15,6 +15,7 @@ dev = [
     "ruff>=0.12",
     "pyright>=1.1.400",
     "pytest-cov>=7",
+    "pip-audit>=2.10",
 ]
 
 [project.scripts]
