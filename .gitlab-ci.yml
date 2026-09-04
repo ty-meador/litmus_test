@@ -10,6 +10,14 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# Gate jobs run on MRs and main; a schedule selects its own job by SCHEDULED_JOB.
+.gate-job:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
 
 .uv-job:
   image: ghcr.io/astral-sh/uv:python3.14-bookworm
@@ -25,7 +33,7 @@ workflow:
       - .uv-cache
 
 check:
-  extends: .uv-job
+  extends: [.uv-job, .gate-job]
   script:
     - uv sync --locked
     - make check
@@ -45,7 +53,19 @@ check:
 # Timing races don't lose the same way twice: a suite that passes once can fail
 # 7 of 8 on another machine (!42). Eight runs is a second net, not proof.
 soak:
-  extends: .uv-job
+  extends: [.uv-job, .gate-job]
   script:
     - uv sync --locked
     - make soak
+
+# Weekly (schedule: SCHEDULED_JOB=dependency-update). Refreshes uv.lock and opens an MR
+# carrying the upgrade plan; that MR's pipeline runs the gate, audit included, over the
+# new set. Needs LITMUS_BOT_TOKEN (api + write_repository) as a masked CI variable.
+dependency-update:
+  extends: .uv-job
+  interruptible: false
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULED_JOB == "dependency-update"
+  script:
+    - uv sync --locked
+    - uv run python tools/dependency_update.py
