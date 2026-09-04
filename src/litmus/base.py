@@ -154,6 +154,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         "_frozen",
         "_has_run",
         "_name",
+        "_summary_tree",
         "_surveys",
         "_test",
         "_via",
@@ -184,6 +185,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._test: _TestFunction | None = None
         self._children: tuple[LitmusTest, ...] | None = None
         self._ctx: dict[str, Any] = {}
+        self._summary_tree: SummaryTreeNode | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Reject malformed authored classes before an instance can touch hardware."""
@@ -744,7 +746,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
     @final
     def _pending_summary_tree(self) -> SummaryTreeNode:
-        """Snapshot a declared node that a failed sequence did not execute."""
+        """Return sealed evidence, or describe a declared node that did not execute."""
+        if self._summary_tree is not None:
+            return self._summary_tree
         children = self._children
         if children is not None:
             child_trees = tuple(child._pending_summary_tree() for child in children)
@@ -788,6 +792,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             failure=outcome.failure,
             children=children,
         )
+        object.__setattr__(self, "_summary_tree", summary_tree)
         return RunResult(
             slot=outcome.slot,
             node=self.name,
