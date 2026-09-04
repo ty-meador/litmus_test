@@ -198,7 +198,7 @@ class TestHardClose:
                 await ssh.connect()
             assert ssh.connected is False
 
-            await ssh.reconnect_to("127.0.0.1", port=peer.port)
+            await ssh.connect("127.0.0.1", port=peer.port)
 
             assert ssh.connected is True
             assert (await ssh.exec("hello")).stdout == "hello"
@@ -643,8 +643,66 @@ class TestRoutedConnector:
             await target_peer.aclose()
 
 
-class TestReconnect:
-    async def test_reconnect_to_replaces_the_socket_at_a_new_address(self) -> None:
+class TestConnectAddress:
+    """The address is fixed while the socket is live; it moves only through a closed handle."""
+
+    async def test_connect_with_the_same_address_on_a_live_handle_is_idempotent(self) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+        )
+        try:
+            await ssh.connect()
+            assert peer.connections == 1
+
+            await ssh.connect()
+            await ssh.connect("127.0.0.1")
+            await ssh.connect(port=peer.port)
+
+            assert ssh.connected is True
+            assert peer.connections == 1
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_connect_to_another_address_on_a_live_handle_is_refused(self) -> None:
+        first = await _LoopbackSshd.start()
+        second = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=first.port,
+            username=first.username,
+            password=first.password,
+            skip_host_verification=True,
+        )
+        try:
+            await ssh.connect()
+            assert first.connections == 1
+
+            with pytest.raises(
+                ConnectionError,
+                match=(
+                    f"Attempted to connect SshInterface to 127.0.0.1:{second.port} "
+                    f"while it already held an active connection to 127.0.0.1:{first.port}"
+                ),
+            ):
+                await ssh.connect(port=second.port)
+
+            assert ssh.connected is True
+            assert first.connections == 1
+            assert second.connections == 0
+            assert ssh.address == ("127.0.0.1", first.port)
+            assert (await ssh.exec("still here")).stdout == "still here"
+        finally:
+            await ssh.disconnect()
+            await first.aclose()
+            await second.aclose()
+
+    async def test_disconnect_then_connect_moves_the_handle_to_a_new_address(self) -> None:
         first = await _LoopbackSshd.start()
         second = await _LoopbackSshd.start()
         ssh = SshInterface(
@@ -657,13 +715,40 @@ class TestReconnect:
         try:
             await ssh.connect()
             assert (await ssh.exec("one")).stdout == "one"
-            await ssh.reconnect_to("127.0.0.1", port=second.port)
+
+            await ssh.disconnect()
+            await ssh.connect("127.0.0.1", port=second.port)
+
             assert ssh.connected is True
+            assert ssh.address == ("127.0.0.1", second.port)
             assert (await ssh.exec("two")).stdout == "two"
         finally:
             await ssh.disconnect()
             await first.aclose()
             await second.aclose()
+
+    async def test_reconnect_redials_the_current_address(self) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+        )
+        try:
+            await ssh.connect()
+            assert peer.connections == 1
+
+            await ssh.reconnect()
+
+            assert ssh.connected is True
+            assert peer.connections == 2
+            assert ssh.address == ("127.0.0.1", peer.port)
+            assert (await ssh.exec("back")).stdout == "back"
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
 
 
 class TestAuthProvenance:

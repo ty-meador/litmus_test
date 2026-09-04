@@ -17,10 +17,17 @@ class LoopbackSshd:
         *,
         username: str,
         password: str | None,
+        accepted: list[asyncssh.SSHServerConnection],
     ) -> None:
         self._listener = listener
         self.username = username
         self.password = password
+        self._accepted = accepted
+
+    @property
+    def connections(self) -> int:
+        """How many client connections this listener has accepted so far."""
+        return len(self._accepted)
 
     @property
     def port(self) -> int:
@@ -45,8 +52,12 @@ class LoopbackSshd:
         expected_user = username
         expected_password = password
         authorized = authorized_key
+        accepted: list[asyncssh.SSHServerConnection] = []
 
         class _Auth(asyncssh.SSHServer):
+            def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
+                accepted.append(conn)
+
             def begin_auth(self, username: str) -> bool:
                 return True
 
@@ -81,7 +92,7 @@ class LoopbackSshd:
             process_factory=LoopbackSshd._handle,
             encoding="utf-8",
         )
-        return cls(listener, username=username, password=password)
+        return cls(listener, username=username, password=password, accepted=accepted)
 
     @staticmethod
     def ed25519() -> asyncssh.SSHKey:
