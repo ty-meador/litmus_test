@@ -19,6 +19,7 @@ class SeededBlade(LitmusTest):
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         self._reading_c = 40.0  # seed: litmus/immutable-self
+        self.use_survey(self._snapshot)  # seed: litmus/constructor-hooks
         return {}
 
     def build_suite(self) -> LitmusTest:
@@ -29,3 +30,6 @@ class SeededBlade(LitmusTest):
         if self._limit_c < 0:
             raise TestFailure("negative limit", ">= 0", str(self._limit_c))
         return PASS  # seed: litmus/gated-pass
+
+    async def _snapshot(self, _utils: TestUtils) -> object:
+        return {"reading_c": self._reading_c}
