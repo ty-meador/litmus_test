@@ -34,7 +34,10 @@ class RemoteInterface(ABC):
         `exec` cannot silently run against a half-dead transport.
       - `exec` never raises for a command's own exit status. Failure is an
         `ExecResult`. Calling `exec` while not connected raises
-        `ConnectionError` — a protocol-level reject, not a verdict.
+        `ConnectionError` — a protocol-level reject, not a verdict. That raise
+        is internal. `TestUtils.exec` and `Shell.exec` absorb it into
+        `exit_code == -1` so suite authors never see a dead transport as a
+        contract violation.
       - `cancel_in_flight` is the load-bearing halt. It is idempotent and safe
         when nothing is running. After it returns, `connected` is false and a
         later `exec` rejects. In-flight operations must fail because the
@@ -180,7 +183,9 @@ class RemoteInterface(ABC):
         """Run `command` on the remote peer.
 
         A non-zero exit is evidence, not an exception. Raises `ConnectionError`
-        if the transport is closed — including after `cancel_in_flight`.
+        if the transport is closed — including after `cancel_in_flight`. The
+        author-facing `TestUtils.exec` / `Shell.exec` surface absorbs that
+        raise into `ExecResult` with `exit_code == -1`.
         """
         if not self._connected:
             raise ConnectionError("remote interface is not connected")
