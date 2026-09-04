@@ -113,6 +113,38 @@ static analysis.
 
 ---
 
+## Temporal Backbone Contract
+**Framework obligation:** Every full `run()` creates one timestamped run directory
+beneath the configured artifact root before the root lifecycle begins. Point-in-time
+artifacts and every per-node timeline live beneath that directory, so a run's evidence
+is self-contained and cannot overwrite a neighboring run.
+
+- Every executed node that owns a discrete log streams the same records into two files:
+  `timeline.log`, the human line view, and `timeline.jsonl`, the versioned Inspector
+  record. Both files are flushed after every entry; an interrupted process therefore
+  preserves every complete entry already accepted by the logger.
+- The JSON Lines record carries one complete object per physical line with
+  `format_version`, UTC `timestamp`, root-to-leaf `scope`, `level`, and `message`.
+  Artifact-pointer records also carry `artifact_name`, `artifact_path`,
+  `artifact_type`, and `artifact_timestamp`.
+- A logging node opens its files lazily on its first record and closes them when that
+  node reaches its terminal boundary. A declared node that never executes opens
+  nothing.
+- Authored suites, sequences, and groups own a log by default. Inline cases roll up to
+  the nearest owning ancestor. Sequences, groups, and composed authored suites may opt
+  into the same roll-up with `discrete_log_file=False`; a root still owns the run log.
+- `LitmusTest.log_path` exposes the owning node's absolute `timeline.jsonl` path after
+  execution. It remains `None` for pending nodes and nodes whose records roll up.
+
+The persisted chronology is framework-owned. Developer code continues to use only
+`utils.logger` and `utils.capture_artifact()`; it never opens or edits timeline files.
+
+**Developer obligation:** Do not write directly into the run directory or depend on its
+timestamped directory name. Treat `log_path` and captured artifact paths as opaque
+evidence references.
+
+---
+
 ## Audit Contract
 **Framework obligation:** When `self.use_audit(interval=..., fn=...)` is called in the constructor, the framework runs `fn` concurrently with the test methods on the specified interval.
 - Multiple audit hooks are supported — each runs on its own interval.
