@@ -12,6 +12,20 @@ make fix       # auto-format + auto-fix lint
 make check     # CI gate: format check, lint, pyright strict, pytest, litmus-check
 ```
 
+The locally executable examples progress from one explicit claim, through composition,
+to polling with the complete evidence surface:
+
+```sh
+uv run python examples/hello_world.py
+uv run python examples/test_composition.py
+uv run python examples/wait_for_patterns.py
+```
+
+`wait_for_patterns.py` demonstrates both readiness polling in `configure()` and verdict
+polling in a test method. Its runs emit phase-boundary surveys, point-in-time artifacts,
+scoped log pointers, serializable `run_data`, and a root `summary_tree` suitable for an
+Inspector.
+
 Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
 `overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
 patterns), `contracts.md` (the non-negotiable developer↔framework invariants), and
