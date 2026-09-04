@@ -1,9 +1,10 @@
 """Root-owned integration hooks dispatched around every node in the test tree."""
 
 import asyncio
-from typing import Any, cast
+from typing import Any
 
 import pytest
+from tests.mock_connector import ConnectorInstaller
 
 from litmus import (
     PASS,
@@ -20,7 +21,6 @@ from litmus.executor import ExecResult
 from litmus.lifecycle import State
 from litmus.remote import RemoteInterface
 from litmus.results import SummaryTreeNode
-from litmus.routing import ExecRouting, ShellOpenRequest
 
 
 class HookedSuite(LitmusTest):
@@ -266,12 +266,9 @@ async def test_group_abort_cancels_siblings_and_returns_one_aborted_tree() -> No
             await slow_started.wait()
             raise RuntimeError("coordinator unavailable")
 
-    async def after_each(ctx: AfterEachContext) -> None:
-        del ctx
-
     result = await GroupedSuite(name="rack").run(
         before_each=before_each,
-        after_each=after_each,
+        allow_unpaired_hooks=True,
     )
 
     assert result.state is State.ABORTED
@@ -322,12 +319,9 @@ async def test_suite_code_cannot_swallow_an_abort_and_forge_pass(
             await parked_started.wait()
             raise cause
 
-    async def after_each(ctx: AfterEachContext) -> None:
-        del ctx
-
     result = await GroupedSuite(name="rack").run(
         before_each=before_each,
-        after_each=after_each,
+        allow_unpaired_hooks=True,
     )
 
     assert caught_cancellation.is_set() is (caught_type is BaseException)
@@ -380,24 +374,14 @@ class _ParkedTransport(RemoteInterface):
                 parked.set_exception(ConnectionError("transport aborted"))
 
 
-class _MockConnector:
-    def __init__(self, transport: _ParkedTransport) -> None:
-        self.transport = transport
-
-    async def open(self, request: ShellOpenRequest) -> RemoteInterface:
-        del request
-        await self.transport.connect()
-        return self.transport
-
-
-async def test_hook_abort_hard_closes_a_parked_remote_before_returning() -> None:
+async def test_hook_abort_hard_closes_a_parked_remote_before_returning(
+    install_mock_connector: ConnectorInstaller,
+) -> None:
     transport = _ParkedTransport()
-    connector = _MockConnector(transport)
 
     class FlashSuite(LitmusTest):
         async def configure(self, utils: TestUtils) -> dict[str, object]:
-            routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
-            object.__setattr__(routing, "_connector", connector)
+            install_mock_connector(utils, transport)
             await utils.use_shell(host="dut", username="root")
             return {}
 
@@ -422,12 +406,9 @@ async def test_hook_abort_hard_closes_a_parked_remote_before_returning() -> None
             await transport.in_flight.wait()
             raise RuntimeError("audit database unavailable")
 
-    async def after_each(ctx: AfterEachContext) -> None:
-        del ctx
-
     result = await FlashSuite(name="rack").run(
         before_each=before_each,
-        after_each=after_each,
+        allow_unpaired_hooks=True,
     )
 
     assert result.state is State.ABORTED
@@ -436,31 +417,16 @@ async def test_hook_abort_hard_closes_a_parked_remote_before_returning() -> None
     assert transport.has_in_flight is False
 
 
-class _HostMapConnector:
-    def __init__(self, hosts: dict[str, RemoteInterface]) -> None:
-        self._hosts = hosts
-
-    async def open(self, request: ShellOpenRequest) -> RemoteInterface:
-        transport = self._hosts[request.host]
-        await transport.connect()
-        return transport
-
-
-def _install_connector(utils: TestUtils, connector: object) -> None:
-    routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
-    object.__setattr__(routing, "_connector", connector)
-
-
 async def test_cleanup_exec_after_abort_is_not_a_contract_violation(
     caplog: pytest.LogCaptureFixture,
+    install_mock_connector: ConnectorInstaller,
 ) -> None:
     transport = _ParkedTransport()
-    connector = _MockConnector(transport)
     seen: dict[str, ExecResult] = {}
 
     class FlashSuite(LitmusTest):
         async def configure(self, utils: TestUtils) -> dict[str, object]:
-            _install_connector(utils, connector)
+            install_mock_connector(utils, transport)
             await utils.use_shell(host="dut", username="root")
             return {}
 
@@ -488,13 +454,10 @@ async def test_cleanup_exec_after_abort_is_not_a_contract_violation(
             await transport.in_flight.wait()
             raise RuntimeError("audit database unavailable")
 
-    async def after_each(ctx: AfterEachContext) -> None:
-        del ctx
-
     with caplog.at_level("ERROR", logger="litmus"):
         result = await FlashSuite(name="rack").run(
             before_each=before_each,
-            after_each=after_each,
+            allow_unpaired_hooks=True,
         )
 
     assert result.state is State.ABORTED
@@ -512,14 +475,15 @@ async def test_cleanup_exec_after_abort_is_not_a_contract_violation(
     assert transport.connected is False
 
 
-async def test_abort_hard_closes_every_opened_transport() -> None:
+async def test_abort_hard_closes_every_opened_transport(
+    install_mock_connector: ConnectorInstaller,
+) -> None:
     hop = _ParkedTransport()
     dut = _ParkedTransport()
-    connector = _HostMapConnector({"jump": hop, "dut": dut})
 
     class FlashSuite(LitmusTest):
         async def configure(self, utils: TestUtils) -> dict[str, object]:
-            _install_connector(utils, connector)
+            install_mock_connector(utils, {"jump": hop, "dut": dut})
             await utils.get_shell(host="jump", username="ops")
             await utils.use_shell(host="dut", username="root")
             return {}
@@ -545,12 +509,9 @@ async def test_abort_hard_closes_every_opened_transport() -> None:
             await dut.in_flight.wait()
             raise RuntimeError("audit database unavailable")
 
-    async def after_each(ctx: AfterEachContext) -> None:
-        del ctx
-
     result = await FlashSuite(name="rack").run(
         before_each=before_each,
-        after_each=after_each,
+        allow_unpaired_hooks=True,
     )
 
     assert result.state is State.ABORTED

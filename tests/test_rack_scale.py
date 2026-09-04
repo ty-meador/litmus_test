@@ -7,11 +7,11 @@ import gc
 import tracemalloc
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import cast
+
+from tests.mock_connector import ConnectorInstaller
 
 from litmus import (
     PASS,
-    AfterEachContext,
     BeforeEachContext,
     LitmusTest,
     RunResult,
@@ -23,8 +23,6 @@ from litmus import (
 from litmus.executor import ExecResult
 from litmus.lifecycle import State
 from litmus.mock import MockTransport
-from litmus.remote import RemoteInterface
-from litmus.routing import ExecRouting, ShellOpenRequest
 
 _DUT_COUNT = 70
 _MEMORY_ROUNDS = 4
@@ -51,22 +49,6 @@ class _RackCoordinator:
         await self.release.wait()
 
 
-class _MockConnector:
-    """Open exactly one synthetic transport for one DUT."""
-
-    def __init__(self, host: str, transport: MockTransport) -> None:
-        self._host = host
-        self._transport = transport
-
-    async def open(self, request: ShellOpenRequest) -> RemoteInterface:
-        """Connect the transport named by this DUT's declared route."""
-        if request.host != self._host:
-            msg = f"connector for {self._host} cannot open {request.host}"
-            raise ConnectionError(msg)
-        await self._transport.connect()
-        return self._transport
-
-
 @dataclass(slots=True)
 class _AbortMeasurement:
     """Capture the event-loop instant at which the harness abort begins."""
@@ -83,19 +65,20 @@ class _SyntheticDut(LitmusTest):
         dut_id: int,
         transport: MockTransport,
         coordinator: _RackCoordinator,
+        install: ConnectorInstaller,
         include_abort_trigger: bool = False,
     ) -> None:
         super().__init__(name=f"dut-{dut_id:02d}")
         self._dut_id = dut_id
         self._transport = transport
         self._coordinator = coordinator
+        self._install = install
         self._include_abort_trigger = include_abort_trigger
 
     async def configure(self, utils: TestUtils) -> dict[str, object]:
-        """Connect this DUT to its private mock transport."""
+        """Connect this DUT to its private mock transport, and only to that one."""
         host = self.name
-        routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
-        object.__setattr__(routing, "_connector", _MockConnector(host, self._transport))
+        self._install(utils, {host: self._transport})
         await utils.use_shell(host=host, username="root")
         return {}
 
@@ -131,6 +114,7 @@ class _SyntheticRack(LitmusTest):
         *,
         transports: Sequence[MockTransport],
         coordinator: _RackCoordinator,
+        install: ConnectorInstaller,
         include_abort_trigger: bool = False,
     ) -> None:
         super().__init__(name="synthetic rack")
@@ -139,6 +123,7 @@ class _SyntheticRack(LitmusTest):
                 dut_id=index,
                 transport=transport,
                 coordinator=coordinator,
+                install=install,
                 include_abort_trigger=include_abort_trigger and index == 0,
             )
             for index, transport in enumerate(transports)
@@ -150,6 +135,7 @@ class _SyntheticRack(LitmusTest):
 
 
 def _rack(
+    install: ConnectorInstaller,
     *,
     failed_dut: int | None = None,
     park_probes: bool = False,
@@ -169,6 +155,7 @@ def _rack(
     rack = _SyntheticRack(
         transports=transports,
         coordinator=coordinator,
+        install=install,
         include_abort_trigger=include_abort_trigger,
     )
     return rack, coordinator, transports
@@ -179,8 +166,8 @@ def _dut_results(result: RunResult) -> tuple[SummaryTreeNode, ...]:
     return rack_group.children
 
 
-async def _run_released_rack() -> None:
-    rack, coordinator, _ = _rack()
+async def _run_released_rack(install: ConnectorInstaller) -> None:
+    rack, coordinator, _ = _rack(install)
     coordinator.release.set()
     result = await rack.run()
     assert result.state is State.PASS
@@ -196,8 +183,10 @@ def _retained_litmus_bytes() -> int:
 class TestRackScale:
     """Prove the event-loop architecture at the claimed seventy-DUT scale."""
 
-    async def test_seventy_duts_run_concurrently_to_completion(self) -> None:
-        rack, coordinator, transports = _rack()
+    async def test_seventy_duts_run_concurrently_to_completion(
+        self, install_mock_connector: ConnectorInstaller
+    ) -> None:
+        rack, coordinator, transports = _rack(install_mock_connector)
         running = asyncio.create_task(rack.run())
 
         await asyncio.wait_for(coordinator.all_started.wait(), _WAIT_LIMIT_SECONDS)
@@ -214,9 +203,11 @@ class TestRackScale:
         assert all(transport.commands == ("probe",) for transport in transports)
         assert all(transport.disconnect_count == 1 for transport in transports)
 
-    async def test_one_dut_failure_leaves_the_other_sixty_nine_unaffected(self) -> None:
+    async def test_one_dut_failure_leaves_the_other_sixty_nine_unaffected(
+        self, install_mock_connector: ConnectorInstaller
+    ) -> None:
         failed_dut = 12
-        rack, coordinator, transports = _rack(failed_dut=failed_dut)
+        rack, coordinator, transports = _rack(install_mock_connector, failed_dut=failed_dut)
         coordinator.release.set()
 
         result = await asyncio.wait_for(rack.run(), _WAIT_LIMIT_SECONDS)
@@ -229,17 +220,19 @@ class TestRackScale:
         assert all(transport.commands == ("probe",) for transport in transports)
         assert all(transport.disconnect_count == 1 for transport in transports)
 
-    async def test_retained_framework_memory_stays_flat_across_loaded_racks(self) -> None:
-        await _run_released_rack()
+    async def test_retained_framework_memory_stays_flat_across_loaded_racks(
+        self, install_mock_connector: ConnectorInstaller
+    ) -> None:
+        await _run_released_rack(install_mock_connector)
         gc.collect()
         tracemalloc.start()
         try:
-            await _run_released_rack()
+            await _run_released_rack(install_mock_connector)
             gc.collect()
             baseline = _retained_litmus_bytes()
             samples: list[int] = []
             for _ in range(_MEMORY_ROUNDS):
-                await _run_released_rack()
+                await _run_released_rack(install_mock_connector)
                 gc.collect()
                 samples.append(_retained_litmus_bytes())
         finally:
@@ -251,8 +244,11 @@ class TestRackScale:
             f"limit is {_RETAINED_MEMORY_LIMIT_BYTES} bytes"
         )
 
-    async def test_whole_rack_abort_latency_is_below_one_second(self) -> None:
+    async def test_whole_rack_abort_latency_is_below_one_second(
+        self, install_mock_connector: ConnectorInstaller
+    ) -> None:
         rack, coordinator, transports = _rack(
+            install_mock_connector,
             park_probes=True,
             include_abort_trigger=True,
         )
@@ -270,12 +266,9 @@ class TestRackScale:
             measurement.requested_at = asyncio.get_running_loop().time()
             raise RuntimeError("synthetic rack controller unavailable")
 
-        async def after_each(ctx: AfterEachContext) -> None:
-            del ctx
-
         coordinator.release.set()
         result = await asyncio.wait_for(
-            rack.run(before_each=before_each, after_each=after_each),
+            rack.run(before_each=before_each, allow_unpaired_hooks=True),
             _WAIT_LIMIT_SECONDS,
         )
         settled_at = asyncio.get_running_loop().time()
