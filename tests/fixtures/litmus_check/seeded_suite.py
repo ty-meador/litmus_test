@@ -16,7 +16,8 @@ class SeededBlade(LitmusTest):
         self._limit_c = limit_c
 
     def build_suite(self) -> LitmusTest:
-        return self.case("temperature", self._temperature)
+        claims = [self.case("temperature", self._temperature)]  # seed: litmus/pure-build-suite
+        return self.sequence(self.name, claims)
 
     async def _temperature(self, _utils: TestUtils) -> Verdict:
         if self._limit_c < 0:
