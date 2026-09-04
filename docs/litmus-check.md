@@ -47,8 +47,16 @@ scaffolding suite authors copy from, so the examples always demonstrate the idio
 
 ## Rules
 
+| Code | Idiom | Runtime counterpart (the guarantee) |
+|---|---|---|
+| `litmus/gated-pass` | Every `return PASS` sits inside an `if` branch or `match` arm; the pass predicate is visible where the PASS is. | Tier 1: the child boundary accepts only the `PASS` identity and refuses to forge a verdict. |
+| `litmus/pure-build-suite` | `build_suite` is one `return` of composition calls: no other statements, no conditionals, comprehensions, lambdas, `await`, or walrus inside. | Tier 2: `__init_subclass__` requires `build_suite` with the right shape; tier 1 refuses anything but a `LitmusTest` from it. |
+| `litmus/immutable-self` | `self.<attr>` is assigned or deleted only in `__init__`; runtime state returns from `configure()` into `utils.ctx`. | Tier 1: the instance freezes after the most-derived `__init__`; assignment raises `AttributeError`. |
+| `litmus/constructor-hooks` | `use_survey` and `use_audit` are called only in `__init__`; hooks are identity, not runtime state. | Tier 1: both registrars raise `ContractViolation` on a frozen instance. |
+
 Run `litmus-check --list-rules` for the catalogue shipped in the installed version.
-Each rule is documented in its module under `tools/litmus_check/rules/`.
+Each rule's module docstring under `tools/litmus_check/rules/` states exactly what it
+flags, what it leaves alone, and why.
 
 ## Adding a rule
 
