@@ -23,6 +23,12 @@ class RemoteInterface(ABC):
     Contract:
       - `connect` / `disconnect` own the connected flag. Subclasses implement
         `_connect` and `_disconnect`; they do not set the flag themselves.
+      - `connect` is idempotent on a live transport. An addressed transport
+        (one whose `address` is not `None`) accepts `host` / `port` on
+        `connect` and re-points itself only while disconnected: asking a live
+        transport for a different address is refused with `ConnectionError`,
+        never silently replaced. The author disconnects first. A transport
+        with no address rejects `host` / `port` with `TypeError`.
       - `_disconnect` must be safe when the transport was never opened.
       - `disconnect` clears the flag even if `_disconnect` raises, so a later
         `exec` cannot silently run against a half-dead transport.
@@ -52,6 +58,15 @@ class RemoteInterface(ABC):
     def connected(self) -> bool:
         """True if the transport is open and `exec` is allowed to proceed."""
         return self._connected
+
+    @property
+    def address(self) -> tuple[str, int] | None:
+        """`(host, port)` this transport dials, or `None` for a transport with no address.
+
+        A UART on a local device node has no address; an SSH peer does. `connect`
+        reads this to decide whether `host` / `port` arguments mean anything here.
+        """
+        return None
 
     @property
     def hop(self) -> RemoteInterface | None:
@@ -99,15 +114,43 @@ class RemoteInterface(ABC):
         return f"connect: {self.route_label}"
 
     @final
-    async def connect(self) -> None:
+    async def connect(self, host: str | None = None, port: int | None = None) -> None:
         """Open the transport. Idempotent if already connected.
 
-        Raises whatever `_connect` raises when the peer cannot be reached.
+        `host` / `port`, on an addressed transport, name where to dial. While
+        disconnected they re-point the transport before it opens; on a live
+        transport the same address is a no-op and a different one is refused
+        with `ConnectionError` — disconnect first. A transport with no
+        `address` rejects them with `TypeError`.
+
+        Raises whatever `_connect` raises when the peer cannot be reached. A
+        refused dial leaves the transport closed and free for the next attempt.
         """
+        target = self._resolve_target(host, port)
+        current = self.address
         if self._connected:
-            return
+            if target is None or target == current:
+                return
+            assert current is not None
+            msg = (
+                f"Attempted to connect {type(self).__name__} to {target[0]}:{target[1]} "
+                f"while it already held an active connection to {current[0]}:{current[1]}"
+            )
+            raise ConnectionError(msg)
+        if target is not None and target != current:
+            self._retarget(*target)
         await self._connect()
         self._connected = True
+
+    def _resolve_target(self, host: str | None, port: int | None) -> tuple[str, int] | None:
+        """The `(host, port)` a `connect` call asks for, or `None` when it names neither."""
+        if host is None and port is None:
+            return None
+        current = self.address
+        if current is None:
+            msg = f"{type(self).__name__} has no address to connect to; it takes no host or port"
+            raise TypeError(msg)
+        return (host if host is not None else current[0], port if port is not None else current[1])
 
     @final
     async def disconnect(self) -> None:
@@ -157,6 +200,16 @@ class RemoteInterface(ABC):
             await self._cancel_in_flight()
         finally:
             self._connected = False
+
+    def _retarget(self, host: str, port: int) -> None:
+        """Point an addressed transport at a new `(host, port)`.
+
+        Called by `connect` only while disconnected, and only when the requested
+        address differs from `address`. Transports that report an address must
+        override this; the default refuses.
+        """
+        msg = f"{type(self).__name__} reports an address but cannot re-point it"
+        raise TypeError(msg)
 
     @abstractmethod
     async def _connect(self) -> None:
