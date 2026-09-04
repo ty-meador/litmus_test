@@ -24,6 +24,7 @@ check:  ## CI gate — verify only, no auto-fix. Must be green before push.
 	uv run ruff check .
 	uv run pyright
 	uv run pytest
+	uv run litmus-check examples
 
 SOAK_RUNS ?= 8
 

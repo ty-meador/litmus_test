@@ -9,14 +9,15 @@ at runtime.
 ```sh
 make install   # uv sync + git hooks
 make fix       # auto-format + auto-fix lint
-make check     # CI gate: format check, lint, pyright strict, pytest
+make check     # CI gate: format check, lint, pyright strict, pytest, litmus-check
 ```
 
 Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
 `overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
 patterns), `contracts.md` (the non-negotiable developer↔framework invariants), and
 `inspector-json.md` (the versioned downstream result contract), translated from the
-legacy docs and updated to the port's semantics.
+legacy docs and updated to the port's semantics, and `litmus-check.md` (the skippable
+tier-3 linter over authored suites).
 
 ## Deployment requirement
 
