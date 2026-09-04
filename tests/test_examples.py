@@ -1,15 +1,19 @@
-"""Executable examples and the terminal states they promise readers."""
+"""Executable examples and the terminal states and evidence they promise readers."""
 
 from __future__ import annotations
 
+import json
+import logging
 import re
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from examples.hello_world import HelloWorld
 from examples.remote_device_ssh import SshDevice
 from examples.ssh_tunneling import TunneledDevice
 from examples.test_composition import GroupedDevice, SequencedDevice
+from examples.wait_for_patterns import ConfigureGatedDevice, MainAssertionDevice
 from tests.loopback_sshd import LoopbackSshd
 
 from litmus import TestFailure
@@ -46,6 +50,15 @@ def _assert_legacy_shape(lines: list[str], *, secrets: tuple[str, ...]) -> None:
             assert _EXEC_ROUTING_SHAPE.fullmatch(line), line
         for secret in secrets:
             assert secret not in line
+
+
+def _artifact_payloads(root: Path) -> dict[str, Any]:
+    """Load the point-in-time evidence after the asynchronous run settles."""
+    return {
+        artifact["name"]: artifact
+        for path in root.glob("*.artifact")
+        if isinstance((artifact := json.loads(path.read_text())), dict)
+    }
 
 
 class TestHelloWorldExample:
@@ -112,6 +125,103 @@ class TestCompositionExample:
 
         assert sequence.state is State.PASS
         assert group.state is State.PASS
+
+
+class TestWaitForPatternsExample:
+    """Pin both polling classifications and the evidence visible to an Inspector."""
+
+    async def test_configure_gate_emits_a_reconstructable_artifact_trail(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="litmus"):
+            result = await ConfigureGatedDevice(
+                name="polling device",
+                service_states=("inactive", "activating", "active"),
+                health_response="ok: service healthy",
+                interval=0.001,
+                timeout_seconds=0.1,
+            ).run(
+                env={
+                    "LITMUS_ARTIFACT_ROOT": str(tmp_path),
+                    "PHYSICAL_LOCATION": "bench-7",
+                }
+            )
+
+        assert result.state is State.PASS
+        assert result.run_data == {
+            "measurements": [],
+            "service_state": "active",
+            "service_poll_attempts": 3,
+            "health_response": "ok: service healthy",
+            "cleanup_complete": True,
+        }
+
+        payload = json.loads(json.dumps(result.to_json()))
+        assert payload["ancestor_names"] == ["polling device"]
+        assert payload["bread_crumbs"] == "polling device"
+        assert payload["physical_location"] == "bench-7"
+        assert payload["summary_tree"] == {
+            "name": "polling device",
+            "type": "test-suite",
+            "state": "Pass",
+            "failure": None,
+            "children": [
+                {
+                    "name": "service-health",
+                    "type": "test-case",
+                    "state": "Pass",
+                    "failure": None,
+                    "children": [],
+                }
+            ],
+        }
+
+        artifacts = _artifact_payloads(tmp_path)
+        assert set(artifacts) == {
+            "pre-configure-1",
+            "post-configure-1",
+            "pre-test-1",
+            "post-test-1",
+            "pre-cleanup-1",
+            "post-cleanup-1",
+            "service-ready",
+            "service-health",
+        }
+        assert artifacts["service-ready"]["data"] == {"attempts": 3, "state": "active"}
+        assert artifacts["service-health"]["data"] == {"response": "ok: service healthy"}
+        assert artifacts["pre-configure-1"]["data"]["service_state"] == "not-configured"
+        assert artifacts["post-cleanup-1"]["data"]["cleanup_complete"] is True
+
+        poll_records = [
+            record for record in caplog.records if "service readiness poll" in record.getMessage()
+        ]
+        assert len(poll_records) == 3
+        assert {getattr(record, "litmus_scope", ()) for record in poll_records} == {
+            ("polling device",)
+        }
+        pointer_records = [
+            record
+            for record in caplog.records
+            if record.getMessage().startswith("artifact captured")
+        ]
+        assert len(pointer_records) == len(artifacts)
+        assert ("polling device", "service-health") in {
+            getattr(record, "litmus_scope", ()) for record in pointer_records
+        }
+
+    async def test_test_method_polling_produces_the_hardware_verdict(self) -> None:
+        result = await MainAssertionDevice(
+            name="stress device",
+            stress_states=(False, False, True),
+            interval=0.001,
+            timeout_seconds=0.1,
+        ).run()
+
+        assert result.state is State.PASS
+        assert result.run_data["stress_complete"] is True
+        assert result.run_data["stress_poll_attempts"] == 3
 
 
 class TestRemoteDeviceSshExample:
