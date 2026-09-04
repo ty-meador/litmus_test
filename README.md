@@ -56,3 +56,9 @@ The port design lives in the workspace plan
 (`../PLAN.md`); the TypeScript original is the `../litmus-test-legacy/` design reference,
 and its language server is `../litmus-language-server-legacy/`. Both are read-only —
 parity with them is explicitly not a goal. `PLAN.md` section 0 maps the workspace.
+
+## License
+
+Copyright 2026 Tyler Meador. Litmus is free software, released under the GNU General
+Public License, version 2 (`GPL-2.0-only`). The full text is in `LICENSE`; the copyright
+notice is in `NOTICE`. There is no warranty; see the license for the terms.
