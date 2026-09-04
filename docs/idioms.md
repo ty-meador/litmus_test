@@ -434,6 +434,11 @@ Where `wait_for()` is called determines what the timeout *means*, not what gets 
 
 `looking_for` is required and must be plain language — it becomes the Floor Technician's primary diagnostic string when a wait times out.
 
+The runnable [`examples/wait_for_patterns.py`](../examples/wait_for_patterns.py) ports
+both placements from the legacy example. It also shows how polling observations flow
+through scoped logs, phase-boundary surveys, point-in-time artifacts, `run_data`, and the
+root `summary_tree` without adding another evidence API.
+
 ---
 
 ## run_data — Structured Evidence
