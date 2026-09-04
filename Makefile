@@ -1,5 +1,5 @@
 # litmus — development entry points. All tooling config lives in pyproject.toml.
-.PHONY: install format lint fix typecheck test check soak hooks clean
+.PHONY: install format lint fix typecheck test coverage check soak hooks clean
 
 install:  ## Sync venv (incl. dev deps) and install git hooks
 	uv sync
@@ -19,11 +19,15 @@ typecheck:  ## Pyright strict
 test:  ## Run the framework self-test suite
 	uv run pytest
 
+coverage:  ## Self-tests under branch coverage; global and per-file floors enforced
+	uv run pytest --cov --cov-report=term --cov-report=json --cov-report=xml
+	uv run python tools/coverage_floor.py
+
 check:  ## CI gate — verify only, no auto-fix. Must be green before push.
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run pyright
-	uv run pytest
+	$(MAKE) coverage
 	uv run litmus-check examples
 
 SOAK_RUNS ?= 8
@@ -39,5 +43,5 @@ hooks:  ## Point git at the shared hooks (auto-lint on commit)
 	git config core.hooksPath .githooks
 
 clean:
-	rm -rf .venv .pytest_cache .ruff_cache dist
+	rm -rf .venv .pytest_cache .ruff_cache .coverage dist
 	find . -type d -name __pycache__ -exec rm -rf {} +
