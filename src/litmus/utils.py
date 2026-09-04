@@ -369,11 +369,18 @@ class TestUtils:
 
         Never raises for the command's own exit status. A non-zero `exit_code`
         is evidence for the test method to judge, not an exception. Signal-killed
-        and aborted commands settle as `exit_code == -1`. `CancelledError` still
-        propagates: that is TaskGroup teardown, not a command outcome.
+        and aborted commands settle as `exit_code == -1`. A closed transport
+        (including after `cancel_in_flight`) settles the same way, with the
+        protocol error on stderr — `RemoteInterface.exec` still raises
+        `ConnectionError` internally; this method is the author-facing surface
+        and stays total. `CancelledError` still propagates: that is TaskGroup
+        teardown, not a command outcome.
         """
         self._logger.info("attempting to run command >%s<", command)
-        result = await self._routing.exec(command)
+        try:
+            result = await self._routing.exec(command)
+        except ConnectionError as error:
+            result = ExecResult.settled("", str(error), None)
         if result.stderr:
             self._logger.error("stderr: \n%s", result.stderr)
         self._logger.info("exit code: %s", result.exit_code)

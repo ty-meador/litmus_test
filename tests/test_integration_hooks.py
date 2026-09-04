@@ -434,3 +434,127 @@ async def test_hook_abort_hard_closes_a_parked_remote_before_returning() -> None
     assert transport.cancel_count == 1
     assert transport.connected is False
     assert transport.has_in_flight is False
+
+
+class _HostMapConnector:
+    def __init__(self, hosts: dict[str, RemoteInterface]) -> None:
+        self._hosts = hosts
+
+    async def open(self, request: ShellOpenRequest) -> RemoteInterface:
+        transport = self._hosts[request.host]
+        await transport.connect()
+        return transport
+
+
+def _install_connector(utils: TestUtils, connector: object) -> None:
+    routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
+    object.__setattr__(routing, "_connector", connector)
+
+
+async def test_cleanup_exec_after_abort_is_not_a_contract_violation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = _ParkedTransport()
+    connector = _MockConnector(transport)
+    seen: dict[str, ExecResult] = {}
+
+    class FlashSuite(LitmusTest):
+        async def configure(self, utils: TestUtils) -> dict[str, object]:
+            _install_connector(utils, connector)
+            await utils.use_shell(host="dut", username="root")
+            return {}
+
+        def build_suite(self) -> LitmusTest:
+            return self.group(
+                "parallel",
+                [
+                    self.case("flash", self._flash),
+                    self.case("halt", self._halt),
+                ],
+            )
+
+        async def _flash(self, utils: TestUtils) -> Verdict:
+            seen["flash"] = await utils.exec("flash")
+            return PASS
+
+        async def _halt(self, utils: TestUtils) -> Verdict:
+            return PASS
+
+        async def cleanup(self, utils: TestUtils) -> None:
+            seen["cleanup"] = await utils.exec("id")
+
+    async def before_each(ctx: BeforeEachContext) -> None:
+        if ctx.name == "halt":
+            await transport.in_flight.wait()
+            raise RuntimeError("audit database unavailable")
+
+    async def after_each(ctx: AfterEachContext) -> None:
+        del ctx
+
+    with caplog.at_level("ERROR", logger="litmus"):
+        result = await FlashSuite(name="rack").run(
+            before_each=before_each,
+            after_each=after_each,
+        )
+
+    assert result.state is State.ABORTED
+    assert seen["cleanup"].exit_code == -1
+    assert "not connected" in seen["cleanup"].stderr
+    assert seen["flash"].exit_code == -1
+    banners = [
+        record.message for record in caplog.records if "CONTRACT VIOLATION" in record.message
+    ]
+    cleanup_banners = [
+        record.message for record in caplog.records if "cleanup failed" in record.message
+    ]
+    assert banners == []
+    assert cleanup_banners == []
+    assert transport.connected is False
+
+
+async def test_abort_hard_closes_every_opened_transport() -> None:
+    hop = _ParkedTransport()
+    dut = _ParkedTransport()
+    connector = _HostMapConnector({"jump": hop, "dut": dut})
+
+    class FlashSuite(LitmusTest):
+        async def configure(self, utils: TestUtils) -> dict[str, object]:
+            _install_connector(utils, connector)
+            await utils.get_shell(host="jump", username="ops")
+            await utils.use_shell(host="dut", username="root")
+            return {}
+
+        def build_suite(self) -> LitmusTest:
+            return self.group(
+                "parallel",
+                [
+                    self.case("flash", self._flash),
+                    self.case("halt", self._halt),
+                ],
+            )
+
+        async def _flash(self, utils: TestUtils) -> Verdict:
+            await utils.exec("flash")
+            return PASS
+
+        async def _halt(self, utils: TestUtils) -> Verdict:
+            return PASS
+
+    async def before_each(ctx: BeforeEachContext) -> None:
+        if ctx.name == "halt":
+            await dut.in_flight.wait()
+            raise RuntimeError("audit database unavailable")
+
+    async def after_each(ctx: AfterEachContext) -> None:
+        del ctx
+
+    result = await FlashSuite(name="rack").run(
+        before_each=before_each,
+        after_each=after_each,
+    )
+
+    assert result.state is State.ABORTED
+    assert hop.cancel_count == 1
+    assert dut.cancel_count == 1
+    assert hop.connected is False
+    assert dut.connected is False
