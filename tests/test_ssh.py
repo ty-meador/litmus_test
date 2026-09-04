@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import socket
 import stat
 from pathlib import Path
 
@@ -175,6 +176,35 @@ class TestHardClose:
         await ssh.cancel_in_flight()
 
         assert ssh.connected is False
+
+    async def test_a_refused_connect_leaves_the_interface_free_for_the_next_attempt(
+        self,
+    ) -> None:
+        """A failed dial claims nothing: the handle is still available (Ty, !20)."""
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+        probe.close()
+        peer = await _LoopbackSshd.start(username="ops", password="jump")
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=dead_port,
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        try:
+            with pytest.raises(ConnectionRefusedError):
+                await ssh.connect()
+            assert ssh.connected is False
+
+            await ssh.reconnect_to("127.0.0.1", port=peer.port)
+
+            assert ssh.connected is True
+            assert (await ssh.exec("hello")).stdout == "hello"
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
 
 
 class TestKeyAuth:
