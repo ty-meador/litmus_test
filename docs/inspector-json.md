@@ -19,7 +19,7 @@ run tree.
 | `bread_crumbs` | string | Display path, exactly `ancestor_names.join("/")`. |
 | `summary_tree` | object | Recursive snapshot rooted at this node. |
 | `physical_location` | string | `PHYSICAL_LOCATION`, or `unknown` when absent. |
-| `env` | object | Environment snapshot taken at the start of the run. Published verbatim; see below. |
+| `env` | object | Environment snapshot taken at the start of the run, filtered per the run's allow or deny list; see below. |
 | `run_data` | object | Detached structured evidence snapshot. It always contains a framework-owned `measurements` array reserved for a future parametric-measurement protocol. |
 
 Version 1 does not define measurement entries, limits, units, aggregation, SPC, or Cpk;
@@ -30,14 +30,29 @@ Python-only lifecycle details such as the internal slot and raw return value are
 part of this payload. Consumers must treat unknown fields as additive and select a
 decoder by `format_version`.
 
-### The `env` snapshot is verbatim
+### The `env` snapshot is filtered by the run, not by the schema
 
-Version 1 publishes the process environment exactly as the run found it. Nothing is
-filtered, redacted, or hashed: any value present in the environment at run start —
-including tokens or credentials injected by CI or the shell — is serialized into the
-artifact. Until the redaction question is settled (issue #53), keeping secrets out of
-the run environment is the operator's obligation. Decoders must not depend on the
-snapshot remaining unfiltered in future format versions.
+Version 1 publishes the run environment as the run declared it. `LitmusTest.run()` and
+`TestUtils` accept **either** `env_allow` **or** `env_deny` (both is a `ValueError`): a
+list of regular expressions matched with `re.search` against each variable's *name*.
+`TOKEN` therefore matches `GITLAB_TOKEN`; anchor as `^HOME$` for an exact name. With an
+allow list only matching names are published; with a deny list matching names are
+withheld. Values are never hashed or rewritten — a variable is either present verbatim
+or absent.
+
+With neither list the snapshot is verbatim: every value present at run start, including
+tokens or credentials injected by CI or the shell, is serialized into the artifact.
+Keeping secrets out of an unfiltered run environment is the operator's obligation.
+
+**DEBUG override.** When the source environment carries `environment=DEBUG`, the
+declared list is ignored and every variable is published. The run logs a warning —
+`DEBUG mode detected, ignoring provided <allow|deny> list and including ALL environment
+variables` — so the artifact's extra content is explained in its own timeline.
+
+The filter is applied once, at the root, and every node and every `RunResult` sees the
+same filtered view. `PHYSICAL_LOCATION` and `LITMUS_ARTIFACT_ROOT` are read from that
+view, so an allow list must let them through to keep their effect. Decoders must not
+assume any particular variable is present (ruling on issue #53, 2026-09-03).
 
 ## Summary tree node
 
