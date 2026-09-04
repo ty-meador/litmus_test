@@ -280,7 +280,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             raise ContractViolation(self.name, "hooks may be registered only during construction")
         self._audits.append(AuditHook(interval=interval, fn=fn))
 
-    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+    async def configure(self, utils: TestUtils) -> Mapping[str, Any]:
         """Prepare the test and return context for its suite and cleanup."""
         return {}
 
@@ -804,7 +804,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
 
     @final
-    async def _configure_and_merge_context(self, utils: TestUtils) -> dict[str, Any]:
+    async def _configure_and_merge_context(self, utils: TestUtils) -> Mapping[str, Any]:
         """Keep configure and its required ctx merge inside one child boundary."""
         configured = await self.configure(utils)
         utils.ctx.update(configured)
