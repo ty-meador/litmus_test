@@ -10,14 +10,18 @@ from typing import Any, cast
 
 import pytest
 from examples.hello_world import HelloWorld
+from examples.pi_hole_server import PiHoleServer
 from examples.remote_device_ssh import SshDevice
 from examples.ssh_tunneling import TunneledDevice
 from examples.test_composition import GroupedDevice, SequencedDevice
 from examples.wait_for_patterns import ConfigureGatedDevice, MainAssertionDevice
 from tests.loopback_sshd import LoopbackSshd
 
-from litmus import TestFailure
+from litmus import ExecResult, RunResult, TestFailure, TestUtils
 from litmus.lifecycle import Outcome, State
+from litmus.mock import MockTransport
+from litmus.remote import RemoteInterface
+from litmus.routing import ShellOpenRequest, SshConnector
 
 # PLAN §5.6 / docs/contracts.md Evidence Contract — the legacy provenance shape.
 # Python words (`use_shell`) replace TS `useShell`; the line grammar is the same.
@@ -294,3 +298,237 @@ class TestSshTunnelingExample:
             "exec routing: local",
             "exec routing: local",
         ]
+
+
+_PIHOLE_VERSIONS = """\
+Pi-hole version is v5.18.2 (Latest: v5.18.3)
+web version is v5.21.1 (Latest: v5.21.1)
+FTL version is v5.25.2 (Latest: v5.25.2)
+"""
+_PIHOLE_STATUS = """\
+  [✓] DNS service is running
+  [✓] Pi-hole blocking is enabled
+"""
+_PIHOLE_SECRET = "pihole-secret"
+_TAIL_COMMANDS = (
+    "tail -n 50 /opt/pihole/ftl.log",
+    "tail -n 50 /var/log/pihole/pihole.log",
+    "tail -n 50 /var/log/pihole/pihole_updateGravity.log",
+)
+
+
+def _ok(stdout: str = "") -> ExecResult:
+    return ExecResult(stdout=stdout, stderr="", exit_code=0)
+
+
+def _script_healthy_pihole(transport: MockTransport) -> None:
+    transport.script("pihole -v", _ok(_PIHOLE_VERSIONS))
+    transport.script("uptime", _ok(" 10:04:11 up 4 days,  3:12"))
+    transport.script("systemctl status pihole-FTL", _ok("     Active: active (running)"))
+    transport.script("dmesg --level=emerg,alert,crit", _ok(""))
+    transport.script("pihole status", _ok(_PIHOLE_STATUS))
+    for command in _TAIL_COMMANDS:
+        transport.script(command, _ok(""))
+
+
+def _patch_ssh_connector(monkeypatch: pytest.MonkeyPatch, transport: MockTransport) -> None:
+    """Node views construct a fresh ExecRouting; the seed's connector is not inherited."""
+
+    async def open_mock(_self: SshConnector, request: ShellOpenRequest) -> RemoteInterface:
+        del request
+        await transport.connect()
+        return transport
+
+    monkeypatch.setattr(SshConnector, "open", open_mock)
+
+
+async def _run_pihole(
+    transport: MockTransport,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    artifact_root: Path | None = None,
+) -> RunResult:
+    _patch_ssh_connector(monkeypatch, transport)
+    env: dict[str, str] = {"PHYSICAL_LOCATION": "bench-pihole"}
+    if artifact_root is not None:
+        env["LITMUS_ARTIFACT_ROOT"] = str(artifact_root)
+    utils = TestUtils(env=env)
+    return await PiHoleServer(
+        name="PiHoleServer",
+        host="pihole.lab",
+        username="root",
+        password=_PIHOLE_SECRET,
+    ).main(utils)
+
+
+class TestPiHoleServerExample:
+    """Dogfood suite: hop, surveys, versions, and the fail-fast health sequence."""
+
+    async def test_healthy_run_emits_versions_tree_and_survey_trail(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transport = MockTransport()
+        _script_healthy_pihole(transport)
+
+        with caplog.at_level(logging.INFO, logger="litmus"):
+            result = await _run_pihole(transport, monkeypatch, artifact_root=tmp_path)
+
+        assert result.state is State.PASS
+        assert transport.connected is False
+        assert transport.connect_count == 1
+        assert transport.disconnect_count >= 1
+        assert result.run_data["versions"] == {
+            "pihole": {"current": "v5.18.2", "latest": "v5.18.3"},
+            "web": {"current": "v5.21.1", "latest": "v5.21.1"},
+            "ftl": {"current": "v5.25.2", "latest": "v5.25.2"},
+        }
+        payload = json.loads(json.dumps(result.to_json()))
+        assert payload["summary_tree"] == {
+            "name": "PiHoleServer",
+            "type": "test-suite",
+            "state": "Pass",
+            "failure": None,
+            "children": [
+                {
+                    "name": "PiHoleServer-main-sequence",
+                    "type": "test-sequence",
+                    "state": "Pass",
+                    "failure": None,
+                    "children": [
+                        {
+                            "name": "sanity-check",
+                            "type": "test-case",
+                            "state": "Pass",
+                            "failure": None,
+                            "children": [],
+                        },
+                        {
+                            "name": "pihole-running",
+                            "type": "test-case",
+                            "state": "Pass",
+                            "failure": None,
+                            "children": [],
+                        },
+                        {
+                            "name": "health-checks",
+                            "type": "test-group",
+                            "state": "Pass",
+                            "failure": None,
+                            "children": [
+                                {
+                                    "name": "dmesg-clean",
+                                    "type": "test-case",
+                                    "state": "Pass",
+                                    "failure": None,
+                                    "children": [],
+                                },
+                                {
+                                    "name": "status-checks",
+                                    "type": "test-case",
+                                    "state": "Pass",
+                                    "failure": None,
+                                    "children": [],
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        artifacts = _artifact_payloads(tmp_path)
+        assert set(artifacts) >= {
+            "pre-configure-1",
+            "post-configure-1",
+            "pre-test-1",
+            "post-test-1",
+            "pre-cleanup-1",
+            "post-cleanup-1",
+        }
+        assert artifacts["post-configure-1"]["data"] == {
+            "ftl": "(empty)",
+            "pihole": "(empty)",
+            "gravity": "(empty)",
+        }
+        for secret_line in caplog.records:
+            assert _PIHOLE_SECRET not in secret_line.getMessage()
+        hop_commands = set(transport.commands)
+        assert {
+            "pihole -v",
+            "uptime",
+            "systemctl status pihole-FTL",
+            "dmesg --level=emerg,alert,crit",
+            "pihole status",
+            *_TAIL_COMMANDS,
+        }.issubset(hop_commands)
+
+    async def test_inactive_ftl_fails_the_sequence_before_health_checks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transport = MockTransport()
+        _script_healthy_pihole(transport)
+        transport.script(
+            "systemctl status pihole-FTL",
+            _ok("     Active: inactive (dead)"),
+        )
+
+        result = await _run_pihole(transport, monkeypatch)
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert result.failure.fail_message == "Pi-Hole FTL service not active"
+        sequence = result.summary_tree.children[0]
+        sanity, ftl, health = sequence.children
+        assert sanity.state is State.PASS
+        assert ftl.state is State.FAIL
+        assert health.state is None
+        assert "dmesg --level=emerg,alert,crit" not in transport.commands
+        assert "pihole status" not in transport.commands
+
+    async def test_critical_dmesg_is_a_hardware_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        transport = MockTransport()
+        _script_healthy_pihole(transport)
+        transport.script(
+            "dmesg --level=emerg,alert,crit",
+            _ok(" miller-raid: disk 2 unrecoverable"),
+        )
+
+        result = await _run_pihole(transport, monkeypatch)
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert result.failure.fail_message == "Critical kernel errors detected"
+        health = result.summary_tree.children[0].children[2]
+        dmesg, status = health.children
+        assert dmesg.state is State.FAIL
+        assert status.state is State.PASS
+
+    async def test_status_lines_without_a_checkmark_fail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transport = MockTransport()
+        _script_healthy_pihole(transport)
+        transport.script("pihole status", _ok("  [✗] DNS service is NOT running\n"))
+
+        result = await _run_pihole(transport, monkeypatch)
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert result.failure.fail_message == "One or more status checks failed"
+        assert result.failure.received == ["  [✗] DNS service is NOT running"]
+
+    async def test_refused_connect_is_fail_not_a_contract_banner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        transport = MockTransport()
+        transport.fail_next_connect(ConnectionError("peer unreachable"))
+
+        result = await _run_pihole(transport, monkeypatch)
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "SSH connect failed" in result.failure.fail_message
+        assert "peer unreachable" in result.failure.fail_message
+        assert transport.commands == ()
