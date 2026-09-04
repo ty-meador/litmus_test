@@ -13,6 +13,12 @@ source of truth and this doc is the explanation.
   (auto mode) test.
 - One entry point: `make`. `make install` once, `make fix` while working,
   `make check` before every push — it is the CI gate and runs verify-only.
+- **The locked set is audited, not trusted.** `make check` ends with `make audit`:
+  `pip-audit` over every pin in `uv.lock`, red on any published vulnerability. It needs
+  the network; there is no offline pass. A finding is fixed by upgrading the pin; if an
+  advisory truly does not apply, `--ignore-vuln` goes in the Makefile with the issue that
+  says why. A weekly CI schedule refreshes `uv.lock` and opens the update MR itself
+  (`tools/dependency_update.py`); nobody has to remember to look.
 - The pre-commit hook (installed by `make install`) auto-formats and auto-fixes staged
   files. Don't bypass it with `--no-verify`.
 
