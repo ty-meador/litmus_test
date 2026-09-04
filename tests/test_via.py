@@ -612,6 +612,7 @@ class TestViaHopContracts:
         utils = TestUtils()._for_node(  # pyright: ignore[reportPrivateUsage]
             "target",
             RunAbort(),
+            discrete_log_file=True,
             isolate_context=True,
         )
         with pytest.raises(FrameworkContractViolation, match="no exec route"):
