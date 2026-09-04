@@ -161,6 +161,7 @@ class TestConstructorHooksAtTheCommandLine:
             "litmus/gated-pass",
             "litmus/immutable-self",
             "litmus/pure-build-suite",
+            "litmus/unannotated-interface",
         ]
         assert all("seeded_suite.py" in line for line in lines[:-1])
-        assert lines[-1] == "Found 4 violations."
+        assert lines[-1] == "Found 5 violations."
