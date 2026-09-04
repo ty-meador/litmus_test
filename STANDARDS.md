@@ -26,9 +26,11 @@ rules and pyright strict — an unannotated def fails `make check`.
   `ruff`'s `UP` rules push you there automatically.
 - `Any` is allowed only where the contract genuinely is "any" (e.g. `dict[str, Any]`
   ctx). Never use it to silence pyright.
-- Lifecycle context has one runtime shape: a mutable `dict[str, Any]`. Accordingly,
-  the framework annotation for `configure()` is `dict[str, Any]`; a suite may narrow
-  that return type to a local `TypedDict` when pyright precision is useful. A future
+- Lifecycle context has one runtime shape: a mutable `dict[str, Any]` (`utils.ctx`).
+  The framework annotation for `configure()` is `Mapping[str, Any]` so that a suite may
+  narrow that return type to a local `TypedDict` under pyright strict; returning a plain
+  `dict[str, Any]` remains the default. The framework copies the return into the dict
+  it owns, so the one runtime shape is `utils.ctx`, not the return value. A future
   generic `TestUtils[CtxT]` may carry that same annotation as opt-in sugar, but it must
   still expose the framework-owned dict at runtime. Do not introduce a context
   dataclass or require every suite to parameterize `LitmusTest`.
