@@ -5,6 +5,8 @@ the exact ``line:col`` it expects, which is what proves the fixture is caught en
 end rather than merely somewhere.
 """
 
+from typing import Any
+
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 
 
@@ -14,6 +16,10 @@ class SeededBlade(LitmusTest):
     def __init__(self, *, name: str, limit_c: float) -> None:
         super().__init__(name=name)
         self._limit_c = limit_c
+
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+        self._reading_c = 40.0  # seed: litmus/immutable-self
+        return {}
 
     def build_suite(self) -> LitmusTest:
         claims = [self.case("temperature", self._temperature)]  # seed: litmus/pure-build-suite
