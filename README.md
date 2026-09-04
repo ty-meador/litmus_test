@@ -21,6 +21,13 @@ uv run python examples/test_composition.py
 uv run python examples/wait_for_patterns.py
 ```
 
+The pi-hole dogfood suite is the end-to-end proof against a real hop. It needs
+`TARGET_ADDRESS` and `TARGET_USER`; `TARGET_PASSWORD` and `TARGET_PORT` are optional:
+
+```sh
+uv run python examples/pi_hole_server.py
+```
+
 `wait_for_patterns.py` demonstrates both readiness polling in `configure()` and verdict
 polling in a test method. Its runs emit phase-boundary surveys, point-in-time artifacts,
 scoped log pointers, serializable `run_data`, and a root `summary_tree` suitable for an
