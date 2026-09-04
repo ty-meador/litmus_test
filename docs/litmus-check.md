@@ -53,6 +53,7 @@ scaffolding suite authors copy from, so the examples always demonstrate the idio
 | `litmus/pure-build-suite` | `build_suite` is one `return` of composition calls: no other statements, no conditionals, comprehensions, lambdas, `await`, or walrus inside. | Tier 2: `__init_subclass__` requires `build_suite` with the right shape; tier 1 refuses anything but a `LitmusTest` from it. |
 | `litmus/immutable-self` | `self.<attr>` is assigned or deleted only in `__init__`; runtime state returns from `configure()` into `utils.ctx`. | Tier 1: the instance freezes after the most-derived `__init__`; assignment raises `AttributeError`. |
 | `litmus/constructor-hooks` | `use_survey` and `use_audit` are called only in `__init__`; hooks are identity, not runtime state. | Tier 1: both registrars raise `ContractViolation` on a frozen instance. |
+| `litmus/unannotated-interface` | Functions and methods inside suite classes annotate every explicit parameter and return; methods passed to `self.case` declare `-> Verdict`. | Authoring clarity only: runtime hardware and verdict integrity remain enforced by tiers 1–2. |
 
 Run `litmus-check --list-rules` for the catalogue shipped in the installed version.
 Each rule's module docstring under `tools/litmus_check/rules/` states exactly what it
@@ -79,8 +80,8 @@ a note in the changelog of the MR that does so.
 
 ## What this tier is not
 
-- It is not a type checker. Suites are held to the same annotation standard as the
-  framework (STANDARDS.md §2), and pyright strict is how that is enforced.
+- It is not a full type checker. The annotation rule makes suite interfaces explicit;
+  pyright remains the authority that checks whether those types agree.
 - It is not the language server. The CLI landed first; a pylsp adapter over the same
   registry is the planned follow-on.
 - It is not a guard. See the table above.

@@ -33,3 +33,6 @@ class SeededBlade(LitmusTest):
 
     async def _snapshot(self, _utils: TestUtils) -> object:
         return {"reading_c": self._reading_c}
+
+    def _annotation_seed(self, value) -> None:  # type: ignore  # noqa: ANN001
+        del value  # seed: litmus/unannotated-interface
