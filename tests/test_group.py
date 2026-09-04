@@ -5,7 +5,6 @@ from typing import cast
 
 from litmus import (
     PASS,
-    AfterEachContext,
     BeforeEachContext,
     ExternalIntegrationFailure,
     LitmusTest,
@@ -142,12 +141,9 @@ class TestGroupStructuredConcurrency:
                 await sibling_started.wait()
                 raise cause
 
-        async def after_each(ctx: AfterEachContext) -> None:
-            del ctx
-
         outcome = await Suite(name="rack").run(
             before_each=before_each,
-            after_each=after_each,
+            allow_unpaired_hooks=True,
         )
         sequence_children = cast("tuple[RunResult, ...]", outcome.value)
         group = sequence_children[0]
