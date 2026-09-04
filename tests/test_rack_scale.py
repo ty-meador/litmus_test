@@ -1,0 +1,292 @@
+"""Rack-scale concurrency, isolation, memory, and abort measurements."""
+
+from __future__ import annotations
+
+import asyncio
+import gc
+import tracemalloc
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import cast
+
+from litmus import (
+    PASS,
+    AfterEachContext,
+    BeforeEachContext,
+    LitmusTest,
+    RunResult,
+    SummaryTreeNode,
+    TestFailure,
+    TestUtils,
+    Verdict,
+)
+from litmus.executor import ExecResult
+from litmus.lifecycle import State
+from litmus.mock import MockTransport
+from litmus.remote import RemoteInterface
+from litmus.routing import ExecRouting, ShellOpenRequest
+
+_DUT_COUNT = 70
+_MEMORY_ROUNDS = 4
+_RETAINED_MEMORY_LIMIT_BYTES = 256 * 1024
+_ABORT_LATENCY_LIMIT_SECONDS = 1.0
+_WAIT_LIMIT_SECONDS = 3.0
+
+
+class _RackCoordinator:
+    """Hold synthetic DUTs at a fair-start barrier and record settlements."""
+
+    def __init__(self, expected: int) -> None:
+        self.expected = expected
+        self.started: set[int] = set()
+        self.completed: set[int] = set()
+        self.all_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def rendezvous(self, dut_id: int) -> None:
+        """Record one DUT as runnable, then wait for the rack-wide release."""
+        self.started.add(dut_id)
+        if len(self.started) == self.expected:
+            self.all_started.set()
+        await self.release.wait()
+
+
+class _MockConnector:
+    """Open exactly one synthetic transport for one DUT."""
+
+    def __init__(self, host: str, transport: MockTransport) -> None:
+        self._host = host
+        self._transport = transport
+
+    async def open(self, request: ShellOpenRequest) -> RemoteInterface:
+        """Connect the transport named by this DUT's declared route."""
+        if request.host != self._host:
+            msg = f"connector for {self._host} cannot open {request.host}"
+            raise ConnectionError(msg)
+        await self._transport.connect()
+        return self._transport
+
+
+@dataclass(slots=True)
+class _AbortMeasurement:
+    """Capture the event-loop instant at which the harness abort begins."""
+
+    requested_at: float | None = None
+
+
+class _SyntheticDut(LitmusTest):
+    """Represent one independently routed DUT in the synthetic rack."""
+
+    def __init__(
+        self,
+        *,
+        dut_id: int,
+        transport: MockTransport,
+        coordinator: _RackCoordinator,
+        include_abort_trigger: bool = False,
+    ) -> None:
+        super().__init__(name=f"dut-{dut_id:02d}")
+        self._dut_id = dut_id
+        self._transport = transport
+        self._coordinator = coordinator
+        self._include_abort_trigger = include_abort_trigger
+
+    async def configure(self, utils: TestUtils) -> dict[str, object]:
+        """Connect this DUT to its private mock transport."""
+        host = self.name
+        routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
+        object.__setattr__(routing, "_connector", _MockConnector(host, self._transport))
+        await utils.use_shell(host=host, username="root")
+        return {}
+
+    def build_suite(self) -> LitmusTest:
+        """Run the DUT probe and, for one peer, the harness-abort trigger."""
+        tests = [self.case("probe", self._probe)]
+        if self._include_abort_trigger:
+            tests.append(self.case("trigger whole-rack abort", self._abort_trigger))
+        return self.group(f"{self.name} claims", tests)
+
+    async def _probe(self, utils: TestUtils) -> Verdict:
+        await self._coordinator.rendezvous(self._dut_id)
+        result = await utils.exec("probe")
+        if result.exit_code != 0:
+            raise TestFailure(
+                "synthetic DUT probe failed",
+                f"exit code 0 from {self.name}",
+                result.exit_code,
+            )
+        self._coordinator.completed.add(self._dut_id)
+        return PASS
+
+    async def _abort_trigger(self, utils: TestUtils) -> Verdict:
+        del utils
+        return PASS
+
+
+class _SyntheticRack(LitmusTest):
+    """Compose exactly seventy independent synthetic DUT lifecycles."""
+
+    def __init__(
+        self,
+        *,
+        transports: Sequence[MockTransport],
+        coordinator: _RackCoordinator,
+        include_abort_trigger: bool = False,
+    ) -> None:
+        super().__init__(name="synthetic rack")
+        self._duts = tuple(
+            _SyntheticDut(
+                dut_id=index,
+                transport=transport,
+                coordinator=coordinator,
+                include_abort_trigger=include_abort_trigger and index == 0,
+            )
+            for index, transport in enumerate(transports)
+        )
+
+    def build_suite(self) -> LitmusTest:
+        """Run all DUT lifecycles under the rack's structured-concurrency owner."""
+        return self.group("rack DUTs", self._duts)
+
+
+def _rack(
+    *,
+    failed_dut: int | None = None,
+    park_probes: bool = False,
+    include_abort_trigger: bool = False,
+) -> tuple[_SyntheticRack, _RackCoordinator, tuple[MockTransport, ...]]:
+    transports = tuple(MockTransport() for _ in range(_DUT_COUNT))
+    if failed_dut is not None:
+        transports[failed_dut].script(
+            "probe",
+            ExecResult(stdout="", stderr="synthetic fault", exit_code=1),
+        )
+    if park_probes:
+        for transport in transports:
+            transport.park("probe")
+
+    coordinator = _RackCoordinator(_DUT_COUNT)
+    rack = _SyntheticRack(
+        transports=transports,
+        coordinator=coordinator,
+        include_abort_trigger=include_abort_trigger,
+    )
+    return rack, coordinator, transports
+
+
+def _dut_results(result: RunResult) -> tuple[SummaryTreeNode, ...]:
+    rack_group = result.summary_tree.children[0]
+    return rack_group.children
+
+
+async def _run_released_rack() -> None:
+    rack, coordinator, _ = _rack()
+    coordinator.release.set()
+    result = await rack.run()
+    assert result.state is State.PASS
+
+
+def _retained_litmus_bytes() -> int:
+    snapshot = tracemalloc.take_snapshot().filter_traces(
+        (tracemalloc.Filter(True, "*/src/litmus/*"),)
+    )
+    return sum(stat.size for stat in snapshot.statistics("filename"))
+
+
+class TestRackScale:
+    """Prove the event-loop architecture at the claimed seventy-DUT scale."""
+
+    async def test_seventy_duts_run_concurrently_to_completion(self) -> None:
+        rack, coordinator, transports = _rack()
+        running = asyncio.create_task(rack.run())
+
+        await asyncio.wait_for(coordinator.all_started.wait(), _WAIT_LIMIT_SECONDS)
+        assert coordinator.started == set(range(_DUT_COUNT))
+        assert coordinator.completed == set()
+
+        coordinator.release.set()
+        result = await asyncio.wait_for(running, _WAIT_LIMIT_SECONDS)
+
+        assert result.state is State.PASS
+        assert coordinator.completed == set(range(_DUT_COUNT))
+        assert len(_dut_results(result)) == _DUT_COUNT
+        assert all(node.state is State.PASS for node in _dut_results(result))
+        assert all(transport.commands == ("probe",) for transport in transports)
+        assert all(transport.disconnect_count == 1 for transport in transports)
+
+    async def test_one_dut_failure_leaves_the_other_sixty_nine_unaffected(self) -> None:
+        failed_dut = 12
+        rack, coordinator, transports = _rack(failed_dut=failed_dut)
+        coordinator.release.set()
+
+        result = await asyncio.wait_for(rack.run(), _WAIT_LIMIT_SECONDS)
+        dut_results = _dut_results(result)
+
+        assert result.state is State.FAIL
+        assert [node.state for node in dut_results].count(State.FAIL) == 1
+        assert dut_results[failed_dut].state is State.FAIL
+        assert coordinator.completed == set(range(_DUT_COUNT)) - {failed_dut}
+        assert all(transport.commands == ("probe",) for transport in transports)
+        assert all(transport.disconnect_count == 1 for transport in transports)
+
+    async def test_retained_framework_memory_stays_flat_across_loaded_racks(self) -> None:
+        await _run_released_rack()
+        gc.collect()
+        tracemalloc.start()
+        try:
+            await _run_released_rack()
+            gc.collect()
+            baseline = _retained_litmus_bytes()
+            samples: list[int] = []
+            for _ in range(_MEMORY_ROUNDS):
+                await _run_released_rack()
+                gc.collect()
+                samples.append(_retained_litmus_bytes())
+        finally:
+            tracemalloc.stop()
+
+        retained_growth = max(samples) - baseline
+        assert retained_growth <= _RETAINED_MEMORY_LIMIT_BYTES, (
+            f"retained Litmus memory grew by {retained_growth} bytes; "
+            f"limit is {_RETAINED_MEMORY_LIMIT_BYTES} bytes"
+        )
+
+    async def test_whole_rack_abort_latency_is_below_one_second(self) -> None:
+        rack, coordinator, transports = _rack(
+            park_probes=True,
+            include_abort_trigger=True,
+        )
+        measurement = _AbortMeasurement()
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            if ctx.name != "trigger whole-rack abort":
+                return
+            await asyncio.wait_for(coordinator.all_started.wait(), _WAIT_LIMIT_SECONDS)
+            deadline = asyncio.get_running_loop().time() + _WAIT_LIMIT_SECONDS
+            while sum(transport.in_flight_count for transport in transports) != _DUT_COUNT:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError("not every DUT entered its parked transport")
+                await asyncio.sleep(0)
+            measurement.requested_at = asyncio.get_running_loop().time()
+            raise RuntimeError("synthetic rack controller unavailable")
+
+        async def after_each(ctx: AfterEachContext) -> None:
+            del ctx
+
+        coordinator.release.set()
+        result = await asyncio.wait_for(
+            rack.run(before_each=before_each, after_each=after_each),
+            _WAIT_LIMIT_SECONDS,
+        )
+        settled_at = asyncio.get_running_loop().time()
+
+        assert measurement.requested_at is not None
+        abort_latency = settled_at - measurement.requested_at
+        assert abort_latency < _ABORT_LATENCY_LIMIT_SECONDS, (
+            f"whole-rack abort took {abort_latency:.6f}s; "
+            f"limit is {_ABORT_LATENCY_LIMIT_SECONDS:.1f}s"
+        )
+        assert result.state is State.ABORTED
+        assert all(transport.cancel_count == 1 for transport in transports)
+        assert all(not transport.connected for transport in transports)
+        assert all(not transport.has_in_flight for transport in transports)
