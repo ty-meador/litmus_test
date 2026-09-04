@@ -38,23 +38,19 @@ class SequencedDevice(LitmusTest):
         )
 
     async def _boot_check(self, _utils: TestUtils) -> Verdict:
-        if not self._service_active:
-            raise TestFailure("service not active", "active", "inactive")
-        return PASS
+        if self._service_active:
+            return PASS
+        raise TestFailure("service not active", "active", "inactive")
 
     async def _firmware_version_check(self, _utils: TestUtils) -> Verdict:
-        if "2.4.1" not in self._firmware_version:
-            raise TestFailure(
-                "firmware version mismatch",
-                "2.4.1",
-                self._firmware_version,
-            )
-        return PASS
+        if "2.4.1" in self._firmware_version:
+            return PASS
+        raise TestFailure("firmware version mismatch", "2.4.1", self._firmware_version)
 
     async def _application_running(self, _utils: TestUtils) -> Verdict:
-        if self._application_pid is None:
-            raise TestFailure("application not running", "pid present", "(none)")
-        return PASS
+        if self._application_pid is not None:
+            return PASS
+        raise TestFailure("application not running", "pid present", "(none)")
 
 
 class GroupedDevice(LitmusTest):
@@ -86,31 +82,19 @@ class GroupedDevice(LitmusTest):
         )
 
     async def _temperature(self, _utils: TestUtils) -> Verdict:
-        if self._temperature_c > 85:
-            raise TestFailure(
-                "temperature over limit",
-                "<= 85 degC",
-                f"{self._temperature_c:g} degC",
-            )
-        return PASS
+        if self._temperature_c <= 85:
+            return PASS
+        raise TestFailure("temperature over limit", "<= 85 degC", f"{self._temperature_c:g} degC")
 
     async def _voltage(self, _utils: TestUtils) -> Verdict:
-        if abs(self._voltage_v - 3.3) > 0.1:
-            raise TestFailure(
-                "voltage out of spec",
-                "3.3 +/- 0.1 V",
-                f"{self._voltage_v:.3f} V",
-            )
-        return PASS
+        if abs(self._voltage_v - 3.3) <= 0.1:
+            return PASS
+        raise TestFailure("voltage out of spec", "3.3 +/- 0.1 V", f"{self._voltage_v:.3f} V")
 
     async def _fan_speed(self, _utils: TestUtils) -> Verdict:
-        if self._fan_rpm < 1000:
-            raise TestFailure(
-                "fan speed below minimum",
-                ">= 1000 RPM",
-                f"{self._fan_rpm} RPM",
-            )
-        return PASS
+        if self._fan_rpm >= 1000:
+            return PASS
+        raise TestFailure("fan speed below minimum", ">= 1000 RPM", f"{self._fan_rpm} RPM")
 
 
 class CompositionExample:
