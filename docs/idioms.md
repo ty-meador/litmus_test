@@ -352,9 +352,8 @@ The versioned payload and recursive node fields are defined in
 
 ---
 
-The legacy examples in `../litmus-test-legacy/src/examples/` remain the behavioral
-reference until the Python `examples/` tree lands (tracked on the board). A broken
-example means the API changed and the docs need updating.
+The Python `examples/` tree is the authoring reference. A broken example means
+the API changed and the docs need updating.
 
 ---
 
@@ -409,16 +408,20 @@ Returning `{"ssh": ...}` from `configure()` also makes the device eligible as a 
 
 `use_shell` vs `get_shell`: `use_shell` answers "where does `utils.exec` go" — it rebinds the routing for this test and its descendants. `get_shell` hands you an additional interface without touching the routing.
 
+See `examples/remote_device_ssh.py`.
+
 ---
 
 ## SSH Tunneling
 
-Pass an existing `SshInterface` as the `via` argument to `utils.get_shell()` to tunnel the new connection through it. Both interfaces are framework-managed — no `cleanup()` override needed.
+Pass an existing `SshInterface` as the `via` argument to `utils.get_shell()` to tunnel the new connection through it. Both interfaces are framework-managed — no `cleanup()` override is needed.
 
 ```python
 jump = await utils.get_shell(host=jump_host, username=jump_user)
 target = await utils.get_shell(host=target_host, username=target_user, via=jump)
 ```
+
+See `examples/ssh_tunneling.py`.
 
 ---
 
