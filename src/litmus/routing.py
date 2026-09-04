@@ -53,8 +53,15 @@ class Shell:
         self._ssh = ssh
 
     async def exec(self, command: str) -> ExecResult:
-        """Run `command` on this handle's route. Never raises for the exit status."""
-        return await self._exec(command)
+        """Run `command` on this handle's route. Never raises for the exit status.
+
+        A closed or aborted transport settles as `exit_code == -1`, same as
+        `TestUtils.exec`. `RemoteInterface.exec` still raises `ConnectionError`.
+        """
+        try:
+            return await self._exec(command)
+        except ConnectionError as error:
+            return ExecResult.settled("", str(error), None)
 
     @property
     def ssh(self) -> RemoteInterface | None:
