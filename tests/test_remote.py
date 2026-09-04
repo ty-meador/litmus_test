@@ -123,6 +123,17 @@ class TestUartShapedPeer:
 
         assert transport.connected is True
 
+    async def test_an_addressless_transport_rejects_a_host(self) -> None:
+        transport = _UartStub()
+
+        assert transport.address is None
+        with pytest.raises(TypeError, match="has no address"):
+            await transport.connect("10.0.0.2")
+        with pytest.raises(TypeError, match="has no address"):
+            await transport.connect(port=22)
+
+        assert transport.connected is False
+
     async def test_disconnect_is_safe_when_never_connected(self) -> None:
         transport = _UartStub()
 
