@@ -40,6 +40,28 @@ The static no-self-mutation rule remains defense in depth.
 
 **Scope note:** ctx is strictly instance-local. A parent's ctx never flows into composed children — composition is the only coupling mechanism, and ctx inheritance would smuggle hidden state across it.
 
+## Via-Routing — Framework-Managed Lifecycle
+
+Any Testable whose `configure()` calls `utils.use_shell()` can serve as a via target.
+Pass it as `via=` at construction. The framework brings the via device up before the
+consumer's pre-configure survey, routes `utils.exec` through that hop for configure,
+surveys, tests, and audits, and tears the via down after the consumer's post-cleanup
+survey. A survey or in-flight audit that execs therefore measures the hop, not the
+test host. Authors never call `run_configure_only()` or `run_cleanup_only()` by hand.
+
+```python
+gateway = Gateway(name="gateway")
+target = MyDevice(name="target", mac="aa:bb:cc:dd:ee:ff", via=gateway)
+```
+
+The via device's ctx stays instance-local. Cross-instance data still moves through
+constructor params. The hop itself is borrowed: a consumer `get_shell()` tunnels
+through it without owning it, so cancelling that tunnel leaves the gateway up until
+the framework tears the via device down. A via shared by more than one consumer
+stays up until the last consumer finishes — the first teardown does not drop the
+hop out from under a sibling. A declared via that never opens a shell is a
+`FrameworkContractViolation`, not local exec under Pass.
+
 ## run_data — Automatic Structured Evidence
 The default `run_data` returns a detached snapshot of all serializable values from
 `utils.ctx`. JSON primitives (with finite numbers), plain dicts with string keys, and
