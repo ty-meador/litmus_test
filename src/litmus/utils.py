@@ -7,8 +7,9 @@ import inspect
 import json
 import logging
 import os
+import re
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, final
@@ -24,6 +25,63 @@ from litmus.routing import ExecRouter, ExecRouting, RouterRunParams, Shell
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
 
 LOGGER = logging.getLogger("litmus")
+
+
+@final
+class _EnvFilter:
+    """Decides which variables of the run environment are published as evidence.
+
+    At most one of ``allow`` or ``deny`` may be given; both is a ``ValueError``.
+    Patterns are regular expressions matched with ``re.search`` against the variable
+    *name* — ``TOKEN`` matches ``GITLAB_TOKEN``; anchor as ``^HOME$`` for an exact name.
+    When the source environment carries ``environment=DEBUG`` the lists are ignored and
+    every variable is published, and a warning says so — an artifact that carries more
+    than the operator configured must state why.
+    """
+
+    DEBUG_KEY = "environment"
+    DEBUG_VALUE = "DEBUG"
+
+    def __init__(self, *, allow: Iterable[str] | None, deny: Iterable[str] | None) -> None:
+        if allow is not None and deny is not None:
+            msg = (
+                "env_allow and env_deny are mutually exclusive: "
+                "publish by allow list or by deny list, never both"
+            )
+            raise ValueError(msg)
+        self._mode: str | None = None
+        patterns: Iterable[str] = ()
+        if allow is not None:
+            self._mode = "allow"
+            patterns = allow
+        elif deny is not None:
+            self._mode = "deny"
+            patterns = deny
+        self._patterns: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in patterns)
+
+    @property
+    def mode(self) -> str | None:
+        """``"allow"``, ``"deny"``, or ``None`` when the snapshot is published verbatim."""
+        return self._mode
+
+    def apply(self, source: Mapping[str, str], logger: logging.Logger) -> dict[str, str]:
+        """Return the variables to publish, logging when DEBUG mode overrides the list."""
+        snapshot = dict(source)
+        if self._mode is None:
+            return snapshot
+        if snapshot.get(self.DEBUG_KEY) == self.DEBUG_VALUE:
+            logger.warning(
+                "DEBUG mode detected, ignoring provided %s list and including ALL "
+                "environment variables",
+                self._mode,
+            )
+            return snapshot
+        if self._mode == "allow":
+            return {name: value for name, value in snapshot.items() if self._matches(name)}
+        return {name: value for name, value in snapshot.items() if not self._matches(name)}
+
+    def _matches(self, name: str) -> bool:
+        return any(pattern.search(name) for pattern in self._patterns)
 
 
 @final
@@ -204,31 +262,43 @@ class TestUtils:
         *,
         ctx: dict[str, Any] | None = None,
         env: Mapping[str, str] | None = None,
+        env_allow: Iterable[str] | None = None,
+        env_deny: Iterable[str] | None = None,
         logger: logging.Logger | None = None,
         artifact_root: str | Path | None = None,
         _integration_hooks: IntegrationHooks | None = None,
     ) -> None:
         """Create an unscoped run seed; lifecycle execution creates node views.
 
+        Raises ``ValueError`` when both ``env_allow`` and ``env_deny`` are given.
+
         Args:
             ctx: Initial root context. The framework mutates this dict in place.
-            env: Environment snapshot. A defensive, immutable copy is retained.
+            env: Environment source. Defaults to the process environment. The
+                published snapshot is an immutable copy, filtered per the lists below.
+            env_allow: Regular expressions; only variables whose *name* matches one
+                (``re.search``) are published. Exclusive with ``env_deny``.
+            env_deny: Regular expressions; variables whose name matches one are
+                withheld. Exclusive with ``env_allow``.
+                With either list, ``environment=DEBUG`` in the source publishes every
+                variable and logs a warning saying so.
             logger: Logging sink beneath the per-node scope adapter.
             artifact_root: Directory for point-in-time evidence. Defaults to the
                 ``LITMUS_ARTIFACT_ROOT`` environment snapshot, then ``./artifacts``.
         """
         self._ctx = {} if ctx is None else ctx
+        self._base_logger = LOGGER if logger is None else logger
+        self._scope: tuple[str, ...] = ()
+        self._logger = ScopedLogger(self._base_logger, self._scope)
         source_env = os.environ if env is None else env
-        self._env = MappingProxyType(dict(source_env))
+        env_filter = _EnvFilter(allow=env_allow, deny=env_deny)
+        self._env = MappingProxyType(env_filter.apply(source_env, self._base_logger))
         configured_artifact_root = artifact_root
         if configured_artifact_root is None:
             configured_artifact_root = self._env.get(
                 "LITMUS_ARTIFACT_ROOT", Path.cwd() / "artifacts"
             )
         self._artifact_store = _ArtifactStore(configured_artifact_root)
-        self._base_logger = LOGGER if logger is None else logger
-        self._scope: tuple[str, ...] = ()
-        self._logger = ScopedLogger(self._base_logger, self._scope)
         self._local_exec = LocalExec()
         self._transports = _RunTransports(self._local_exec)
         self._integration_hooks = (
@@ -253,7 +323,12 @@ class TestUtils:
 
     @property
     def env(self) -> Mapping[str, str]:
-        """Immutable snapshot of the process environment for this run."""
+        """Immutable snapshot of the run environment, as published in every ``RunResult``.
+
+        This is the filtered view when the run declared ``env_allow`` or ``env_deny``;
+        a variable the filter withheld is absent here too, so ``PHYSICAL_LOCATION`` and
+        ``LITMUS_ARTIFACT_ROOT`` must survive an allow list to keep their effect.
+        """
         return self._env
 
     @property

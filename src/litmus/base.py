@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import inspect
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Any, final
 
 from litmus.artifacts import Artifact
@@ -301,17 +301,25 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self,
         *,
         env: Mapping[str, str] | None = None,
+        env_allow: Iterable[str] | None = None,
+        env_deny: Iterable[str] | None = None,
         before_each: BeforeEachHook | None = None,
         after_each: AfterEachHook | None = None,
         allow_unpaired_hooks: bool = False,
     ) -> RunResult:
-        """Execute once, fanning root-owned integration hooks across every node."""
+        """Execute once, fanning root-owned integration hooks across every node.
+
+        ``env_allow`` / ``env_deny`` select which environment variables the run
+        publishes; see ``TestUtils`` for the contract. Raises ``ValueError`` when both
+        are given.
+        """
         hooks = IntegrationHooks(
             before_each=before_each,
             after_each=after_each,
             allow_unpaired=allow_unpaired_hooks,
         )
-        return await self.main(TestUtils(env=env, _integration_hooks=hooks))
+        utils = TestUtils(env=env, env_allow=env_allow, env_deny=env_deny, _integration_hooks=hooks)
+        return await self.main(utils)
 
     @final
     async def main(self, utils: TestUtils | None = None) -> RunResult:
