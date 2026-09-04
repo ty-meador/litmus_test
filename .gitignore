@@ -23,3 +23,7 @@ htmlcov/
 # rewrote the file; restored here. Without it `git add -A` in a fresh clone
 # commits a live credential.
 *.gplat
+
+# Evidence written by a run from the repo root. Keep the directory, never its contents.
+artifacts/*
+!artifacts/.gitkeep
