@@ -1,9 +1,15 @@
 """Suite-wide fixtures."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
+from tests.mock_connector import ConnectorInstaller, MockConnector
+
+from litmus import TestUtils
+from litmus.remote import RemoteInterface
+from litmus.routing import ExecRouting
 
 CHECKOUT_ARTIFACTS = Path(__file__).resolve().parents[1] / "artifacts"
 
@@ -48,3 +54,26 @@ def evidence_stays_out_of_the_checkout(
 def checkout_evidence() -> Callable[[], frozenset[Path]]:
     """The snapshot the autouse guard compares, for tests that prove the guard."""
     return _checkout_evidence
+
+
+@pytest.fixture
+def install_mock_connector() -> ConnectorInstaller:
+    """Route a node's connection-form shells (``use_shell``/``get_shell``) to mocks.
+
+    ``TestUtils`` exposes no connector injection — ``ExecRouting`` accepts one, but
+    the framework always builds it with the real ``SshConnector`` — so the self-tests
+    must reach through to the routing slot. This fixture is the one place that
+    reach-through lives; a test that needs a mock shell asks for it here, never by
+    hand. Returns the installed connector.
+    """
+
+    def install(
+        utils: TestUtils,
+        transports: RemoteInterface | Mapping[str, RemoteInterface],
+    ) -> MockConnector:
+        connector = MockConnector(transports)
+        routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
+        object.__setattr__(routing, "_connector", connector)
+        return connector
+
+    return install
