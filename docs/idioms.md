@@ -210,10 +210,12 @@ The exception-path behavior is: throw from either hook → run halts → every e
 ## Configure-Returns-Context Pattern
 `configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant test cases. No instance fields are needed for configure-phase data.
 
-The broad framework annotation is `dict[str, Any]`. When a suite benefits from precise
-key types, define a local `TypedDict` and use it as the covariant return annotation.
-This is static information only: a `TypedDict` is still an ordinary mutable dict at
-runtime. A context dataclass is deliberately out of contract because it would fight
+The framework annotation is `Mapping[str, Any]`; a plain `dict[str, Any]` return is the
+default and satisfies it. When a suite benefits from precise key types, define a local
+`TypedDict` and use it as the covariant return annotation — pyright strict accepts the
+override because a `TypedDict` is a `Mapping`, which `dict[str, Any]` as the base
+annotation would not allow. This is static information only: a `TypedDict` is still an
+ordinary mutable dict at runtime, and the framework copies it into `utils.ctx`. A context dataclass is deliberately out of contract because it would fight
 dict merge semantics and require special handling in the default `run_data` path.
 
 ```python
