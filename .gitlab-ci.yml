@@ -29,6 +29,18 @@ check:
   script:
     - uv sync --locked
     - make check
+  # The coverage summary is read off the TOTAL line and the Cobertura report feeds
+  # the MR diff view; both come from the gate's own run, nothing is re-measured.
+  coverage: '/^TOTAL.*\s+(\d+(?:\.\d+)?)%$/'
+  artifacts:
+    when: always
+    expire_in: 2 weeks
+    paths:
+      - .coverage/coverage.json
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: .coverage/cobertura.xml
 
 # Timing races don't lose the same way twice: a suite that passes once can fail
 # 7 of 8 on another machine (!42). Eight runs is a second net, not proof.
