@@ -172,7 +172,7 @@ static analysis.
 ## Utils Contract
 **Framework obligation:** `TestUtils` is the single, fully-scoped utility surface passed to every lifecycle method.
 
-- `utils.exec` never throws. It returns an `ExecResult(stdout, stderr, exit_code)` — a non-zero exit code is data for the test method to judge, not an exception.
+- `utils.exec` never throws. It returns an `ExecResult(stdout, stderr, exit_code)` — a non-zero exit code is data for the test method to judge, not an exception. Signal-killed, aborted, and closed-transport commands settle as `exit_code=-1`. A `ConnectionError` from `RemoteInterface.exec` is absorbed here; the protocol stays loud, the author-facing surface stays total. `CancelledError` still propagates.
 
 **Developer obligation:** Use only `utils.*` inside lifecycle methods — never import framework internals directly into test logic.
 
