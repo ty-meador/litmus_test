@@ -75,6 +75,11 @@ class SshInterface(RemoteInterface):
         `cancel_in_flight`, or a failed `connect` — ever touches it.
       - `via` and `tunnel` are mutually exclusive: own the hop or borrow it,
         never both.
+      - The address is fixed while the socket is live. `connect(host, port)`
+        re-points the handle only while disconnected — after a firmware flash
+        or DHCP churn the flow is `disconnect()`, reacquire, `connect(new_ip)`.
+        The object in ctx stays valid. There is no self-healing: a socket that
+        dies under the framework's abort stays dead (In-Flight Termination).
       - Auth resolution, in order: explicit `agent` path, in-memory
         `private_key`, `private_key_path`, `password`, then `SSH_AUTH_SOCK`.
         That order is declared once, in `_auth_choice`, and both the dialed
@@ -136,6 +141,15 @@ class SshInterface(RemoteInterface):
         return self._port
 
     @property
+    def address(self) -> tuple[str, int]:
+        """`(host, port)` this interface dials. Re-pointed by `connect` while disconnected."""
+        return (self._host, self._port)
+
+    def _retarget(self, host: str, port: int) -> None:
+        self._host = host
+        self._port = port
+
+    @property
     def auth_label(self) -> str:
         """Which credential path `connect` will use. For provenance logging."""
         return self._auth_choice().label
@@ -161,17 +175,6 @@ class SshInterface(RemoteInterface):
             f"ssh connect: {self._username}@{self._host}:{self._port} "
             f"auth={self._auth_choice()} via={via}"
         )
-
-    async def reconnect_to(self, host: str, port: int | None = None) -> None:
-        """Point this handle at a new address and replace the socket.
-
-        Use after events that kill the SSH session but not the logical device
-        (firmware flash, DHCP churn). The object in ctx stays valid.
-        """
-        self._host = host
-        if port is not None:
-            self._port = port
-        await self.reconnect()
 
     async def _connect(self) -> None:
         via = self._via
