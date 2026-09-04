@@ -3,6 +3,8 @@ name = "litmus"
 version = "0.0.1"
 description = "React-for-hardware HIL testing framework — Python port"
 readme = "README.md"
+license = "GPL-2.0-only"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.14"
 dependencies = [
     "asyncssh>=2.21",
