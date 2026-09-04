@@ -346,12 +346,13 @@ async def _run_pihole(
     transport: MockTransport,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    artifact_root: Path | None = None,
+    artifact_root: Path,
 ) -> RunResult:
     _patch_ssh_connector(monkeypatch, transport)
-    env: dict[str, str] = {"PHYSICAL_LOCATION": "bench-pihole"}
-    if artifact_root is not None:
-        env["LITMUS_ARTIFACT_ROOT"] = str(artifact_root)
+    env: dict[str, str] = {
+        "PHYSICAL_LOCATION": "bench-pihole",
+        "LITMUS_ARTIFACT_ROOT": str(artifact_root),
+    }
     utils = TestUtils(env=env)
     return await PiHoleServer(
         name="PiHoleServer",
@@ -465,7 +466,7 @@ class TestPiHoleServerExample:
         }.issubset(hop_commands)
 
     async def test_inactive_ftl_fails_the_sequence_before_health_checks(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         transport = MockTransport()
         _script_healthy_pihole(transport)
@@ -474,7 +475,7 @@ class TestPiHoleServerExample:
             _ok("     Active: inactive (dead)"),
         )
 
-        result = await _run_pihole(transport, monkeypatch)
+        result = await _run_pihole(transport, monkeypatch, artifact_root=tmp_path)
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
@@ -487,7 +488,9 @@ class TestPiHoleServerExample:
         assert "dmesg --level=emerg,alert,crit" not in transport.commands
         assert "pihole status" not in transport.commands
 
-    async def test_critical_dmesg_is_a_hardware_fail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_critical_dmesg_is_a_hardware_fail(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         transport = MockTransport()
         _script_healthy_pihole(transport)
         transport.script(
@@ -495,7 +498,7 @@ class TestPiHoleServerExample:
             _ok(" miller-raid: disk 2 unrecoverable"),
         )
 
-        result = await _run_pihole(transport, monkeypatch)
+        result = await _run_pihole(transport, monkeypatch, artifact_root=tmp_path)
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
@@ -506,13 +509,13 @@ class TestPiHoleServerExample:
         assert status.state is State.PASS
 
     async def test_status_lines_without_a_checkmark_fail(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         transport = MockTransport()
         _script_healthy_pihole(transport)
         transport.script("pihole status", _ok("  [✗] DNS service is NOT running\n"))
 
-        result = await _run_pihole(transport, monkeypatch)
+        result = await _run_pihole(transport, monkeypatch, artifact_root=tmp_path)
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
@@ -520,12 +523,12 @@ class TestPiHoleServerExample:
         assert result.failure.received == ["  [✗] DNS service is NOT running"]
 
     async def test_refused_connect_is_fail_not_a_contract_banner(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         transport = MockTransport()
         transport.fail_next_connect(ConnectionError("peer unreachable"))
 
-        result = await _run_pihole(transport, monkeypatch)
+        result = await _run_pihole(transport, monkeypatch, artifact_root=tmp_path)
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
