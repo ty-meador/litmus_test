@@ -178,5 +178,5 @@ class TestGatedPassAtTheCommandLine:
 
         assert status == EXIT_VIOLATIONS
         lines = out.getvalue().splitlines()
-        assert lines[0].startswith(f"{fixtures / 'seeded_suite.py'}:31:9: {CODE} ")
+        assert lines[0].startswith(f"{fixtures / 'seeded_suite.py'}:32:9: {CODE} ")
         assert lines[-1] == "Found 1 violation."
