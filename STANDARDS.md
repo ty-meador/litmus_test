@@ -80,6 +80,14 @@ rules and pyright strict — an unannotated def fails `make check`.
 - Async tests are plain `async def` methods — pytest-asyncio auto mode picks them up.
 - `make check` green is the definition of done. No skipped/xfail tests without a linked
   reason.
+- **Coverage is a floor that only rises.** The gate runs the suite under branch coverage.
+  The global floor is `[tool.coverage.report] fail_under`; the per-file floors on the
+  kernel of trust (`verdict.py`, `base.py`, `lifecycle.py`, `executor.py`) are
+  `[tool.litmus.coverage.floors]`, enforced by `tools/coverage_floor.py`. Measured below
+  a floor is red. When a change lifts coverage, raise the floor to the new measurement in
+  the same MR — the gate prints the hint. A floor never moves down: an MR that lowers one
+  is not merged, whatever else it carries. The report lives under `.coverage/`, ignored
+  by git and outside the evidence guard's `artifacts/`.
 - **One green run proves nothing about a timing race.** A change that touches asyncio
   timing, cancellation, hook scheduling, or transport teardown is attested with
   `make soak` (the full suite eight times over; `SOAK_RUNS=n` overrides), not a single

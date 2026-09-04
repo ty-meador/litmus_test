@@ -14,6 +14,7 @@ dev = [
     "pytest-asyncio>=1.0",
     "ruff>=0.12",
     "pyright>=1.1.400",
+    "pytest-cov>=7",
 ]
 
 [project.scripts]
@@ -69,6 +70,38 @@ typeCheckingMode = "strict"
 pythonVersion = "3.14"
 venvPath = "."
 venv = ".venv"
+
+[tool.coverage.run]
+branch = true
+source = ["litmus", "litmus_check"]
+# The report stays out of the checkout's tracked tree and clear of the evidence
+# containment guard, which watches ``artifacts/`` only.
+data_file = ".coverage/data"
+
+[tool.coverage.report]
+precision = 1
+# Global floor. Ratchet-only: raise it to the new measurement when coverage rises,
+# never lower it (STANDARDS.md section 6). Per-file floors: [tool.litmus.coverage].
+fail_under = 94.5
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "^\\s*\\.\\.\\.\\s*$",
+]
+
+[tool.coverage.json]
+output = ".coverage/coverage.json"
+
+[tool.coverage.xml]
+output = ".coverage/cobertura.xml"
+
+[tool.litmus.coverage]
+# Per-file branch-coverage floors on the kernel of trust, enforced by
+# tools/coverage_floor.py after the suite runs. Ratchet-only, like fail_under.
+[tool.litmus.coverage.floors]
+"src/litmus/verdict.py" = 100.0
+"src/litmus/base.py" = 91.2
+"src/litmus/lifecycle.py" = 97.9
+"src/litmus/executor.py" = 84.0
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
