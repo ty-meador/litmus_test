@@ -16,6 +16,9 @@ import pytest
 import litmus
 from litmus import PASS, ExecResult, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
 from litmus.lifecycle import Outcome, State
+from litmus.mock import MockTransport
+from litmus.remote import RemoteInterface
+from litmus.routing import ExecRouting, ShellOpenRequest
 
 
 class _ScopedLogRecord(Protocol):
@@ -336,6 +339,66 @@ class TestUtilsExecNeverThrows:
         messages = [record.message for record in records]
         assert any("echo observed" in message for message in messages)
         assert any("exit code: 0" in message for message in messages)
+
+    async def test_routed_exec_after_cancel_settles_minus_one(self) -> None:
+        transport = MockTransport()
+        utils = TestUtils()
+        _install_mock_connector(utils, transport)
+        await utils.use_shell(host="dut", username="root")
+
+        await object.__getattribute__(utils, "_transports").cancel_in_flight()
+        result = await utils.exec("uname")
+
+        assert result.exit_code == -1
+        assert "not connected" in result.stderr
+        assert transport.connected is False
+
+    async def test_in_flight_routed_exec_settles_minus_one(self) -> None:
+        transport = MockTransport()
+        transport.park("flash")
+        utils = TestUtils()
+        _install_mock_connector(utils, transport)
+        await utils.use_shell(host="dut", username="root")
+        task = asyncio.create_task(utils.exec("flash"))
+        deadline = asyncio.get_running_loop().time() + 2
+        while transport.in_flight_count < 1:
+            assert asyncio.get_running_loop().time() < deadline, "parked exec never started"
+            await asyncio.sleep(0)
+
+        await object.__getattribute__(utils, "_transports").cancel_in_flight()
+        result = await task
+
+        assert result.exit_code == -1
+        assert "transport closed" in result.stderr
+        assert transport.connected is False
+        assert transport.in_flight_count == 0
+
+    async def test_shell_exec_after_cancel_settles_minus_one(self) -> None:
+        transport = MockTransport()
+        utils = TestUtils()
+        _install_mock_connector(utils, transport)
+        shell = await utils.use_shell(host="dut", username="root")
+
+        await transport.cancel_in_flight()
+        result = await shell.exec("uname")
+
+        assert result.exit_code == -1
+        assert "not connected" in result.stderr
+
+
+class _MockShellConnector:
+    def __init__(self, transport: MockTransport) -> None:
+        self.transport = transport
+
+    async def open(self, request: ShellOpenRequest) -> RemoteInterface:
+        del request
+        await self.transport.connect()
+        return self.transport
+
+
+def _install_mock_connector(utils: TestUtils, transport: MockTransport) -> None:
+    routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
+    object.__setattr__(routing, "_connector", _MockShellConnector(transport))
 
 
 class _EnvSuite(LitmusTest):
