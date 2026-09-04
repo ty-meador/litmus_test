@@ -1,6 +1,6 @@
 """The public LitmusTest atom and its framework-owned execution path."""
 
-from typing import Protocol, cast
+from typing import Protocol, TypedDict, cast
 
 import pytest
 
@@ -133,3 +133,37 @@ class TestExecRoutingProvenance:
             ("rack", "claims", "first"),
             ("rack", "claims", "second"),
         ]
+
+
+class TestConfigureReturnTyping:
+    """A suite may narrow configure's return with a local TypedDict under pyright strict.
+
+    The override below carries no pyright suppression on purpose: ``make check`` runs
+    pyright strict over ``tests/``, so this file type-checking is the proof that the
+    framework annotation (``Mapping[str, Any]``) accepts the narrowed return.
+    """
+
+    async def test_typed_dict_override_merges_into_ctx_like_a_plain_dict(self) -> None:
+        class DeviceContext(TypedDict):
+            host: str
+            port: int
+
+        seen: dict[str, object] = {}
+
+        class Suite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> DeviceContext:
+                return {"host": "dut", "port": 22}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                seen.update(utils.ctx)
+                return PASS
+
+        outcome = await Suite(name="rack").run()
+
+        assert outcome.state is State.PASS
+        assert seen["host"] == "dut"
+        assert seen["port"] == 22
+        assert outcome.run_data["host"] == "dut"
