@@ -131,8 +131,14 @@ def build_suite(self) -> LitmusTest:
 
 async def _check_reachable(self, utils: TestUtils) -> Verdict:
     # `self` is preserved — bound at attribute access, no wrapping needed
-    return PASS
+    result = await utils.exec("true")
+    if result.exit_code == 0:
+        return PASS
+    raise TestFailure("device unreachable", "exit 0", str(result.exit_code))
 ```
+
+Every `return PASS` sits under the predicate that earns it; `litmus-check` (the
+`litmus/gated-pass` rule) flags a bare one, and the examples show the gated shape.
 
 ## Pass/Fail/Aborted Contract
 - A test method returning the `PASS` sentinel → test passes (state `Pass`). The check is `result is PASS` — identity, not equality. The string `"PASS"` does not pass.
@@ -264,7 +270,10 @@ class MyDevice(LitmusTest):
 
     async def _check_reachable(self, utils: TestUtils) -> Verdict:
         # utils.exec already routed through ssh
-        return PASS
+        result = await utils.exec("true")
+        if result.exit_code == 0:
+            return PASS
+        raise TestFailure("device unreachable", "exit 0", str(result.exit_code))
 ```
 
 ## Via-Routing — Framework-Managed Lifecycle
