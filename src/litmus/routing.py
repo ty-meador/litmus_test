@@ -10,6 +10,7 @@ self-tests import the policy machinery directly.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -272,6 +273,17 @@ class ExecRouting:
             return
         self._router = router
         self._provenance = "inherited"
+
+    async def disconnect_opened(self) -> None:
+        """Close remotes this node opened. Inherited hops are not in that set.
+
+        A borrowed tunnel dies here; the hop it borrowed stays with its owner.
+        """
+        opened = list(reversed(self._opened))
+        self._opened.clear()
+        for remote in opened:
+            with contextlib.suppress(Exception):
+                await remote.disconnect()
 
     async def use_shell(
         self,
