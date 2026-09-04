@@ -6,13 +6,15 @@ import inspect
 import shlex
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Protocol, cast
 
 import pytest
 
 import litmus
-from litmus import PASS, ExecResult, LitmusTest, TestFailure, TestUtils, Verdict
+from litmus import PASS, ExecResult, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
 from litmus.lifecycle import Outcome, State
 
 
@@ -334,3 +336,121 @@ class TestUtilsExecNeverThrows:
         messages = [record.message for record in records]
         assert any("echo observed" in message for message in messages)
         assert any("exit code: 0" in message for message in messages)
+
+
+class _EnvSuite(LitmusTest):
+    def build_suite(self) -> LitmusTest:
+        return self.group("claims", [self.case("probe", self._probe)])
+
+    async def _probe(self, _utils: TestUtils) -> Verdict:
+        return PASS
+
+
+class TestEnvSnapshotFilter:
+    """Issue #53 ruling: the run publishes its environment by allow list or deny list."""
+
+    _SOURCE: Mapping[str, str] = MappingProxyType(
+        {
+            "PHYSICAL_LOCATION": "bench-7",
+            "GITLAB_TOKEN": "glpat-secret",
+            "AWS_SECRET_ACCESS_KEY": "hunter2",
+            "HOME": "/home/ops",
+            "HOMEBREW_PREFIX": "/opt/homebrew",
+        }
+    )
+
+    def test_no_list_publishes_the_source_verbatim(self) -> None:
+        utils = TestUtils(env=self._SOURCE)
+
+        assert dict(utils.env) == self._SOURCE
+
+    def test_an_allow_list_keeps_only_matching_names(self) -> None:
+        utils = TestUtils(env=self._SOURCE, env_allow=["^PHYSICAL_LOCATION$", "^HOME$"])
+
+        assert dict(utils.env) == {"PHYSICAL_LOCATION": "bench-7", "HOME": "/home/ops"}
+
+    def test_a_deny_list_withholds_matching_names(self) -> None:
+        utils = TestUtils(env=self._SOURCE, env_deny=["TOKEN", "SECRET"])
+
+        assert dict(utils.env) == {
+            "PHYSICAL_LOCATION": "bench-7",
+            "HOME": "/home/ops",
+            "HOMEBREW_PREFIX": "/opt/homebrew",
+        }
+
+    def test_patterns_search_the_name_so_anchors_are_the_authors_choice(self) -> None:
+        unanchored = TestUtils(env=self._SOURCE, env_allow=["HOME"])
+        anchored = TestUtils(env=self._SOURCE, env_allow=["^HOME$"])
+
+        assert set(unanchored.env) == {"HOME", "HOMEBREW_PREFIX"}
+        assert set(anchored.env) == {"HOME"}
+
+    def test_values_are_never_rewritten_only_present_or_absent(self) -> None:
+        utils = TestUtils(env=self._SOURCE, env_deny=["TOKEN"])
+
+        assert "GITLAB_TOKEN" not in utils.env
+        assert utils.env["AWS_SECRET_ACCESS_KEY"] == "hunter2"
+
+    def test_allow_and_deny_together_are_rejected(self) -> None:
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            TestUtils(env=self._SOURCE, env_allow=["HOME"], env_deny=["TOKEN"])
+
+    async def test_run_rejects_both_lists_before_anything_executes(self) -> None:
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            await _EnvSuite(name="rack").run(env=self._SOURCE, env_allow=["HOME"], env_deny=["X"])
+
+    def test_debug_mode_publishes_everything_and_says_so(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        source = {**self._SOURCE, "environment": "DEBUG"}
+
+        with caplog.at_level("WARNING", logger="litmus"):
+            utils = TestUtils(env=source, env_deny=["TOKEN", "SECRET"])
+
+        assert dict(utils.env) == source
+        assert [record.message for record in caplog.records] == [
+            "DEBUG mode detected, ignoring provided deny list and including ALL "
+            "environment variables"
+        ]
+
+    def test_debug_mode_names_the_list_it_ignored(self, caplog: pytest.LogCaptureFixture) -> None:
+        source = {**self._SOURCE, "environment": "DEBUG"}
+
+        with caplog.at_level("WARNING", logger="litmus"):
+            TestUtils(env=source, env_allow=["^HOME$"])
+
+        assert "ignoring provided allow list" in caplog.records[0].message
+
+    def test_debug_mode_is_the_exact_key_and_value(self, caplog: pytest.LogCaptureFixture) -> None:
+        source = {**self._SOURCE, "environment": "debug", "ENVIRONMENT": "DEBUG"}
+
+        with caplog.at_level("WARNING", logger="litmus"):
+            utils = TestUtils(env=source, env_deny=["TOKEN"])
+
+        assert "GITLAB_TOKEN" not in utils.env
+        assert caplog.records == []
+
+    def test_no_list_never_logs_even_in_debug_mode(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING", logger="litmus"):
+            TestUtils(env={**self._SOURCE, "environment": "DEBUG"})
+
+        assert caplog.records == []
+
+    async def test_the_filtered_view_is_what_every_result_publishes(self) -> None:
+        result = await _EnvSuite(name="rack").run(env=self._SOURCE, env_deny=["TOKEN", "SECRET"])
+        payload = result.to_json()
+        children = cast("tuple[RunResult, ...]", result.value)
+
+        assert payload["format_version"] == 1
+        assert payload["env"] == {
+            "PHYSICAL_LOCATION": "bench-7",
+            "HOME": "/home/ops",
+            "HOMEBREW_PREFIX": "/opt/homebrew",
+        }
+        assert payload["physical_location"] == "bench-7"
+        assert [dict(child.env) for child in children] == [payload["env"]]
+
+    async def test_an_allow_list_that_drops_the_station_id_reports_unknown(self) -> None:
+        result = await _EnvSuite(name="rack").run(env=self._SOURCE, env_allow=["^HOME$"])
+
+        assert result.to_json()["physical_location"] == "unknown"

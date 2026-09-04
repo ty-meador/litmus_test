@@ -282,7 +282,7 @@ The SE never runs the via device's configure or cleanup manually. The framework 
 A device-level test can be dropped into a rack-level test without modification. "Push state up" to higher-level components; trust the framework lifecycle.
 
 ## Environment Variables
-Always use `utils.env` inside test code. Never `os.environ` directly. The full env snapshot is stored in every `RunResult` for post-run auditing.
+Always use `utils.env` inside test code. Never `os.environ` directly. The env snapshot is stored in every `RunResult` for post-run auditing — filtered by the run's `env_allow` or `env_deny` list when one was declared, verbatim otherwise (see `docs/inspector-json.md`).
 
 ## TestUtils Injection
 Call `await root.run()` to execute a suite. The framework constructs `TestUtils`; suite
