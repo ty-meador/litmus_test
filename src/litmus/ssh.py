@@ -218,10 +218,18 @@ class SshInterface(RemoteInterface):
             raise ConnectionError("remote interface is not connected")
         try:
             result = await connection.run(command, check=False)
-        except SshError:
-            # Socket died under us (abort, peer reset). Settle as no-status,
-            # matching legacy: orphaned awaits resolve with exit_code -1.
-            return ExecResult(stdout="", stderr="", exit_code=-1)
+        except SshError as error:
+            # Socket died under us (abort, peer reset) before the channel
+            # settled. exit_code -1, as legacy did for orphaned awaits, and
+            # the cause named on stderr: a transport that dropped is not a
+            # command that was killed, and the evidence has to tell them apart.
+            return ExecResult.settled("", f"transport closed: {error}", None)
+        if result.exit_signal is None and result.exit_status is None:
+            # The channel closed without ever reporting a status — the
+            # connection went under the command (our hard close, or the peer's
+            # reset). Same -1, same named cause; the remote's stderr, if any,
+            # is kept beneath it.
+            return ExecResult.settled(result.stdout, _name_transport_death(result.stderr), None)
         # A signal kill carries no usable exit status; settle it as the no-status case.
         exit_status = None if result.exit_signal is not None else result.exit_status
         return ExecResult.settled(result.stdout, result.stderr, exit_status)
@@ -290,3 +298,15 @@ class SshInterface(RemoteInterface):
             msg = f"{role} hop reports connected without a live connection"
             raise ConnectionError(msg)
         return connection
+
+
+def _name_transport_death(remote_stderr: str | bytes | None) -> str:
+    """stderr for a command whose channel closed with no exit status.
+
+    The framework's own name for the cause comes first; whatever the remote
+    managed to write before the socket died is kept beneath it.
+    """
+    if isinstance(remote_stderr, bytes):
+        remote_stderr = remote_stderr.decode("utf-8", errors="replace")
+    tail = (remote_stderr or "").strip()
+    return "transport closed" if not tail else f"transport closed\n{tail}"
