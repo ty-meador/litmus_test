@@ -16,12 +16,15 @@ dev = [
     "pyright>=1.1.400",
 ]
 
+[project.scripts]
+litmus-check = "litmus_check.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/litmus"]
+packages = ["src/litmus", "tools/litmus_check"]
 
 # ---------------------------------------------------------------------------
 # Tooling — single source of truth. Run via `make`; do not override locally.
@@ -30,7 +33,7 @@ packages = ["src/litmus"]
 [tool.ruff]
 target-version = "py314"
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "tools"]
 
 [tool.ruff.lint]
 select = [
@@ -60,7 +63,8 @@ ignore = [
 "src/litmus/errors.py" = ["N818"]
 
 [tool.pyright]
-include = ["src", "tests", "examples"]
+include = ["src", "tests", "examples", "tools"]
+extraPaths = ["tools"]
 typeCheckingMode = "strict"
 pythonVersion = "3.14"
 venvPath = "."
