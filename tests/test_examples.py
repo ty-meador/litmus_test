@@ -60,7 +60,7 @@ def _artifact_payloads(root: Path) -> dict[str, Any]:
     """Load the point-in-time evidence after the asynchronous run settles."""
     return {
         artifact["name"]: artifact
-        for path in root.glob("*.artifact")
+        for path in root.rglob("*.artifact")
         if isinstance((artifact := json.loads(path.read_text())), dict)
     }
 
