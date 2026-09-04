@@ -410,7 +410,9 @@ Returning `{"ssh": ...}` from `configure()` also makes the device eligible as a 
 
 `use_shell` vs `get_shell`: `use_shell` answers "where does `utils.exec` go" — it rebinds the routing for this test and its descendants. `get_shell` hands you an additional interface without touching the routing.
 
-See `examples/remote_device_ssh.py`.
+See `examples/remote_device_ssh.py`. The pi-hole dogfood suite
+(`examples/pi_hole_server.py`) is the same class-owned hop plus phase-boundary
+surveys that tail service logs for the Floor Technician.
 
 ---
 
