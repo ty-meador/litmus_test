@@ -36,7 +36,7 @@ statistical semantics from its presence.
 
 Python-only lifecycle details such as the internal slot and raw return value are not
 part of this payload. Consumers must treat unknown fields as additive and select a
-decoder by `format_version`.
+decoder by `format_version` (see [Versioning policy](#versioning-policy)).
 
 ### The `env` snapshot is filtered by the run, not by the schema
 
@@ -115,6 +115,59 @@ The two version numbers move independently. The summary tree links the structura
 to the temporal view through each node's `log_path` (ruling on issue #106, 2026-09-04:
 the link is additive within result version 1). An Inspector selects a node in the tree,
 resolves `log_path` against the run directory, and reads that node's chronology.
+
+## Versioning policy
+
+`format_version` is an integer on every record the framework emits: the result, every
+timeline line, and the envelope `Artifact.to_json()` writes for point-in-time evidence.
+One rule governs all of them.
+
+1. **Additive within a version.** Adding a field to a framework-owned object keeps the
+   number. So does adding a key that the record already declares open (`env`,
+   `run_data`, and the failure object). A consumer must accept fields it does not know
+   and must not fail on them; it reads what it was written for and ignores the rest.
+2. **Breaking bumps the version.** Removing or renaming a field, changing a field's JSON
+   type or nullability, changing the meaning of an existing value, adding a member to a
+   closed set (`state`, `type`, `declared`, the failure `state`), moving or renaming
+   `result.json` or `timeline.jsonl`, or changing the one-object-per-line rule bumps the
+   number. A bump is a contract change and follows the workflow in `STANDARDS.md`
+   section 7: it is raised as an issue and ruled on before its MR opens.
+3. **Consumers declare what they accept.** A decoder reads `format_version` before any
+   other field, accepts the versions it was written for, and refuses every other version
+   loudly, with an error that names the version found and the versions accepted. A
+   best-effort read of an unknown version is a silent misreading and is not permitted.
+   Within an accepted version the decoder validates against the published schema for
+   that version.
+4. **The records version independently.** Bumping the result does not bump the
+   timeline, and the reverse. The per-node `log_path` link is additive within result
+   version 1 (ruling on issue #106, 2026-09-04).
+5. **Every change amends the schema in the same MR.** A field added within version 1
+   appears in the version-1 schema and in this document before the framework emits it.
+   The self-tests close every framework-owned object against its schema, so an emitted
+   field the schema does not name is a red gate, not a silent contract change. A bump
+   publishes a new schema file and leaves the previous one in place: a run directory
+   written under version 1 stays readable by a version-1 consumer for as long as the
+   record exists.
+
+## Published schemas
+
+| Record | Schema | Draft |
+|---|---|---|
+| Result | `docs/schema/result-v1.schema.json` | JSON Schema 2020-12 |
+| Timeline | `docs/schema/timeline-v1.schema.json` | JSON Schema 2020-12 |
+
+The published files are the consumer contract, and they are open: framework-owned
+objects do not forbid additional properties, so a consumer validating with the file
+shipped in one release accepts the additive fields of a later release within the same
+version. Three objects are open by design and stay open under the self-tests as well:
+the failure object (a `TestFailure` subclass may add fields), `env` (station-defined
+names), and `run_data` (suite evidence beyond the reserved `measurements` slot).
+
+`tests/test_inspector_schema.py` validates every emitted `result.json` and every emitted
+timeline line against these files on each gate run, first as published and then with
+every framework-owned object closed. The artifact envelope carries its `format_version`
+under the same policy; its schema is published when an Inspector consumes the envelope
+rather than the pointer.
 
 ## Summary tree node
 

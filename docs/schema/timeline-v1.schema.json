@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gitlab.com/Tyler-Meador/litmus_test/-/raw/main/docs/schema/timeline-v1.schema.json",
+  "title": "litmus timeline record, format_version 1",
+  "description": "One JSON Lines object from a node's timeline.jsonl: the temporal view of a run. Every physical line of the file is one complete instance of this schema. The object stays open so a consumer accepts fields added within version 1 by a later release; docs/inspector-json.md carries the policy.",
+  "type": "object",
+  "required": ["format_version", "timestamp", "scope", "level", "message"],
+  "properties": {
+    "format_version": {
+      "const": 1,
+      "description": "Timeline-record schema version, carried on every line so a consumer can refuse a version mid-file."
+    },
+    "timestamp": {
+      "$ref": "#/$defs/utcTimestamp",
+      "description": "When the entry was written."
+    },
+    "scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Root-to-emitting-node path, inclusive. Inline cases roll into the nearest owning ancestor's file but keep their own scope."
+    },
+    "level": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Lowercase Python logging level name."
+    },
+    "message": {
+      "type": "string",
+      "description": "Fully rendered log message. Newlines stay escaped within the JSON line."
+    },
+    "artifact_name": {
+      "type": "string",
+      "description": "Captured artifact name, or 'result' for the root result."
+    },
+    "artifact_path": {
+      "type": "string",
+      "description": "Absolute path of the published artifact, or of the root result.json."
+    },
+    "artifact_type": {
+      "type": "string",
+      "description": "Captured artifact type, or 'run-result' for the root result."
+    },
+    "artifact_timestamp": {
+      "$ref": "#/$defs/utcTimestamp",
+      "description": "The evidence timestamp; for the root result, its publication time."
+    }
+  },
+  "dependentRequired": {
+    "artifact_name": ["artifact_path", "artifact_type", "artifact_timestamp"],
+    "artifact_path": ["artifact_name", "artifact_type", "artifact_timestamp"],
+    "artifact_type": ["artifact_name", "artifact_path", "artifact_timestamp"],
+    "artifact_timestamp": ["artifact_name", "artifact_path", "artifact_type"]
+  },
+  "$defs": {
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+      "description": "Timezone-aware UTC timestamp in ISO 8601 form ending in Z."
+    }
+  }
+}
