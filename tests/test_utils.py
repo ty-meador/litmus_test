@@ -2,10 +2,12 @@
 
 import ast
 import asyncio
+import gc
 import inspect
 import shlex
 import sys
 import time
+import tracemalloc
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -507,3 +509,107 @@ class TestEnvSnapshotFilter:
         result = await _EnvSuite(name="rack").run(env=self._SOURCE, env_allow=["^HOME$"])
 
         assert result.to_json()["physical_location"] == "unknown"
+
+
+_OVERFLOW_DUT_COUNT = 70
+_OVERFLOW_BUDGET = 256
+_OVERFLOW_MEMORY_ROUNDS = 4
+_OVERFLOW_RETAINED_LIMIT_BYTES = 256 * 1024
+
+
+class _OverflowDut(LitmusTest):
+    """One DUT whose probe dumps past the run's exec output budget."""
+
+    def build_suite(self) -> LitmusTest:
+        return self.case("overflow", self._overflow)
+
+    async def _overflow(self, utils: TestUtils) -> Verdict:
+        result = await utils.exec("head -c 65536 /dev/zero")
+        if not result.truncated:
+            raise TestFailure(
+                "overflow was not truncated",
+                "truncated output",
+                f"captured {result.captured_bytes}",
+            )
+        return PASS
+
+
+class _OverflowRack(LitmusTest):
+    """Seventy overflowing DUT lifecycles under one run seed."""
+
+    def __init__(self) -> None:
+        super().__init__(name="overflow rack")
+        self._duts = tuple(
+            _OverflowDut(name=f"dut-{index:02d}") for index in range(_OVERFLOW_DUT_COUNT)
+        )
+
+    def build_suite(self) -> LitmusTest:
+        return self.group("rack DUTs", self._duts)
+
+
+async def _run_overflow_rack() -> None:
+    """Run one overflowing rack and drop the result so it cannot pin memory."""
+    result = await _OverflowRack().run(output_budget=_OVERFLOW_BUDGET)
+    assert result.state is State.PASS
+    del result
+
+
+def _retained_litmus_bytes() -> int:
+    snapshot = tracemalloc.take_snapshot().filter_traces(
+        (tracemalloc.Filter(True, "*/src/litmus/*"),)
+    )
+    return sum(stat.size for stat in snapshot.statistics("filename"))
+
+
+class TestUtilsOutputBudget:
+    """The run seed owns the budget; utils.exec names truncation in the scoped log."""
+
+    async def test_truncation_is_evidence_not_an_exception(self) -> None:
+        utils = TestUtils(output_budget=32)
+        result = await utils.exec("head -c 4096 /dev/zero")
+        assert result.truncated is True
+        assert result.captured_bytes == 32
+
+    async def test_the_scoped_log_names_truncation(self, caplog: pytest.LogCaptureFixture) -> None:
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("probe", self._probe)
+
+            async def _probe(self, utils: TestUtils) -> Verdict:
+                await utils.exec("head -c 4096 /dev/zero")
+                return PASS
+
+        with caplog.at_level("WARNING", logger="litmus"):
+            outcome = await Suite(name="rack").run(output_budget=32)
+
+        assert outcome.state is State.PASS
+        records = [record for record in caplog.records if "exec output truncated" in record.message]
+        assert len(records) == 1
+        assert cast("_ScopedLogRecord", records[0]).litmus_node == "probe"
+        assert "captured 32 bytes" in records[0].message
+        assert "budget 32" in records[0].message
+
+    async def test_seventy_dut_run_completes_when_every_exec_hits_the_budget(self) -> None:
+        await _run_overflow_rack()
+
+    async def test_retained_memory_stays_flat_across_overflowing_racks(self) -> None:
+        await _run_overflow_rack()
+        gc.collect()
+        tracemalloc.start()
+        try:
+            await _run_overflow_rack()
+            gc.collect()
+            baseline = _retained_litmus_bytes()
+            samples: list[int] = []
+            for _ in range(_OVERFLOW_MEMORY_ROUNDS):
+                await _run_overflow_rack()
+                gc.collect()
+                samples.append(_retained_litmus_bytes())
+        finally:
+            tracemalloc.stop()
+
+        retained_growth = max(samples) - baseline
+        assert retained_growth <= _OVERFLOW_RETAINED_LIMIT_BYTES, (
+            f"retained Litmus memory grew by {retained_growth} bytes; "
+            f"limit is {_OVERFLOW_RETAINED_LIMIT_BYTES} bytes"
+        )
