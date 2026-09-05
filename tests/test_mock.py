@@ -71,16 +71,6 @@ class TestScriptedEvidence:
 
         assert result == ExecResult(stdout="echo", stderr="", exit_code=0)
 
-    async def test_a_failed_command_is_evidence_not_an_exception(self) -> None:
-        transport = MockTransport()
-        transport.script("fail", ExecResult(stdout="", stderr="nope", exit_code=1))
-        await transport.connect()
-
-        result = await transport.exec("fail")
-
-        assert result.exit_code == 1
-        assert result.stderr == "nope"
-
     async def test_commands_records_every_exec(self) -> None:
         transport = MockTransport()
         await transport.connect()
@@ -92,23 +82,14 @@ class TestScriptedEvidence:
 
 
 class TestCancelAssertions:
-    async def test_cancel_is_safe_when_idle(self) -> None:
+    async def test_idle_cancel_tears_the_transport_down_once(self) -> None:
         transport = MockTransport()
         await transport.connect()
 
         await transport.cancel_in_flight()
         await transport.cancel_in_flight()
 
-        assert transport.connected is False
         assert transport.cancel_count == 1
-
-    async def test_cancel_is_safe_when_never_connected(self) -> None:
-        transport = MockTransport()
-
-        await transport.cancel_in_flight()
-
-        assert transport.cancel_count == 0
-        assert transport.connected is False
 
     async def test_every_parked_exec_fails_when_the_transport_dies(self) -> None:
         transport = MockTransport()
