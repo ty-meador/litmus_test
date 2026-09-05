@@ -99,6 +99,10 @@ rules and pyright strict — an unannotated def fails `make check`.
   `make soak` (the full suite eight times over; `SOAK_RUNS=n` overrides), not a single
   pass — a race can fail 7 of 8 locally while CI's machine wins it every time. CI runs
   the soak job on every MR as a second net; it does not replace running it at the bench.
+  A nightly CI schedule then runs the full suite and the rack suite many times over on
+  `main` (`tools/nightly_soak.py`, `make nightly` at the bench) and records each night
+  on issue #68; a red night names the failing case and run in #general before an MR
+  meets it.
 
 ## 7. Workflow
 
