@@ -5,8 +5,10 @@ one back already bound to this node's `exec`, logger, and routing label. ARP
 table reads go through `utils.exec`, so they land on the same host as the rest
 of this node's commands — the test host, or a via hop.
 
-The cache is keyed by that routing label. Devices behind different gateways keep
-independent ARP state; devices sharing a hop share one table read.
+The cache is keyed by that routing label alone. Two Gateway nodes that share a
+host but differ in user therefore share one table; that is accepted. Devices
+behind different gateways keep independent ARP state; devices sharing a hop
+share one table read.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from litmus.executor import ExecResult
 from litmus.verdict import PASS, Verdict
 
 if TYPE_CHECKING:
-    from litmus.utils import TestUtils
+    from litmus.utils import ScopedLogger, TestUtils
 
 type ExecFn = Callable[[str], Awaitable[ExecResult]]
 
@@ -62,7 +64,11 @@ def _empty_table() -> list[_ArpEntry]:
 class _ArpCache:
     table: list[_ArpEntry] = field(default_factory=_empty_table)
     last_update: float = 0.0
-    refreshing: asyncio.Future[None] | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _cache_is_fresh(cache: _ArpCache, *, force: bool, now: float) -> bool:
+    return not force and cache.last_update != 0.0 and (now - cache.last_update) < _MAX_AGE_SECONDS
 
 
 def _parse_proc_arp(raw: str) -> list[_ArpEntry]:
@@ -104,7 +110,7 @@ class ArpResolver:
         mac: str,
         ping_count: int = 1,
         exec_fn: ExecFn | None = None,
-        logger: object | None = None,
+        logger: ScopedLogger | None = None,
         cache_key: str | None = None,
     ) -> None:
         """Bind a MAC. Authors go through `utils.get_arp_resolver()`, not this.
@@ -178,8 +184,9 @@ class ArpResolver:
         """Reachability claim against the IP currently in `utils.ctx`.
 
         Uses the child's exec and logger. Packet loss and a missing stats line
-        are `TestFailure`. A missing IP (resolve never ran) is
-        `ArpResolutionFailure`.
+        are `TestFailure`. Duplicate replies (`received > transmitted`) still
+        count as success — the host answered. A missing IP (resolve never ran)
+        is `ArpResolutionFailure`.
         """
         ip = utils.ctx.get("ip")
         if not isinstance(ip, str) or not ip:
@@ -207,9 +214,8 @@ class ArpResolver:
             if received < transmitted:
                 lost_percent = round((1 - received / transmitted) * 100)
                 raise TestFailure("packet loss detected", "0%", f"{lost_percent}%")
-            if received == transmitted:
-                utils.logger.info("ping ok — %s/%s packets received", received, transmitted)
-                return PASS
+            utils.logger.info("ping ok — %s/%s packets received", received, transmitted)
+            return PASS
         raise TestFailure(
             "ping output did not contain expected results line",
             expected,
@@ -224,10 +230,8 @@ class ArpResolver:
         return self._exec, self._cache_key
 
     def _log(self, message: str, *args: object) -> None:
-        logger = self._logger
-        info = getattr(logger, "info", None)
-        if callable(info):
-            info(message, *args)
+        if self._logger is not None:
+            self._logger.info(message, *args)
 
     @classmethod
     def _get_cache(cls, cache_key: str) -> _ArpCache:
@@ -245,16 +249,11 @@ class ArpResolver:
 
     async def _refresh(self, exec_fn: ExecFn, cache_key: str, force: bool = False) -> None:
         cache = self._get_cache(cache_key)
-        now = time.monotonic()
-        if not force and cache.last_update != 0.0 and (now - cache.last_update) < _MAX_AGE_SECONDS:
+        if _cache_is_fresh(cache, force=force, now=time.monotonic()):
             return
-        in_flight = cache.refreshing
-        if in_flight is not None:
-            await in_flight
-            return
-        pending: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        cache.refreshing = pending
-        try:
+        async with cache.lock:
+            if _cache_is_fresh(cache, force=force, now=time.monotonic()):
+                return
             result = await exec_fn(_ARP_COMMAND)
             if result.exit_code != 0 or not result.stdout.strip():
                 raise ArpResolutionFailure(
@@ -264,10 +263,3 @@ class ArpResolver:
                 )
             cache.table = _parse_proc_arp(result.stdout)
             cache.last_update = time.monotonic()
-            pending.set_result(None)
-        except Exception as error:
-            if not pending.done():
-                pending.set_exception(error)
-            raise
-        finally:
-            cache.refreshing = None
