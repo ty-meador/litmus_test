@@ -10,7 +10,7 @@ from typing import cast, final
 
 from litmus.errors import Failure
 from litmus.evidence import JsonObject, default_run_data
-from litmus.lifecycle import Slot, State
+from litmus.lifecycle import Slot, State, TimeoutEvidence
 
 FORMAT_VERSION = 1
 
@@ -54,6 +54,7 @@ class SummaryTreeNode:
     type: NodeType
     state: State | None
     failure: Failure | None = None
+    timeout: TimeoutEvidence | None = None
     log_path: str | None = None
     children: tuple[SummaryTreeNode, ...] = ()
 
@@ -64,6 +65,7 @@ class SummaryTreeNode:
             "type": self.type.value,
             "state": None if self.state is None else self.state.value,
             "failure": _failure_json(self.failure),
+            "timeout": None if self.timeout is None else self.timeout.to_json(),
             "log_path": self.log_path,
             "children": [child.to_json() for child in self.children],
         }
@@ -87,6 +89,7 @@ class RunResult:
     summary_tree: SummaryTreeNode
     type: NodeType
     failure: Failure | None = None
+    timeout: TimeoutEvidence | None = None
     value: object = None
     swallowed: BaseException | None = None
     env: Mapping[str, str] = field(default_factory=_empty_env)
@@ -128,6 +131,7 @@ class RunResult:
             "format_version": FORMAT_VERSION,
             "state": self.state.value,
             "failure": _failure_json(self.failure),
+            "timeout": None if self.timeout is None else self.timeout.to_json(),
             "test_case": self.test_case,
             "type": self.type.value,
             "ancestor_names": list(self.ancestor_names),

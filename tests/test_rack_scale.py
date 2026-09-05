@@ -28,6 +28,8 @@ _DUT_COUNT = 70
 _MEMORY_ROUNDS = 4
 _RETAINED_MEMORY_LIMIT_BYTES = 256 * 1024
 _ABORT_LATENCY_LIMIT_SECONDS = 1.0
+_PARKED_DUT_BUDGET_SECONDS = 0.1
+_DEADLINE_LATENCY_LIMIT_SECONDS = 0.5
 _WAIT_LIMIT_SECONDS = 3.0
 
 
@@ -67,8 +69,9 @@ class _SyntheticDut(LitmusTest):
         coordinator: _RackCoordinator,
         install: ConnectorInstaller,
         include_abort_trigger: bool = False,
+        fail_after: float | None = None,
     ) -> None:
-        super().__init__(name=f"dut-{dut_id:02d}")
+        super().__init__(name=f"dut-{dut_id:02d}", fail_after=fail_after)
         self._dut_id = dut_id
         self._transport = transport
         self._coordinator = coordinator
@@ -116,6 +119,7 @@ class _SyntheticRack(LitmusTest):
         coordinator: _RackCoordinator,
         install: ConnectorInstaller,
         include_abort_trigger: bool = False,
+        deadline_dut: int | None = None,
     ) -> None:
         super().__init__(name="synthetic rack")
         self._duts = tuple(
@@ -125,6 +129,7 @@ class _SyntheticRack(LitmusTest):
                 coordinator=coordinator,
                 install=install,
                 include_abort_trigger=include_abort_trigger and index == 0,
+                fail_after=(_PARKED_DUT_BUDGET_SECONDS if index == deadline_dut else None),
             )
             for index, transport in enumerate(transports)
         )
@@ -140,6 +145,7 @@ def _rack(
     failed_dut: int | None = None,
     park_probes: bool = False,
     include_abort_trigger: bool = False,
+    deadline_dut: int | None = None,
 ) -> tuple[_SyntheticRack, _RackCoordinator, tuple[MockTransport, ...]]:
     transports = tuple(MockTransport() for _ in range(_DUT_COUNT))
     if failed_dut is not None:
@@ -150,6 +156,8 @@ def _rack(
     if park_probes:
         for transport in transports:
             transport.park("probe")
+    if deadline_dut is not None:
+        transports[deadline_dut].park("probe")
 
     coordinator = _RackCoordinator(_DUT_COUNT)
     rack = _SyntheticRack(
@@ -157,6 +165,7 @@ def _rack(
         coordinator=coordinator,
         install=install,
         include_abort_trigger=include_abort_trigger,
+        deadline_dut=deadline_dut,
     )
     return rack, coordinator, transports
 
@@ -283,3 +292,32 @@ class TestRackScale:
         assert all(transport.cancel_count == 1 for transport in transports)
         assert all(not transport.connected for transport in transports)
         assert all(not transport.has_in_flight for transport in transports)
+
+    async def test_one_parked_dut_is_cut_within_budget_while_sixty_nine_finish(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        parked_dut = 12
+        rack, coordinator, transports = _rack(
+            install_mock_connector,
+            deadline_dut=parked_dut,
+        )
+        coordinator.release.set()
+        started_at = asyncio.get_running_loop().time()
+
+        result = await asyncio.wait_for(rack.run(), _WAIT_LIMIT_SECONDS)
+        elapsed = asyncio.get_running_loop().time() - started_at
+        dut_results = _dut_results(result)
+
+        assert elapsed < _PARKED_DUT_BUDGET_SECONDS + _DEADLINE_LATENCY_LIMIT_SECONDS
+        assert result.state is State.FAIL
+        assert dut_results[parked_dut].state is State.FAIL
+        assert dut_results[parked_dut].timeout is not None
+        assert coordinator.completed == set(range(_DUT_COUNT)) - {parked_dut}
+        assert transports[parked_dut].cancel_count == 1
+        assert not transports[parked_dut].has_in_flight
+        assert all(
+            transport.disconnect_count == 1
+            for index, transport in enumerate(transports)
+            if index != parked_dut
+        )
