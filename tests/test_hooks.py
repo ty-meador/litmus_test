@@ -219,6 +219,61 @@ class TestAuditHooks:
         assert cleanup_ran.is_set()
         assert observed_signal == [True]
 
+    async def test_audit_dispatch_completion_is_observable_by_construction(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        completed = asyncio.Event()
+
+        class _CompletionWatcher(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                if record.getMessage() == "audit hook #1 dispatch #1 complete":
+                    completed.set()
+
+        watcher = _CompletionWatcher()
+        logger = logging.getLogger("litmus")
+        logger.addHandler(watcher)
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_audit(interval=0.000_001, fn=self._audit)
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("watched claim", self._claim)
+
+            async def _audit(self, utils: TestUtils) -> object:
+                return {"watch": "kept"}
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                await completed.wait()
+                if completed.is_set():
+                    return PASS
+                raise TestFailure("audit dispatch never completed")
+
+        try:
+            with caplog.at_level(logging.DEBUG, logger="litmus"):
+                suite = Suite(name="rack")
+                result = await suite.run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+        finally:
+            logger.removeHandler(watcher)
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert result.state is State.PASS
+        assert "dispatching audit hook #1 dispatch #1" in messages
+        assert "audit hook #1 dispatch #1 complete" in messages
+        assert messages.index("dispatching audit hook #1 dispatch #1") < messages.index(
+            "audit hook #1 dispatch #1 complete"
+        )
+        assert _artifact_payloads(tmp_path)["audit-1-1"] == {"watch": "kept"}
+        assert suite.log_path is not None
+        timeline = [
+            json.loads(line)["message"]
+            for line in suite.log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert "audit hook #1 dispatch #1 complete" in timeline
+
     async def test_audit_values_use_the_survey_artifact_contract_and_stop_with_the_suite(
         self, tmp_path: Path
     ) -> None:
