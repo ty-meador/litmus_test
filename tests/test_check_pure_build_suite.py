@@ -104,7 +104,7 @@ class TestPureBuildSuiteFires:
                     return self.parallel(
                         "stress",
                         [
-                            self.test(f"cpu{i}_stress", partial(self._cpu_stress, cpu=i))
+                            self.test(f"cpu{i}_stress", self._cpu_stress, cpu=i)
                             for i in range(self.cpu_count)
                         ],
                     )

@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import functools
 import inspect
 import math
 import os
@@ -47,7 +48,7 @@ from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
 from litmus.verdict import Verdict
 
-type _TestFunction = Callable[[TestUtils], Awaitable[Verdict]]
+type _TestFunction = Callable[..., Awaitable[Verdict]]
 type _TimedCall = Callable[[tuple[TimeBudgetClock, ...], object], Awaitable[object]]
 
 _SEALED_METHODS = frozenset(
@@ -168,6 +169,7 @@ class _OperatorSignalGuard:
 
 
 _DEADLINE_CANCELLATION = object()
+_UTILS_PLACEHOLDER = object()
 _DEADLINE_CANCEL_COUNTS: weakref.WeakKeyDictionary[asyncio.Task[Any], int] = (
     weakref.WeakKeyDictionary()
 )
@@ -269,6 +271,24 @@ async def _bounded_finalization(call: Awaitable[object], *, node: str, operation
         if not task.done():
             task.cancel()
             task.add_done_callback(_consume_finalization_exception)
+
+
+def _bind_test_arguments(
+    fn: _TestFunction, args: tuple[object, ...], kwargs: dict[str, object]
+) -> _TestFunction:
+    """Close the developer's arguments over ``fn`` so the leaf is called as ``fn(utils)``.
+
+    ``utils`` stays the first positional argument, ahead of anything the suite passed,
+    so a plain ``functools.partial`` would put it in the wrong slot.
+    """
+    if not args and not kwargs:
+        return fn
+
+    @functools.wraps(fn)
+    async def bound(utils: TestUtils) -> Verdict:
+        return await fn(utils, *args, **kwargs)
+
+    return bound
 
 
 def _function(member: object) -> object:
@@ -454,22 +474,38 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self,
         name: str,
         fn: _TestFunction,
-        *,
+        /,
+        *args: object,
         fail_after: float | None = None,
         abort_after: float | None = None,
+        **kwargs: object,
     ) -> LitmusTest:
-        """Create the leaf node: one verdict method, named here, at composition time.
+        """Create the leaf node: a name, a verdict method, and that method's arguments.
 
-        ``fn`` is a bound ``async def`` or a ``functools.partial`` of one, so a suite
-        can stamp out one leaf per core, rail, or channel from a single method.
+        The framework calls ``fn(utils, *args, **kwargs)``. A suite stamps out one leaf
+        per core, rail, or channel from a single method by naming each leaf and passing
+        the value that varies. ``fail_after`` and ``abort_after`` are the leaf's budget
+        and never reach ``fn``; a test method cannot take parameters of those names.
+
+        The arguments are checked against ``fn``'s signature here, at composition time,
+        so a leaf that could never be called fails ``build_suite`` before any hardware
+        is touched. Static checkers cannot see through this call (PEP 612 forbids
+        keyword parameters between ``*args`` and ``**kwargs`` of a ``ParamSpec``).
         """
         if not inspect.iscoroutinefunction(fn):
             method = getattr(fn, "__qualname__", repr(fn))
             msg = f"test method {method} must be defined with async def"
             raise TypeError(msg)
+        try:
+            inspect.signature(fn).bind(_UTILS_PLACEHOLDER, *args, **kwargs)
+        except TypeError as error:
+            method = getattr(fn, "__qualname__", repr(fn))
+            raise ContractViolation(
+                name, f"arguments do not fit test method {method}: {error}"
+            ) from error
         return _Test(
             name=name,
-            fn=fn,
+            fn=_bind_test_arguments(fn, args, kwargs),
             fail_after=fail_after,
             abort_after=abort_after,
         )
