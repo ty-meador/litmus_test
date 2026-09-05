@@ -25,7 +25,7 @@ from xml.etree.ElementTree import Element, SubElement, indent, tostring
 from litmus.lifecycle import State
 from litmus.results import RunResult, SummaryTreeNode
 
-type _Case = tuple[str, str, SummaryTreeNode, str | None]
+type _Test = tuple[str, str, SummaryTreeNode, str | None]
 
 
 @final
@@ -78,13 +78,13 @@ def _iter_cases(
     node: SummaryTreeNode,
     ancestors: tuple[str, ...],
     nearest_log: str | None,
-) -> list[_Case]:
+) -> list[_Test]:
     """Walk the summary tree into the testcases the reporter emits."""
     log_path = node.log_path if node.log_path is not None else nearest_log
     children = node.children
     ran = any(child.state is not None for child in children)
     classname = "/".join(ancestors) if ancestors else node.name
-    cases: list[_Case] = []
+    cases: list[_Test] = []
     if not children or (node.state is not None and not ran):
         cases.append((node.name, classname, node, log_path))
     lineage = (*ancestors, node.name)

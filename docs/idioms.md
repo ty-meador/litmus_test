@@ -108,19 +108,25 @@ populate or replace it. Measurement limits, units, aggregation, SPC, and Cpk req
 later shared design. The empty slot preserves that boundary without pretending those
 semantics exist today.
 
-## Composition Factories: `self.case`, `self.sequence`, `self.group`
+## Composition Factories: `self.test`, `self.sequence`, `self.parallel`
 
-`LitmusTest` exposes three instance factories for building the suite:
+`LitmusTest` exposes three instance factories for building the suite. The names are
+the vocabulary a suite reads aloud in: a leaf is a *test*, dependent children run in
+*sequence*, independent children run in *parallel*. There is exactly one spelling for
+each; `case` and `group` are retired (issue #110) and `litmus/retired-names` flags them.
 
-- `self.case(name, test_fn)` — a leaf test case. Defaults to `discrete_log_file=False` so entries roll up to the parent artifact.
-- `self.sequence(name, [tests])` — serial execution, bails on first failure, and owns a
-  discrete timeline by default.
-- `self.group(name, [tests])` — concurrent execution via `asyncio.TaskGroup`, collects
-  all failures, and owns a discrete timeline by default.
+- `self.test(name, fn, *, fail_after=None, abort_after=None)` — the leaf: one verdict
+  method, named here at composition time. Defaults to `discrete_log_file=False` so
+  entries roll up to the parent artifact.
+- `self.sequence(name, children, ...)` — serial execution, bails on first failure, and
+  owns a discrete timeline by default.
+- `self.parallel(name, children, ...)` — concurrent execution via `asyncio.TaskGroup`,
+  collects all failures, and owns a discrete timeline by default. The name says so:
+  nobody misses that two children share a bus.
 
-Pass `discrete_log_file=False` to `self.sequence()` or `self.group()` when that
+Pass `discrete_log_file=False` to `self.sequence()` or `self.parallel()` when that
 composition is too small to merit a separate Inspector timeline. Its records then roll
-into the nearest owning ancestor, just as inline cases do. Authored `LitmusTest`
+into the nearest owning ancestor, just as leaves do. Authored `LitmusTest`
 subclasses also default to a discrete timeline and may opt into roll-up through
 `super().__init__(..., discrete_log_file=False)`. The root always owns a log so every
 run has an authoritative temporal backbone.
@@ -132,8 +138,8 @@ def build_suite(self) -> LitmusTest:
     return self.sequence(
         self.name,
         [
-            self.case("check reachable", self._check_reachable),
-            self.case("check firmware", self._check_firmware),
+            self.test("check reachable", self._check_reachable),
+            self.test("check firmware", self._check_firmware),
         ],
     )
 
@@ -149,6 +155,53 @@ async def _check_reachable(self, utils: TestUtils) -> Verdict:
 Every `return PASS` sits under the predicate that earns it; `litmus-check` (the
 `litmus/gated-pass` rule) flags a bare one, and the examples show the gated shape.
 
+### Enumerate Leaves at Runtime
+
+A leaf's name is decided where the tree is composed, not where the method is defined.
+One method, many leaves: bind the varying parameter with `functools.partial` and name
+each leaf in a comprehension. `inspect.iscoroutinefunction` unwraps a partial of an
+`async def`, so `self.test()` accepts it; a `lambda` is not a coroutine function and is
+rejected with `TypeError`.
+
+```python
+import functools
+
+
+class Compute(LitmusTest):
+    def __init__(self, *, name: str, cpu_count: int) -> None:
+        super().__init__(name=name)
+        self._cpu_count = cpu_count
+
+    async def _cpu_stress(self, utils: TestUtils, *, cpu: int) -> Verdict: ...
+
+    def build_suite(self) -> LitmusTest:
+        return self.parallel(
+            "stress",
+            [
+                self.test(
+                    f"cpu{i}_stress",
+                    functools.partial(self._cpu_stress, cpu=i),
+                    fail_after=120.0,
+                )
+                for i in range(self._cpu_count)
+            ],
+        )
+```
+
+The comprehension maps a known population (every core, every rail, every channel) onto
+leaves; it does not choose among them. A comprehension with an `if` filter decides at
+build time which claims exist, and `litmus/pure-build-suite` flags it. The population
+is identity, like a hook: it comes in through `__init__`, never out of `configure()`.
+
+### `self.test()` or `configure()`?
+
+A long operation such as a firmware flash or a provisioning step is a `self.test(...)`
+when the Floor Technician should see it in the report with its own verdict and its own
+budget. When it is preparation the report should not itemize, it belongs in
+`configure()`, where a `TestFailure` means "the device did not reach a testable state"
+(see overview.md) and the node reads Fail without a phantom leaf. Ask whether the Floor
+Technician acts differently when this step fails on its own line. If so, it is a leaf.
+
 ## Time Budgets: Name the Meaning of “Too Long”
 
 Declare a budget on the composition line that owns the work. Use `fail_after` when
@@ -157,11 +210,11 @@ harness should stop waiting without claiming the hardware failed.
 
 ```python
 def build_suite(self) -> LitmusTest:
-    return self.group(
+    return self.parallel(
         "rack claims",
         [
-            self.case("BMC ready", self._bmc_ready, fail_after=45.0),
-            self.case("optional telemetry", self._telemetry, abort_after=10.0),
+            self.test("BMC ready", self._bmc_ready, fail_after=45.0),
+            self.test("optional telemetry", self._telemetry, abort_after=10.0),
         ],
         fail_after=120.0,
     )
@@ -170,8 +223,8 @@ def build_suite(self) -> LitmusTest:
 result = await rack.run(abort_after=300.0)
 ```
 
-The run budget bounds the whole rack. The group and cases may tighten that bound; they
-cannot lengthen it. If the 45-second case is reached with only 8 seconds left on the
+The run budget bounds the whole rack. The parallel node and its leaves may tighten that
+bound; they cannot lengthen it. If the 45-second leaf is reached with only 8 seconds left on the
 run clock, the run clock fires after those 8 seconds and its `abort_after` state applies.
 The resulting `timeout` evidence names `reason="timeout"`, the declared budget, active
 elapsed time, and the root-to-node path of the winning clock.
@@ -179,7 +232,7 @@ elapsed time, and the root-to-node path of the winning clock.
 The timed window is configure through the test method or last child. Cleanup retains
 its separate finalization allowance. Root-owned `before_each`/`after_each` hooks are
 excluded from every time-budget clock, so a slow shop-floor database cannot manufacture
-a hardware Fail. In a concurrent group, however, a sibling still inside its timed
+a hardware Fail. In a parallel node, however, a sibling still inside its timed
 window keeps the shared ancestor clock moving; another sibling's hook or cleanup cannot
 lend it extra time. Do not catch or suppress `asyncio.CancelledError` around awaited
 work.
@@ -245,12 +298,12 @@ For composing Litmus into a larger harness (shop-floor DB, lab coordinator, audi
 ```python
 await root.run(
     before_each=lambda ctx: shopfloor_db.record_started(
-        test=ctx.bread_crumbs,
+        fn=ctx.bread_crumbs,
         station=ctx.env.get("STATION_ID"),
         at=datetime.now(UTC),
     ),
     after_each=lambda ctx: shopfloor_db.record_finished(
-        test=ctx.bread_crumbs,
+        fn=ctx.bread_crumbs,
         state=ctx.result.state,
         failure=ctx.result.failure.fail_message if ctx.result.failure else None,
         at=datetime.now(UTC),
@@ -265,7 +318,7 @@ Register once at the root — the framework fires them around every executed tes
 The exception-path behavior is: throw from either hook → run halts → every enclosing node transitions to `Aborted` → every in-flight SSH session and subprocess is killed immediately. A 30-minute firmware flash mid-abort must NOT continue to mutate the hardware.
 
 ## Configure-Returns-Context Pattern
-`configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant test cases. No instance fields are needed for configure-phase data.
+`configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant leaves. No instance fields are needed for configure-phase data.
 
 The framework annotation is `Mapping[str, Any]`; a plain `dict[str, Any]` return is the
 default and satisfies it. When a suite benefits from precise key types, define a local
@@ -322,8 +375,8 @@ class MyDevice(LitmusTest):
         return self.sequence(
             self.name,
             [
-                self.case("survey", self._capture_survey),
-                self.case("reachable", self._check_reachable),
+                self.test("survey", self._capture_survey),
+                self.test("reachable", self._check_reachable),
             ],
         )
 
@@ -357,15 +410,15 @@ Call `await root.run()` to execute a suite. The framework constructs `TestUtils`
 authors import it for lifecycle annotations, not as plumbing they must assemble.
 
 Every node receives a distinct `TestUtils` object with a logger scoped to that node's
-full root-to-leaf path. Inline cases, sequences, and groups built by one authored
+full root-to-leaf path. Leaves, sequences, and parallel nodes built by one authored
 instance share that instance's `utils.ctx` dict, while a composed `LitmusTest` subclass
 starts with a fresh context. The environment snapshot is immutable and shared across
 the run; the halt signal is read-only from suite code.
 
 ## Logging
-- `utils.logger` is scoped per test case — never `print()`, so evidence is captured in artifacts
+- `utils.logger` is scoped per node — never `print()`, so evidence is captured in artifacts
 - Artifacts captured automatically
-- `discrete_log_file=False` rolls log entries into the parent logger. `discrete_log_file=True` (the default on class-based tests) gives the node its own log file. Inline `self.case()` bodies default to `False`.
+- `discrete_log_file=False` rolls log entries into the parent logger. `discrete_log_file=True` (the default on class-based tests) gives the node its own log file. Inline `self.test()` bodies default to `False`.
 - Every full run creates a timestamped directory under the configured artifact root.
   A logging owner streams both `timeline.log` for humans and versioned
   `timeline.jsonl` for the Inspector, flushing both on every entry. Treat
@@ -427,13 +480,13 @@ the API changed and the docs need updating.
 
 ---
 
-## TestSequence vs TestGroup
+## `self.sequence()` vs `self.parallel()`
 
 **`self.sequence()`** — serial, stops on the first failure.
 Use when later tests depend on earlier ones. The Floor Technician sees exactly where the chain broke and nothing beyond it.
 
-**`self.group()`** — concurrent via `asyncio.TaskGroup`, collects all failures.
-Use when tests are fully independent. The Floor Technician sees everything broken at once. One child's Fail never cancels its siblings — Fail is returned, not raised, at the child boundary; only a harness-level abort cancels the group, and then cancelling everything is exactly what Aborted means.
+**`self.parallel()`** — concurrent via `asyncio.TaskGroup`, collects all failures.
+Use when tests are fully independent. The Floor Technician sees everything broken at once. One child's Fail never cancels its siblings — Fail is returned, not raised, at the child boundary; only a harness-level abort cancels the parallel node, and then cancelling everything is exactly what Aborted means.
 
 ---
 
@@ -457,7 +510,7 @@ except ArpResolutionFailure as error:
 return {**resolved, "arp": arp}
 
 # In build_suite():
-self.case("reachability", self._reachability)
+self.test("reachability", self._reachability)
 ```
 
 See `examples/networked_device.py`.
@@ -485,7 +538,7 @@ See `examples/networked_device.py`. The DUT class is the same one used locally.
 
 ## SSH Device — Class-Owned Connection
 
-Extend `LitmusTest` when one SSH connection must be shared across all of the device's test cases. Open in `configure()` via `utils.use_shell()` and let the framework route `utils.exec` through it automatically.
+Extend `LitmusTest` when one SSH connection must be shared across all of the device's leaves. Open in `configure()` via `utils.use_shell()` and let the framework route `utils.exec` through it automatically.
 
 Returning `{"ssh": ...}` from `configure()` also makes the device eligible as a `via` target. Pass it as `via` in `TestParams` — the framework manages the lifecycle and scopes `utils.exec` automatically.
 

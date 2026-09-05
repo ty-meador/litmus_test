@@ -55,11 +55,11 @@ class PowerSupply(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Independent claims: voltage and temperature do not depend on each other."""
-        return self.group(
+        return self.parallel(
             self.name,
             [
-                self.case("output-voltage", self._check_voltage),
-                self.case("temperature", self._check_temperature),
+                self.test("output-voltage", self._check_voltage),
+                self.test("temperature", self._check_temperature),
             ],
         )
 

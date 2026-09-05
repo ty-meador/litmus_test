@@ -45,7 +45,7 @@ class TestPassFailAborted:
     async def test_pass_is_a_bare_testcase(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("say hello", self._say)
+                return self.test("say hello", self._say)
 
             async def _say(self, _utils: TestUtils) -> Verdict:
                 return PASS
@@ -64,7 +64,7 @@ class TestPassFailAborted:
     async def test_fail_is_a_failure_element_carrying_the_taxonomy(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("firmware", self._firmware)
+                return self.test("firmware", self._firmware)
 
             async def _firmware(self, _utils: TestUtils) -> Verdict:
                 raise TestFailure("gate remained closed", "open", "closed")
@@ -88,7 +88,7 @@ class TestPassFailAborted:
     async def test_aborted_is_an_error_element_not_a_failure(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("forgot", self._forgot)
+                return self.test("forgot", self._forgot)
 
             async def _forgot(self, _utils: TestUtils) -> Verdict:
                 return None  # type: ignore[return-value]
@@ -108,14 +108,14 @@ class TestPassFailAborted:
 
 
 class TestTreeShape:
-    async def test_groups_become_classname_leaves_become_testcases(self) -> None:
+    async def test_parallel_nodes_become_classname_leaves_become_testcases(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "claims",
                     [
-                        self.case("identity", self._pass),
-                        self.case("firmware", self._fail),
+                        self.test("identity", self._pass),
+                        self.test("firmware", self._fail),
                     ],
                 )
 
@@ -142,8 +142,8 @@ class TestTreeShape:
                 return self.sequence(
                     "ordered",
                     [
-                        self.case("gate", self._fail),
-                        self.case("never", self._pass),
+                        self.test("gate", self._fail),
+                        self.test("never", self._pass),
                     ],
                 )
 
@@ -169,7 +169,7 @@ class TestTreeShape:
                 raise TestFailure("device missing")
 
             def build_suite(self) -> LitmusTest:
-                return self.case("never", self._never)
+                return self.test("never", self._never)
 
             async def _never(self, _utils: TestUtils) -> Verdict:
                 return PASS
@@ -192,7 +192,7 @@ class TestArtifactPointers:
     async def test_system_out_points_at_the_timeline(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("say hello", self._say)
+                return self.test("say hello", self._say)
 
             async def _say(self, _utils: TestUtils) -> Verdict:
                 return PASS
@@ -209,7 +209,7 @@ class TestArtifactPointers:
     async def test_write_persists_utf8_xml(self, tmp_path: Path) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("say hello", self._say)
+                return self.test("say hello", self._say)
 
             async def _say(self, _utils: TestUtils) -> Verdict:
                 return PASS
@@ -225,15 +225,15 @@ class TestArtifactPointers:
 
 
 class TestAnyRunResult:
-    async def test_a_group_of_mixed_states_round_trips_the_counts(self) -> None:
+    async def test_a_parallel_node_of_mixed_states_round_trips_the_counts(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "rack",
                     [
-                        self.case("pass", self._pass),
-                        self.case("fail", self._fail),
-                        self.case("abort", self._abort),
+                        self.test("pass", self._pass),
+                        self.test("fail", self._fail),
+                        self.test("abort", self._abort),
                     ],
                 )
 
@@ -265,7 +265,7 @@ class TestTimeoutProjection:
                 super().__init__(name=name, abort_after=0.03)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("stall", self._stall)
+                return self.test("stall", self._stall)
 
             async def _stall(self, _utils: TestUtils) -> Verdict:
                 await asyncio.Event().wait()
@@ -294,7 +294,7 @@ class TestTimeoutProjection:
                 super().__init__(name=name, fail_after=0.03)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("stall", self._stall)
+                return self.test("stall", self._stall)
 
             async def _stall(self, _utils: TestUtils) -> Verdict:
                 await asyncio.Event().wait()

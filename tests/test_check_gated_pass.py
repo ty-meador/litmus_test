@@ -162,7 +162,7 @@ class TestGatedPassStaysQuiet:
                 return None
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", self._claim)
+                    return self.test("x", self._claim)
         """
         assert _lines(source) == []
 

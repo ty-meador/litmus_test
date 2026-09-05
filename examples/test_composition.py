@@ -1,7 +1,7 @@
-"""Sequence and group composition translated from the legacy Litmus example.
+"""Sequence and parallel composition translated from the legacy Litmus example.
 
 The values are deterministic stand-ins for device readings. This keeps the example
-dependent claims belong in a sequence; independent claims belong in a group.
+dependent claims belong in a sequence; independent claims belong in a parallel node.
 """
 
 import asyncio
@@ -31,9 +31,9 @@ class SequencedDevice(LitmusTest):
         return self.sequence(
             self.name,
             [
-                self.case("boot-check", self._boot_check),
-                self.case("firmware-version", self._firmware_version_check),
-                self.case("application-running", self._application_running),
+                self.test("boot-check", self._boot_check),
+                self.test("firmware-version", self._firmware_version_check),
+                self.test("application-running", self._application_running),
             ],
         )
 
@@ -53,7 +53,7 @@ class SequencedDevice(LitmusTest):
         raise TestFailure("application not running", "pid present", "(none)")
 
 
-class GroupedDevice(LitmusTest):
+class ParallelDevice(LitmusTest):
     """Check independent sensor claims concurrently and collect every failure."""
 
     def __init__(
@@ -64,7 +64,7 @@ class GroupedDevice(LitmusTest):
         voltage_v: float,
         fan_rpm: int,
     ) -> None:
-        """Capture the simulated readings that the group will evaluate."""
+        """Capture the simulated readings that the parallel node will evaluate."""
         super().__init__(name=name)
         self._temperature_c = temperature_c
         self._voltage_v = voltage_v
@@ -72,12 +72,12 @@ class GroupedDevice(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Group the sensor claims because none depends on another."""
-        return self.group(
+        return self.parallel(
             self.name,
             [
-                self.case("temperature", self._temperature),
-                self.case("voltage", self._voltage),
-                self.case("fan-speed", self._fan_speed),
+                self.test("temperature", self._temperature),
+                self.test("voltage", self._voltage),
+                self.test("fan-speed", self._fan_speed),
             ],
         )
 
@@ -109,7 +109,7 @@ class CompositionExample:
             firmware_version="2.4.1",
             application_pid=412,
         ).run()
-        await GroupedDevice(
+        await ParallelDevice(
             name="sensor checks",
             temperature_c=92,
             voltage_v=3.3,

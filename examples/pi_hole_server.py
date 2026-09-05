@@ -92,13 +92,13 @@ class PiHoleServer(LitmusTest):
         return self.sequence(
             f"{self.name}-main-sequence",
             [
-                self.case("sanity-check", self._sanity_check),
-                self.case("pihole-running", self._pihole_is_running),
-                self.group(
+                self.test("sanity-check", self._sanity_check),
+                self.test("pihole-running", self._pihole_is_running),
+                self.parallel(
                     "health-checks",
                     [
-                        self.case("dmesg-clean", self._dmesg_clean),
-                        self.case("status-checks", self._status_check),
+                        self.test("dmesg-clean", self._dmesg_clean),
+                        self.test("status-checks", self._status_check),
                     ],
                 ),
             ],
