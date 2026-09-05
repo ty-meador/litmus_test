@@ -40,6 +40,7 @@ class TestTestUtilsPublicSurface:
 
         assert callable(utils.exec)
         assert callable(utils.wait_for)
+        assert callable(utils.get_arp_resolver)
         assert isinstance(utils.ctx, dict)
         assert utils.logger.scope == ()
         assert not utils.signal.fired
