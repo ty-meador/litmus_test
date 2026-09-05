@@ -6,6 +6,12 @@ plain Python object that `json.dumps()` accepts without an encoder. The root res
 self-contained: consumers do not need the live `LitmusTest` objects to reconstruct the
 run tree.
 
+Every full `LitmusTest.run()` atomically writes the root `RunResult.to_json()` payload
+to `result.json` in the timestamped run directory beneath `LITMUS_ARTIFACT_ROOT`. The
+file is present for Pass, Fail, and Aborted outcomes. Its absolute path is published by
+the final entry in the root node's timeline, with artifact name `result` and artifact
+type `run-result`; consumers do not need to derive the run directory name.
+
 ## Version 1 result
 
 | Field | JSON type | Meaning |
@@ -85,10 +91,10 @@ from ordinary records rather than set to null.
 
 | Field | JSON type | Meaning |
 |---|---|---|
-| `artifact_name` | string | Captured artifact name. |
-| `artifact_path` | string | Absolute path published by `capture_artifact()`. |
-| `artifact_type` | string | Captured artifact type. |
-| `artifact_timestamp` | string | The artifact's timezone-aware UTC timestamp. |
+| `artifact_name` | string | Captured artifact name, or `result` for the root result. |
+| `artifact_path` | string | Absolute path of the published artifact or root `result.json`. |
+| `artifact_type` | string | Captured artifact type, or `run-result` for the root result. |
+| `artifact_timestamp` | string | The evidence timestamp in UTC; for the root result, its publication time. |
 
 Authored suites, sequences, and groups own a log by default. Inline cases roll their
 records into the nearest owning ancestor. A sequence, group, or composed authored suite
@@ -101,7 +107,7 @@ A run therefore produces two versioned records, and each carries its own
 
 | Record | Where it lives | Version field |
 |---|---|---|
-| Result | `RunResult.to_json()`; the structural view rooted at `summary_tree` | `format_version` on the result object |
+| Result | `result.json` at the run-directory root; the serialized root `RunResult.to_json()` and structural view rooted at `summary_tree` | `format_version` on the result object |
 | Timeline | `timeline.jsonl` beneath the run directory; the temporal view | `format_version` on every JSON Lines object |
 
 The two version numbers move independently. The summary tree links the structural view
