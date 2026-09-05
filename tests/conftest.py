@@ -8,6 +8,7 @@ import pytest
 from tests.mock_connector import ConnectorInstaller, MockConnector
 
 from litmus import TestUtils
+from litmus.arp import ArpResolver
 from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouting
 
@@ -19,6 +20,18 @@ def _checkout_evidence() -> frozenset[Path]:
     if not CHECKOUT_ARTIFACTS.exists():
         return frozenset()
     return frozenset(path for path in CHECKOUT_ARTIFACTS.rglob("*") if path.is_file())
+
+
+@pytest.fixture(autouse=True)
+def reset_arp_caches() -> Iterator[None]:
+    """ARP table caches are process-global and keyed by routing label.
+
+    A leftover table from one test would make the next test's resolve() skip
+    the exec and fail for a MAC the previous table never held.
+    """
+    ArpResolver.reset_caches()
+    yield
+    ArpResolver.reset_caches()
 
 
 @pytest.fixture(autouse=True)

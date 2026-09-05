@@ -29,7 +29,7 @@ class TunneledDevice(LitmusTest):
         target_port: int = 22,
         skip_host_verification: bool = False,
     ) -> None:
-        """Capture the jump and the DUT this case will tunnel through.
+        """Capture the jump and the DUT this leaf will tunnel through.
 
         Args:
             name: Node name used by logs, artifacts, and failures.
@@ -78,7 +78,7 @@ class TunneledDevice(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Build one leaf that reads the DUT kernel through the tunneled handle."""
-        return self.case("kernel-version", self._check_kernel)
+        return self.test("kernel-version", self._check_kernel)
 
     async def _check_kernel(self, utils: TestUtils) -> Verdict:
         result = await utils.ctx["target"].exec("uname -r")

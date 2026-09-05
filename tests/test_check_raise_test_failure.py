@@ -42,7 +42,7 @@ class TestRaiseTestFailureFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", self._claim)
+                    return self.test("x", self._claim)
                 async def _claim(self, utils):
                     raise RuntimeError("lost the rail")
         """
@@ -74,7 +74,7 @@ class TestRaiseTestFailureFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", test=self._claim)
+                    return self.test("x", fn=self._claim)
                 async def _claim(self, utils: TestUtils) -> "Verdict":
                     raise ValueError("string-annotated")
         """
@@ -99,7 +99,7 @@ class TestRaiseTestFailureStaysQuiet:
                 async def cleanup(self, utils: TestUtils) -> None:
                     raise RuntimeError("cleanup failed")
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", self._claim)
+                    return self.test("x", self._claim)
                 async def _claim(self, utils: TestUtils) -> Verdict:
                     if True:
                         return PASS
@@ -134,9 +134,9 @@ class TestRaiseTestFailureStaysQuiet:
             class Suite(LitmusTest):
                 class Inner:
                     def build_suite(self) -> LitmusTest:
-                        return self.case("x", self._claim)
+                        return self.test("x", self._claim)
                 def build_suite(*args) -> LitmusTest:
-                    return args[0].case("x")
+                    return args[0].test("x")
                 async def _claim(self, utils: TestUtils) -> Verdict:
                     raise (lambda: ValueError("x"))()
                     if True:

@@ -94,7 +94,7 @@ class TestLitmusTestRunData:
                 return {"serial": "SN-0042", "transport": _Handle()}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("sample", self._sample)
+                return self.test("sample", self._sample)
 
             async def _sample(self, utils: TestUtils) -> Verdict:
                 utils.ctx["voltage"] = 12.1
@@ -119,7 +119,7 @@ class TestLitmusTestRunData:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -139,7 +139,7 @@ class TestLitmusTestRunData:
     async def test_cleanup_context_is_included_in_the_completed_result(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -157,7 +157,7 @@ class TestLitmusTestRunData:
                 return {"child": "local"}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS

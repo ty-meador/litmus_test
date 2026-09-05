@@ -74,7 +74,7 @@ class TestCaptureArtifact:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("snapshot", self._snapshot)
+                return self.test("snapshot", self._snapshot)
 
             async def _snapshot(self, utils: TestUtils) -> Verdict:
                 artifact = Artifact(
