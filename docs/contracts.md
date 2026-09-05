@@ -46,6 +46,57 @@ static analysis.
 
 ---
 
+## Time Budget Contract
+**Framework obligation:** Any node may declare a time budget by naming the terminal
+state it produces on expiry: `fail_after=` (seconds) or `abort_after=` (seconds).
+Exactly one name, or neither. Both on one node is a `ContractViolation` at composition
+time. A node with neither has no deadline of its own and is bounded only by its
+ancestors. Durations must be positive, finite numbers; booleans, zero, negatives,
+infinities, NaN, and non-numbers are rejected before execution.
+
+- The pair is part of the `LitmusTest` fractal atom. It is accepted by authored-node
+  construction, `self.case()`, `self.group()`, `self.sequence()`, and root `run()`.
+  Every node is a suite, so every placement reads the same way: this suite completes
+  within the budget or the named state is raised. Construction and `run()` are two
+  ways to declare the root's one budget, not a way to attach two clocks to one node.
+- The window opens when the node enters `configure` and closes when its test method, or
+  its last child, settles. Internal cases, groups, and sequences open the equivalent
+  window at their test/child boundary. Cleanup runs after the cut on its own
+  finalization budget. Root-owned `before_each` and `after_each` integration hooks are
+  outside every declared node window; time spent in them cannot spend an ancestor's
+  hardware-verdict budget.
+- A budget bounds the whole subtree. Every declared clock remains active while its
+  subtree does test work. Descendants inherit all ancestor bounds and may only tighten
+  them. The clock that fires first decides the state; a descendant's longer declaration
+  can never loosen an ancestor's remaining time. A `wait_for` timeout longer than the
+  effective enclosing budget never fires—the budget wins.
+- Expiry settles every descendant still running with the winning clock's declared
+  state. `fail_after` renders Fail with a structured `TestFailure` naming the budget.
+  `abort_after` renders node-local Aborted without forging a failure verdict. Descendants
+  already settled retain their verdicts, and a composite follows the ordinary terminal
+  aggregation rule: any Aborted outranks Fail.
+- Deadline Aborted is node-local. It never fires the shared run halt and never cascades
+  beyond the bounded subtree. Siblings outside that subtree are untouched under the
+  Group Isolation Contract. Expiry is never classified as a BUG.
+- Expiry cancels the coroutine and hard-cancels at the resource every transport the cut
+  node itself opened. An inherited route or borrowed `via` hop is never in that owned
+  set and is not touched; it remains available to its owner and other tunneled siblings.
+- Every cut node carries structured `timeout` evidence with `reason="timeout"`, the
+  declared name, the declared budget in seconds, active elapsed seconds, and the
+  root-to-node path of the clock that fired. This evidence appears on `RunResult`, in
+  every affected `summary_tree` node, and in their JSON forms.
+
+**Developer obligation:** Choose the name for what “took too long” means at that step.
+`fail_after` says the hardware did not do its job in time; `abort_after` says the
+harness gave up and no verdict exists. Never swallow `asyncio.CancelledError`; doing so
+would obstruct every deadline declared above the await.
+
+**Consequence:** Fail at a deadline sends the Floor Technician to the hardware. Aborted
+at a deadline sends them to the harness. The composition names that distinction, and
+the record identifies the exact clock and budget without requiring the suite source.
+
+---
+
 ## Failure Taxonomy Contract
 **Framework obligation:** Every failure must be traceable to one of the following root causes, made obvious by signal:
 1. **DUT failed a check** — `TestFailure` from a test method or from `configure()`. State = Fail. A `TestFailure` from `configure()` carries an extra ambiguity: the device did not reach a testable state, but whether the cause is hardware or infrastructure cannot be determined from code. The framework surfaces the `looking_for` / failure message; the human triager decides.
