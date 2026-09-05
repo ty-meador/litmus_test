@@ -10,6 +10,7 @@ self-tests import the policy machinery directly.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
@@ -291,6 +292,16 @@ class ExecRouting:
         for remote in opened:
             with contextlib.suppress(Exception):
                 await remote.disconnect()
+
+    async def cancel_opened(self) -> None:
+        """Hard-close only remotes this node opened, never its inherited hop."""
+        opened = list(reversed(self._opened))
+        self._opened.clear()
+        await asyncio.gather(*(self._cancel_opened_remote(remote) for remote in opened))
+
+    async def _cancel_opened_remote(self, remote: RemoteInterface) -> None:
+        with contextlib.suppress(Exception):
+            await remote.cancel_in_flight()
 
     async def use_shell(
         self,
