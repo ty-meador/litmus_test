@@ -15,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast, final
 
+from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
 from litmus.errors import FrameworkContractViolation, HaltReason, TestFailure
 from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, ExecResult, LocalExec
@@ -569,6 +570,28 @@ class TestUtils:
                 msg = f"timed out waiting for {looking_for}"
                 raise TestFailure(msg, looking_for, "timeout")
             await asyncio.sleep(min(interval, max(0.0, deadline - loop.time())))
+
+    def get_arp_resolver(self, *, mac: str, ping_count: int = 1) -> ArpResolver:
+        """Return a MAC-to-IP resolver scoped to this node's current exec route.
+
+        ARP table reads and pings go through `utils.exec`, so they land on the
+        same host as the rest of this node's commands — local, or through a via
+        hop. The routing label is the cache key: devices behind different
+        gateways keep independent ARP state.
+
+        Args:
+            mac: Device MAC in any usual form (colons, dashes, or bare hex).
+            ping_count: ICMP packets per `ping()`. Defaults to 1.
+        """
+        router = self._routing.router
+        cache_key = router.label if router is not None else "local"
+        return ArpResolver(
+            mac=mac,
+            ping_count=ping_count,
+            exec_fn=self.exec,
+            logger=self._logger,
+            cache_key=cache_key,
+        )
 
     async def use_shell(
         self,
