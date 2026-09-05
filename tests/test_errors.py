@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from litmus import (
+    ArpResolutionFailure,
     ContractViolation,
     ExternalIntegrationFailure,
     FrameworkContractViolation,
@@ -26,6 +27,13 @@ class TestTaxonomyShape:
         assert failure.fail_message == "firmware mismatch"
         assert failure.has_comparison is True
         assert failure.is_bug is False
+
+    def test_arp_resolution_failure_is_not_a_test_failure(self) -> None:
+        failure = ArpResolutionFailure("missing", mac="aa:bb:cc:dd:ee:ff", host="local")
+        assert isinstance(failure, LitmusError)
+        assert not isinstance(failure, TestFailure)
+        assert failure.mac == "aa:bb:cc:dd:ee:ff"
+        assert failure.host == "local"
 
     def test_a_self_evident_failure_carries_no_comparison(self) -> None:
         assert TestFailure("could not resolve IP from ARP cache").has_comparison is False

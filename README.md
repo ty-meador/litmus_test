@@ -13,12 +13,14 @@ make check     # CI gate: format check, lint, pyright strict, pytest, litmus-che
 ```
 
 The locally executable examples progress from one explicit claim, through composition,
-to polling with the complete evidence surface:
+to polling, lifecycle hooks, and the evidence surface:
 
 ```sh
 uv run python examples/hello_world.py
 uv run python examples/test_composition.py
 uv run python examples/wait_for_patterns.py
+uv run python examples/hardware_device_lifecycle.py
+uv run python examples/run_data_evidence.py
 ```
 
 The pi-hole dogfood suite is the end-to-end proof against a real hop. It needs
@@ -29,9 +31,12 @@ uv run python examples/pi_hole_server.py
 ```
 
 `wait_for_patterns.py` demonstrates both readiness polling in `configure()` and verdict
-polling in a test method. Its runs emit phase-boundary surveys, point-in-time artifacts,
-scoped log pointers, serializable `run_data`, and a root `summary_tree` suitable for an
-Inspector.
+polling in a test method. `hardware_device_lifecycle.py` registers survey and audit
+hooks around a rail that comes up, is watched, and is dropped in cleanup.
+`run_data_evidence.py` shows ctx flowing into `run_data` and a computed `within_spec`
+override. `networked_device.py` is the MAC-to-IP lesson (`utils.get_arp_resolver` in
+`configure`, locally or through a `via` hop) and needs `DUT_MAC` on the ARP table;
+`GATEWAY_HOST` and `GATEWAY_USER` resolve through a hop instead.
 
 Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
 `overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
