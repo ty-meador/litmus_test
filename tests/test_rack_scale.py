@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import os
+import signal
 import tracemalloc
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from litmus import (
     PASS,
     BeforeEachContext,
     LitmusTest,
+    OperatorInterrupt,
     RunResult,
     SummaryTreeNode,
     TestFailure,
@@ -289,6 +292,32 @@ class TestRackScale:
             f"limit is {_ABORT_LATENCY_LIMIT_SECONDS:.1f}s"
         )
         assert result.state is State.ABORTED
+        assert all(transport.cancel_count == 1 for transport in transports)
+        assert all(not transport.connected for transport in transports)
+        assert all(not transport.has_in_flight for transport in transports)
+
+    async def test_operator_interrupt_hard_closes_seventy_mock_transports(
+        self, install_mock_connector: ConnectorInstaller
+    ) -> None:
+        rack, coordinator, transports = _rack(install_mock_connector, park_probes=True)
+        coordinator.release.set()
+        running = asyncio.create_task(rack.run())
+
+        await asyncio.wait_for(coordinator.all_started.wait(), _WAIT_LIMIT_SECONDS)
+        deadline = asyncio.get_running_loop().time() + _WAIT_LIMIT_SECONDS
+        while sum(transport.in_flight_count for transport in transports) != _DUT_COUNT:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("not every DUT entered its parked transport")
+            await asyncio.sleep(0)
+
+        os.kill(os.getpid(), signal.SIGINT)
+        result = await asyncio.wait_for(running, _WAIT_LIMIT_SECONDS)
+
+        assert result.state is State.ABORTED
+        assert isinstance(result.failure, OperatorInterrupt)
+        assert "operator" in result.failure.fail_message
+        assert all(node.state is State.ABORTED for node in _dut_results(result))
+        assert all(isinstance(node.failure, OperatorInterrupt) for node in _dut_results(result))
         assert all(transport.cancel_count == 1 for transport in transports)
         assert all(not transport.connected for transport in transports)
         assert all(not transport.has_in_flight for transport in transports)

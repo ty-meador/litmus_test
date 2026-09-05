@@ -9,6 +9,7 @@ from litmus import (
     PASS,
     ExternalIntegrationFailure,
     LitmusTest,
+    OperatorInterrupt,
     RunResult,
     SummaryTreeNode,
     TestFailure,
@@ -205,4 +206,33 @@ class TestInspectorJsonContract:
             "state": "Aborted",
             "hook": "after_each",
             "cause": {"name": "RuntimeError", "message": "MES unavailable"},
+        }
+
+    def test_operator_interrupt_is_json_safe_without_an_encoder(self) -> None:
+        failure = OperatorInterrupt(2)
+        tree = SummaryTreeNode(
+            name="rack",
+            type=NodeType.TEST_SUITE,
+            state=State.ABORTED,
+            failure=failure,
+        )
+        result = RunResult(
+            slot=Slot.TEST_METHOD,
+            node="rack",
+            state=State.ABORTED,
+            failure=failure,
+            ancestor_names=["rack"],
+            bread_crumbs="rack",
+            summary_tree=tree,
+            type=NodeType.TEST_SUITE,
+        )
+
+        payload = json.loads(json.dumps(result.to_json()))
+
+        assert payload["failure"] == {
+            "name": "OperatorInterrupt",
+            "fail_message": "operator interrupted the test run (SIGINT)",
+            "state": "Aborted",
+            "operator": True,
+            "signal": "SIGINT",
         }
