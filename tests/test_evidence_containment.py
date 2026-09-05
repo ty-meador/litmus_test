@@ -18,7 +18,7 @@ class SurveyingSuite(LitmusTest):
     """One case, one captured artifact, no explicit artifact root anywhere."""
 
     def build_suite(self) -> LitmusTest:
-        return self.case("snapshot", self._snapshot)
+        return self.test("snapshot", self._snapshot)
 
     async def _snapshot(self, utils: TestUtils) -> Verdict:
         await utils.capture_artifact(Artifact(name="snapshot", type="survey", data={"ok": True}))

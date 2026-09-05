@@ -7,7 +7,7 @@ reads as Fail-about-the-unit rather than Fail-about-the-author.
 
 Flagged: ``raise <Name>(...)`` (and the un-called ``raise <Name>`` form) inside a
 statically known ``LitmusTest`` test method when ``<Name>`` is not ``TestFailure``.
-A test method is a class body member passed to ``self.case`` or annotated ``-> Verdict``.
+A test method is a class body member passed to ``self.test`` or annotated ``-> Verdict``.
 ``configure``, ``cleanup``, ``build_suite``, and ``__init__`` are not test methods.
 
 Not flagged: ``raise TestFailure(...)``, a bare ``raise`` (re-raise), or ``raise err``
@@ -60,7 +60,7 @@ class RaiseTestFailureRule(Rule):
 
 
 def _test_methods(module: SuiteModule, klass: ast.ClassDef) -> frozenset[FunctionDef]:
-    names = _case_method_names(module, klass)
+    names = _leaf_method_names(module, klass)
     found: set[FunctionDef] = set()
     for member in klass.body:
         if not isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -72,7 +72,7 @@ def _test_methods(module: SuiteModule, klass: ast.ClassDef) -> frozenset[Functio
     return frozenset(found)
 
 
-def _case_method_names(module: SuiteModule, klass: ast.ClassDef) -> frozenset[str]:
+def _leaf_method_names(module: SuiteModule, klass: ast.ClassDef) -> frozenset[str]:
     names: set[str] = set()
     for node in ast.walk(klass):
         if not isinstance(node, ast.Call) or module.enclosing_class(node) is not klass:
@@ -81,9 +81,9 @@ def _case_method_names(module: SuiteModule, klass: ast.ClassDef) -> frozenset[st
         if method is None:
             continue
         receiver = _first_parameter(method)
-        if receiver is None or not _is_receiver_call(node.func, receiver, "case"):
+        if receiver is None or not _is_receiver_call(node.func, receiver, "test"):
             continue
-        test = _case_test_argument(node)
+        test = _leaf_fn_argument(node)
         if (
             isinstance(test, ast.Attribute)
             and isinstance(test.value, ast.Name)
@@ -93,11 +93,11 @@ def _case_method_names(module: SuiteModule, klass: ast.ClassDef) -> frozenset[st
     return frozenset(names)
 
 
-def _case_test_argument(call: ast.Call) -> ast.expr | None:
+def _leaf_fn_argument(call: ast.Call) -> ast.expr | None:
     if len(call.args) >= 2:
         return call.args[1]
     for keyword in call.keywords:
-        if keyword.arg == "test":
+        if keyword.arg == "fn":
             return keyword.value
     return None
 

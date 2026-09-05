@@ -62,8 +62,8 @@ class SshDevice(LitmusTest):
         return self.sequence(
             self.name,
             [
-                self.case("uptime", self._check_uptime),
-                self.case("disk-space", self._check_disk_space),
+                self.test("uptime", self._check_uptime),
+                self.test("disk-space", self._check_disk_space),
             ],
         )
 

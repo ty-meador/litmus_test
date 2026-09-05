@@ -6,7 +6,7 @@ standard to functions and methods whose nearest enclosing class is a statically 
 ``LitmusTest`` subclass. The implicit receiver of instance and class methods is the one
 exception; static methods and every other parameter remain explicit.
 
-Methods passed to ``self.case(...)`` are verdict boundaries, not merely annotated
+Methods passed to ``self.test(...)`` are verdict boundaries, not merely annotated
 coroutines. Their return annotation must be ``Verdict`` (bare or module-qualified), so
 the authoring contract remains legible even when the surrounding project is not type
 checked.
@@ -114,9 +114,9 @@ def _test_methods(module: SuiteModule, klass: ast.ClassDef) -> frozenset[Functio
         if method is None:
             continue
         receiver = _first_parameter(method)
-        if receiver is None or not _is_receiver_call(node.func, receiver, "case"):
+        if receiver is None or not _is_receiver_call(node.func, receiver, "test"):
             continue
-        test = _case_test_argument(node)
+        test = _leaf_fn_argument(node)
         if (
             isinstance(test, ast.Attribute)
             and isinstance(test.value, ast.Name)
@@ -130,11 +130,11 @@ def _test_methods(module: SuiteModule, klass: ast.ClassDef) -> frozenset[Functio
     )
 
 
-def _case_test_argument(call: ast.Call) -> ast.expr | None:
+def _leaf_fn_argument(call: ast.Call) -> ast.expr | None:
     if len(call.args) >= 2:
         return call.args[1]
     for keyword in call.keywords:
-        if keyword.arg == "test":
+        if keyword.arg == "fn":
             return keyword.value
     return None
 

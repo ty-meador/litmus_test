@@ -31,7 +31,7 @@ class TestSurveyHooks:
                 return {"ready": True}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def cleanup(self, utils: TestUtils) -> None:
                 utils.ctx["cleaned"] = True
@@ -69,7 +69,7 @@ class TestSurveyHooks:
                 self.use_survey(self._fallthrough)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _explicit_none(self, utils: TestUtils) -> object:
                 return None
@@ -107,7 +107,7 @@ class TestSurveyHooks:
                 self.use_survey(self._null_reading)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _null_reading(self, utils: TestUtils) -> object:
                 dispatch = int(utils.ctx.get("null_dispatch", 0)) + 1
@@ -139,7 +139,7 @@ class TestSurveyHooks:
                 self.use_survey(self._broken_survey)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _broken_survey(self, utils: TestUtils) -> object:
                 raise TestFailure("sensor unavailable")
@@ -166,7 +166,7 @@ class TestAuditHooks:
                 self.use_audit(interval=interval, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _audit(self, utils: TestUtils) -> object:
                 return {}
@@ -192,7 +192,7 @@ class TestAuditHooks:
                 self.use_audit(interval=0.001, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("long-running claim", self._claim)
+                return self.test("long-running claim", self._claim)
 
             async def cleanup(self, utils: TestUtils) -> None:
                 cleanup_ran.set()
@@ -241,7 +241,7 @@ class TestAuditHooks:
                 self.use_audit(interval=0.000_001, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("watched claim", self._claim)
+                return self.test("watched claim", self._claim)
 
             async def _audit(self, utils: TestUtils) -> object:
                 return {"watch": "kept"}
@@ -285,7 +285,7 @@ class TestAuditHooks:
                 self.use_audit(interval=0.001, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _audit(self, utils: TestUtils) -> object:
                 nonlocal dispatches
@@ -332,7 +332,7 @@ class TestAuditHooks:
                 self.use_audit(interval=0.001, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _audit(self, utils: TestUtils) -> object:
                 return {"temperature": 42}
@@ -360,7 +360,7 @@ class TestAuditHooks:
 
         assert _artifact_payloads(tmp_path) == {"audit-1-1": {"temperature": 42}}
 
-    async def test_a_child_audit_failure_does_not_cancel_group_siblings(
+    async def test_a_child_audit_failure_does_not_cancel_parallel_siblings(
         self, tmp_path: Path
     ) -> None:
         sibling_finished = asyncio.Event()
@@ -371,7 +371,7 @@ class TestAuditHooks:
                 self.use_audit(interval=0.001, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("watched claim", self._claim)
+                return self.test("watched claim", self._claim)
 
             async def _audit(self, utils: TestUtils) -> object:
                 raise TestFailure("watchdog tripped")
@@ -382,7 +382,7 @@ class TestAuditHooks:
 
         class HealthySibling(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("healthy claim", self._claim)
+                return self.test("healthy claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 await asyncio.sleep(0.005)
@@ -393,7 +393,7 @@ class TestAuditHooks:
 
         class Root(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "independent children",
                     [
                         AuditedChild(name="watched child"),

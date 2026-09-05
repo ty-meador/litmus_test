@@ -77,7 +77,7 @@ class _WatchedSuite(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Return the single authored claim watched by the audit."""
-        return self.case("authored main", self._main)
+        return self.test("authored main", self._main)
 
     async def _main(self, utils: TestUtils) -> Verdict:
         self._controls.main_started.set()
@@ -99,7 +99,7 @@ class _AbortProbe(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Return a claim that remains unreachable when its before hook aborts."""
-        return self.case("unreachable claim", self._claim)
+        return self.test("unreachable claim", self._claim)
 
     async def _claim(self, utils: TestUtils) -> Verdict:
         if utils.logger.scope[-1] == "unreachable claim":
@@ -117,7 +117,7 @@ class _RaceRoot(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Run the three race contenders under one shared run-abort signal."""
-        return self.group("race", [self._watched, self._abort_probe])
+        return self.parallel("race", [self._watched, self._abort_probe])
 
 
 def _node_named(node: SummaryTreeNode, name: str) -> SummaryTreeNode:

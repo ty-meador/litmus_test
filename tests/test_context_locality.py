@@ -17,7 +17,7 @@ class TestContextLocality:
                 return {"child": "configured"}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("child claim", self._claim)
+                return self.test("child claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 child_seen.append(dict(utils.ctx))
@@ -66,7 +66,7 @@ class TestContextLocality:
                 return {self.own_key: True}
 
             def build_suite(self) -> LitmusTest:
-                return self.case(f"{self.name} claim", self._claim)
+                return self.test(f"{self.name} claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 await self.peer_configured.wait()
@@ -78,7 +78,7 @@ class TestContextLocality:
                 return {"parent": True}
 
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "siblings",
                     [
                         Child(
@@ -110,7 +110,7 @@ class TestContextLocality:
                 return {"serial": "SN-0042"}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 seen.append(dict(utils.ctx))

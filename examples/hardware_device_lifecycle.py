@@ -98,7 +98,7 @@ class PoweredDevice(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Claim the device enumerated only after the rail is up."""
-        return self.case("device-enumerates", self._device_enumerates)
+        return self.test("device-enumerates", self._device_enumerates)
 
     async def cleanup(self, utils: TestUtils) -> None:
         """Drop the rail. Always runs; must not throw."""

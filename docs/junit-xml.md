@@ -60,8 +60,8 @@ Jenkins-compatible JUnit (the schema GitLab CI, Jenkins, and pytest-junit share)
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="rack" tests="3" failures="1" errors="1" skipped="1">
-  <testsuite name="rack" tests="3" failures="1" errors="1" skipped="1">
+<testsuites name="rack" children="3" failures="1" errors="1" skipped="1">
+  <testsuite name="rack" children="3" failures="1" errors="1" skipped="1">
     <testcase name="identity" classname="rack/claims"/>
     <testcase name="firmware" classname="rack/claims">
       <failure type="TestFailure" message="gate remained closed">{taxonomy JSON}</failure>

@@ -23,8 +23,8 @@ class SeededBlade(LitmusTest):
         return {}
 
     def build_suite(self) -> LitmusTest:
-        claims = [self.case("temperature", lambda u: self._temperature(u))]  # two seeds
-        return self.sequence(self.name, claims)
+        claims = [self.test("temperature", lambda u: self._temperature(u))]  # two seeds
+        return self.group(self.name, claims)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # seed: litmus/retired-names
 
     async def _temperature(self, _utils: TestUtils) -> Verdict:
         if self._limit_c < 0:

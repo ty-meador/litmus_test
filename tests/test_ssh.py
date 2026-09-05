@@ -896,7 +896,7 @@ class TestTopologyFromArtifacts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 assert (await utils.exec("uname")).exit_code == 0
