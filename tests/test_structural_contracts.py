@@ -6,7 +6,7 @@ from litmus import PASS, ContractViolation, LitmusTest, Verdict
 
 
 def _suite(self: LitmusTest) -> LitmusTest:
-    return self.case("claim", self._claim)  # type: ignore[attr-defined]
+    return self.test("claim", self._claim)  # type: ignore[attr-defined]
 
 
 async def _replacement(self: LitmusTest, utils: object) -> Verdict:
@@ -20,15 +20,15 @@ class TestSealedInternals:
             "__delattr__",
             "__init_subclass__",
             "__setattr__",
-            "case",
-            "group",
+            "test",
+            "parallel",
             "main",
             "run",
             "run_configure_only",
             "run_cleanup_only",
             "sequence",
             "_run_lifecycle",
-            "_run_group",
+            "_run_parallel",
             "_run_sequence",
             "_run_configure_only",
             "_run_cleanup_only",
@@ -72,7 +72,7 @@ class TestCoroutineContracts:
 
             class SynchronousClaim(LitmusTest):  # pyright: ignore[reportUnusedClass]
                 def build_suite(self) -> LitmusTest:
-                    return self.case(
+                    return self.test(
                         "claim",
                         self._claim,  # pyright: ignore[reportArgumentType]
                     )
@@ -96,7 +96,7 @@ class TestCoroutineContracts:
     def test_sync_helper_without_a_verdict_contract_remains_valid(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             def _label(self) -> str:
                 return "claim"
@@ -110,7 +110,7 @@ class TestCoroutineContracts:
     def test_specialization_cannot_drop_an_inherited_async_verdict_contract(self) -> None:
         class BaseSuite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: object) -> Verdict:
                 return PASS
@@ -136,7 +136,7 @@ class TestBuildSuiteContract:
     def test_specialization_may_inherit_an_authored_build_suite(self) -> None:
         class BaseSuite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: object) -> Verdict:
                 return PASS
@@ -171,7 +171,7 @@ class TestHookRegistrationShape:
                 )
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _audit(self, utils: object) -> object:
                 return None
@@ -189,7 +189,7 @@ class TestHookRegistrationShape:
                 self.use_audit(interval=1.0, fn=self._audit)  # type: ignore[arg-type]
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             def _audit(self, utils: object) -> object:
                 return None
@@ -208,7 +208,7 @@ class TestHookRegistrationShape:
                 self.use_audit(interval=1.0, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _survey(self, utils: object) -> object:
                 return None
@@ -224,7 +224,7 @@ class TestHookRegistrationShape:
     def test_hooks_cannot_be_registered_after_construction(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _survey(self, utils: object) -> object:
                 return None

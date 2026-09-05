@@ -28,11 +28,11 @@ class TestRunResultNavigation:
     async def test_every_executed_result_carries_its_root_to_node_path(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "claims",
                     [
-                        self.case("identity", self._passes),
-                        self.case("firmware", self._passes),
+                        self.test("identity", self._passes),
+                        self.test("firmware", self._passes),
                     ],
                 )
 
@@ -62,10 +62,10 @@ class TestRunResultNavigation:
                 return self.sequence(
                     "ordered claims",
                     [
-                        self.case("failing gate", self._fails),
-                        self.group(
+                        self.test("failing gate", self._fails),
+                        self.parallel(
                             "unreached group",
-                            [self.case("unreached leaf", self._passes)],
+                            [self.test("unreached leaf", self._passes)],
                         ),
                     ],
                 )
@@ -96,12 +96,12 @@ class TestRunResultNavigation:
         class Suite(LitmusTest):
             def __init__(self, *, name: str) -> None:
                 super().__init__(name=name)
-                self._gate = self.case("failing gate", self._fails)
+                self._gate = self.test("failing gate", self._fails)
                 self._rolled = self.sequence(
-                    "rolled up", [self.case("inline", self._passes)], discrete_log_file=False
+                    "rolled up", [self.test("inline", self._passes)], discrete_log_file=False
                 )
-                self._unreached = self.group(
-                    "unreached group", [self.case("unreached leaf", self._passes)]
+                self._unreached = self.parallel(
+                    "unreached group", [self.test("unreached leaf", self._passes)]
                 )
                 self._ordered = self.sequence(
                     "ordered claims", [self._rolled, self._gate, self._unreached]
@@ -153,7 +153,7 @@ class TestInspectorJsonContract:
     ) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("terminal", self._terminal)
+                return self.test("terminal", self._terminal)
 
             async def _terminal(self, _utils: object) -> Verdict:
                 if terminal_state is State.PASS:
@@ -239,7 +239,7 @@ class TestInspectorJsonContract:
     ) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._passes)
+                return self.test("claim", self._passes)
 
             async def _passes(self, _utils: object) -> Verdict:
                 return PASS
@@ -272,7 +272,7 @@ class TestInspectorJsonContract:
     ) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._passes)
+                return self.test("claim", self._passes)
 
             async def _passes(self, _utils: object) -> Verdict:
                 return PASS
@@ -322,7 +322,7 @@ class TestInspectorJsonContract:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("voltage", self._fails)
+                return self.test("voltage", self._fails)
 
             async def _fails(self, _utils: object) -> Verdict:
                 raise TestFailure(

@@ -21,8 +21,8 @@ class CleanBlade(LitmusTest):
         return self.sequence(
             self.name,
             [
-                self.case("temperature", self._temperature),
-                self.case(f"limit {self._limit_c:g}", self._limit_declared),
+                self.test("temperature", self._temperature),
+                self.test(f"limit {self._limit_c:g}", self._limit_declared),
             ],
         )
 

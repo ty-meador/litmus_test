@@ -27,7 +27,7 @@ class TestLifecycleOrder:
 
             def build_suite(self) -> LitmusTest:
                 calls.append(("build_suite", {}))
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append(("test", dict(utils.ctx)))
@@ -60,7 +60,7 @@ class TestLifecycleOrder:
 
             def build_suite(self) -> LitmusTest:
                 calls.append("build_suite")
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test")
@@ -103,7 +103,7 @@ class TestCleanupGuarantee:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 raise failed_check
@@ -125,7 +125,7 @@ class TestCleanupGuarantee:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test")
@@ -145,7 +145,7 @@ class TestCleanupGuarantee:
     ) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -168,7 +168,7 @@ class TestCleanupGuarantee:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test")
@@ -200,7 +200,7 @@ class TestCleanupGuarantee:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("test-started")
@@ -241,7 +241,7 @@ class TestCleanupGuarantee:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS

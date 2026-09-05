@@ -82,7 +82,7 @@ class ConfigureGatedDevice(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Run the health claim only after the configure gate succeeds."""
-        return self.case("service-health", self._check_health)
+        return self.test("service-health", self._check_health)
 
     async def cleanup(self, utils: TestUtils) -> None:
         """Leave cleanup completion in the final structured evidence snapshot."""
@@ -146,7 +146,7 @@ class MainAssertionDevice(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Declare the stress-completion claim."""
-        return self.case("stress-test-completes", self._wait_for_stress)
+        return self.test("stress-test-completes", self._wait_for_stress)
 
     async def _stress_snapshot(self, utils: TestUtils) -> dict[str, object]:
         """Capture progress at each reachable lifecycle boundary."""
