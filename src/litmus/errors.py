@@ -158,6 +158,41 @@ class TestFailure(LitmusError):
         return payload
 
 
+class ArpResolutionFailure(LitmusError):
+    """The resolver could not map a MAC address to an IP.
+
+    This is not a `TestFailure`. That is deliberate:
+
+    - Uncaught in a test method or `configure`, the child boundary classifies it
+      as a developer bug. The suite did not model this failure mode at all.
+    - Caught and re-raised as `TestFailure`, the author acknowledged the mode
+      and chose the verdict shape: the device did not appear on the network.
+
+    Catching this does not tell you *why* the ARP entry is missing — dead NIC,
+    unplugged cable, hungry switch, DHCP failure, or a gateway that has not
+    seen traffic from the target yet. No amount of code can distinguish those.
+    Hardware versus infrastructure is the human triager's call from logs,
+    survey artifacts, and the bench. Do not write code that pretends to know.
+
+    If this extended `TestFailure`, an uncaught miss would land in Fail and
+    look like a modeled hardware verdict, hiding that the author never handled
+    the mode.
+    """
+
+    def __init__(self, message: str, *, mac: str, host: str) -> None:
+        """Record the MAC that could not be resolved and the host that was asked.
+
+        Args:
+            message: What failed, in the FT's language.
+            mac: The normalised MAC that was missing from the table.
+            host: Routing label of the host whose ARP table was read
+                (`"local"`, `"via 10.0.0.1"`, …).
+        """
+        super().__init__(message)
+        self.mac = mac
+        self.host = host
+
+
 class ContractViolation(TestFailure):
     """A developer bug: suite code did something the verdict contract forbids.
 

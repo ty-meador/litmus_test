@@ -85,7 +85,7 @@ data_file = ".coverage/data"
 precision = 1
 # Global floor. Ratchet-only: raise it to the new measurement when coverage rises,
 # never lower it (STANDARDS.md section 6). Per-file floors: [tool.litmus.coverage].
-fail_under = 94.9
+fail_under = 95.1
 exclude_also = [
     "if TYPE_CHECKING:",
     "^\\s*\\.\\.\\.\\s*$",
