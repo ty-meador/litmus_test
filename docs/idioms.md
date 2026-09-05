@@ -113,8 +113,17 @@ semantics exist today.
 `LitmusTest` exposes three instance factories for building the suite:
 
 - `self.case(name, test_fn)` — a leaf test case. Defaults to `discrete_log_file=False` so entries roll up to the parent artifact.
-- `self.sequence(name, [tests])` — serial execution, bails on first failure.
-- `self.group(name, [tests])` — concurrent execution via `asyncio.TaskGroup`, collects all failures.
+- `self.sequence(name, [tests])` — serial execution, bails on first failure, and owns a
+  discrete timeline by default.
+- `self.group(name, [tests])` — concurrent execution via `asyncio.TaskGroup`, collects
+  all failures, and owns a discrete timeline by default.
+
+Pass `discrete_log_file=False` to `self.sequence()` or `self.group()` when that
+composition is too small to merit a separate Inspector timeline. Its records then roll
+into the nearest owning ancestor, just as inline cases do. Authored `LitmusTest`
+subclasses also default to a discrete timeline and may opt into roll-up through
+`super().__init__(..., discrete_log_file=False)`. The root always owns a log so every
+run has an authoritative temporal backbone.
 
 **Private methods pass as references directly — Python bound methods carry `self` for free.**
 
@@ -309,6 +318,13 @@ the run; the halt signal is read-only from suite code.
 - `utils.logger` is scoped per test case — never `print()`, so evidence is captured in artifacts
 - Artifacts captured automatically
 - `discrete_log_file=False` rolls log entries into the parent logger. `discrete_log_file=True` (the default on class-based tests) gives the node its own log file. Inline `self.case()` bodies default to `False`.
+- Every full run creates a timestamped directory under the configured artifact root.
+  A logging owner streams both `timeline.log` for humans and versioned
+  `timeline.jsonl` for the Inspector, flushing both on every entry. Treat
+  `LitmusTest.log_path` as the authoritative path; directory names are not an API.
+- While a durable timeline is attached, `utils.logger.isEnabledFor(...)` is true at
+  every level so developer-side guards cannot suppress the authoritative chronology.
+  Process logging handlers still apply their own level policy.
 
 ### Point-in-Time Artifacts
 

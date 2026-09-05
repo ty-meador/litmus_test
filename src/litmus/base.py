@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import inspect
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, final
 
 from litmus.artifacts import Artifact
@@ -38,7 +39,9 @@ _SEALED_METHODS = frozenset(
         "__init_subclass__",
         "__setattr__",
         "case",
+        "discrete_log_file",
         "group",
+        "log_path",
         "main",
         "run",
         "run_configure_only",
@@ -56,6 +59,7 @@ _SEALED_METHODS = frozenset(
         "_pending_summary_tree",
         "_pending_children",
         "_to_result",
+        "_finish_result",
         "_aborted_result",
         "_configure_and_merge_context",
         "_capture_hook_artifact",
@@ -151,8 +155,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         "_configure_only_task",
         "_configure_only_utils",
         "_ctx",
+        "_discrete_log_file",
         "_frozen",
         "_has_run",
+        "_log_path",
         "_name",
         "_summary_tree",
         "_surveys",
@@ -162,7 +168,13 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         "_via_leased",
     )
 
-    def __init__(self, *, name: str, via: LitmusTest | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        name: str,
+        via: LitmusTest | None = None,
+        discrete_log_file: bool = True,
+    ) -> None:
         """Create a named, not-yet-run test node.
 
         Args:
@@ -171,11 +183,15 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 node's pre-configure survey, routes exec through its SSH hop, and
                 tears it down after this node's post-cleanup survey. Authors never
                 call configure/cleanup on it.
+            discrete_log_file: Own a per-node timeline. Set false only when this
+                composed node should roll its records into its parent.
         """
         self._frozen = False
         self._has_run = False
         self._name = name
         self._via = via
+        self._discrete_log_file = discrete_log_file
+        self._log_path: Path | None = None
         self._via_leased = False
         self._via_lease_count = 0
         self._configure_only_task: asyncio.Task[Outcome] | None = None
@@ -244,6 +260,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         return self._name
 
     @property
+    def discrete_log_file(self) -> bool:
+        """Whether this node owns a timeline instead of rolling into its parent."""
+        return self._discrete_log_file
+
+    @property
+    def log_path(self) -> Path | None:
+        """Authoritative JSON Lines path, or ``None`` for a rolled-up/pending node."""
+        return self._log_path
+
+    @property
     def run_data(self) -> JsonObject:
         """A detached JSON-safe snapshot of this node's serializable context."""
         return snapshot_run_data(self._ctx)
@@ -256,17 +282,29 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             raise TypeError(msg)
         return _Case(name=name, test=test)
 
-    def group(self, name: str, tests: Sequence[LitmusTest]) -> LitmusTest:
+    def group(
+        self,
+        name: str,
+        tests: Sequence[LitmusTest],
+        *,
+        discrete_log_file: bool = True,
+    ) -> LitmusTest:
         """Compose independent children under one structured-concurrency owner."""
         if not tests:
             raise ContractViolation(name, "a test group must contain at least one child")
-        return _Group(name=name, tests=tests)
+        return _Group(name=name, tests=tests, discrete_log_file=discrete_log_file)
 
-    def sequence(self, name: str, tests: Sequence[LitmusTest]) -> LitmusTest:
+    def sequence(
+        self,
+        name: str,
+        tests: Sequence[LitmusTest],
+        *,
+        discrete_log_file: bool = True,
+    ) -> LitmusTest:
         """Compose dependent children that stop at the first non-pass verdict."""
         if not tests:
             raise ContractViolation(name, "a test sequence must contain at least one child")
-        return _Sequence(name=name, tests=tests)
+        return _Sequence(name=name, tests=tests, discrete_log_file=discrete_log_file)
 
     @final
     def use_survey(self, fn: HookFunction) -> None:
@@ -327,13 +365,17 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     async def main(self, utils: TestUtils | None = None) -> RunResult:
         """Execute the sealed lifecycle with an optional framework test seed."""
         seed = TestUtils() if utils is None else utils
-        run_abort = RunAbort()
-        result = await self._run_lifecycle(seed, run_abort, isolate_context=False)
-        if run_abort.fired:
-            # Sweep once more at the root so a transport that settled open while its
-            # task was being cancelled cannot outlive the returned Aborted tree.
-            await seed._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
-        return result
+        await seed._begin_run()  # pyright: ignore[reportPrivateUsage]
+        try:
+            run_abort = RunAbort()
+            result = await self._run_lifecycle(seed, run_abort, isolate_context=False)
+            if run_abort.fired:
+                # Sweep once more at the root so a transport that settled open while its
+                # task was being cancelled cannot outlive the returned Aborted tree.
+                await seed._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+            return result
+        finally:
+            await seed._end_run()  # pyright: ignore[reportPrivateUsage]
 
     @final
     async def run_configure_only(self, utils: TestUtils | None = None) -> dict[str, Any]:
@@ -396,10 +438,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         utils = utils._for_node(  # pyright: ignore[reportPrivateUsage]
             self.name,
             run_abort,
+            discrete_log_file=self.discrete_log_file,
             isolate_context=isolate_context and authored_instance,
             audit_signal=node_audit_signal,
         )
         object.__setattr__(self, "_ctx", utils.ctx)
+        object.__setattr__(self, "_log_path", utils._owned_log_path())  # pyright: ignore[reportPrivateUsage]
 
         integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
         boundary = ChildBoundary(self.name, run_abort, utils.logger, node_audit_signal)
@@ -448,14 +492,20 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                     )
                 summary_children = result.summary_tree.children
                 after_each_started = True
-                return await self._run_after_each(boundary, utils, run_abort, result)
+                return self._finish_result(
+                    await self._run_after_each(boundary, utils, run_abort, result),
+                    utils,
+                )
 
             if test is not None:
                 # ChildBoundary is the sole enforcement point for authored verdicts.
                 outcome = await boundary.run(Slot.TEST_METHOD, test(utils))
                 result = self._to_result(outcome, utils)
                 after_each_started = True
-                return await self._run_after_each(boundary, utils, run_abort, result)
+                return self._finish_result(
+                    await self._run_after_each(boundary, utils, run_abort, result),
+                    utils,
+                )
 
             try:
                 # Hop first, teardown last: surveys and audits exec through the via,
@@ -526,7 +576,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                             await self._tear_down_via()
             result = self._to_result(outcome, utils, children=summary_children)
             after_each_started = True
-            return await self._run_after_each(boundary, utils, run_abort, result)
+            return self._finish_result(
+                await self._run_after_each(boundary, utils, run_abort, result),
+                utils,
+            )
         except ExternalIntegrationFailure:
             await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
             result = self._aborted_result(
@@ -536,8 +589,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 children=summary_children or self._pending_children(),
             )
             if after_each_started:
-                return result
-            return await self._run_after_each(boundary, utils, run_abort, result)
+                return self._finish_result(result, utils)
+            return self._finish_result(
+                await self._run_after_each(boundary, utils, run_abort, result),
+                utils,
+            )
         except asyncio.CancelledError:
             if not run_abort.fired:
                 raise
@@ -548,8 +604,14 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 children=summary_children or self._pending_children(),
             )
             if after_each_started:
-                return result
-            return await self._run_after_each(boundary, utils, run_abort, result)
+                return self._finish_result(result, utils)
+            return self._finish_result(
+                await self._run_after_each(boundary, utils, run_abort, result),
+                utils,
+            )
+        except BaseException:
+            utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
+            raise
 
     @final
     async def _run_after_each(
@@ -809,6 +871,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
 
     @final
+    def _finish_result(self, result: RunResult, utils: TestUtils) -> RunResult:
+        """Close this node's durable timeline after all node-local hooks settle."""
+        utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
+        return result
+
+    @final
     async def _configure_and_merge_context(self, utils: TestUtils) -> Mapping[str, Any]:
         """Keep configure and its required ctx merge inside one child boundary."""
         configured = await self.configure(utils)
@@ -1013,10 +1081,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 utils = seed._for_node(  # pyright: ignore[reportPrivateUsage]
                     self.name,
                     run_abort,
+                    discrete_log_file=self.discrete_log_file,
                     isolate_context=True,
                     inherit_route=False,
                 )
                 object.__setattr__(self, "_configure_only_utils", utils)
+                object.__setattr__(
+                    self,
+                    "_log_path",
+                    utils._owned_log_path(),  # pyright: ignore[reportPrivateUsage]
+                )
                 via_failed = await self._bring_up_via(utils, run_abort)
                 if via_failed is not None:
                     return via_failed
@@ -1058,7 +1132,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         try:
             await self._run_cleanup(boundary, utils)
         finally:
-            await self._tear_down_via()
+            try:
+                await self._tear_down_via()
+            finally:
+                utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
 
     @final
     async def _bring_up_via(self, utils: TestUtils, run_abort: RunAbort) -> Outcome | None:
@@ -1122,7 +1199,7 @@ class _Case(LitmusTest):
     __slots__ = ()
 
     def __init__(self, *, name: str, test: _TestFunction) -> None:
-        super().__init__(name=name)
+        super().__init__(name=name, discrete_log_file=False)
         self._test = test
 
     def build_suite(self) -> LitmusTest:
@@ -1139,8 +1216,14 @@ class _Group(LitmusTest):
 
     __slots__ = ()
 
-    def __init__(self, *, name: str, tests: Sequence[LitmusTest]) -> None:
-        super().__init__(name=name)
+    def __init__(
+        self,
+        *,
+        name: str,
+        tests: Sequence[LitmusTest],
+        discrete_log_file: bool,
+    ) -> None:
+        super().__init__(name=name, discrete_log_file=discrete_log_file)
         self._children = tuple(tests)
 
     def build_suite(self) -> LitmusTest:
@@ -1157,8 +1240,14 @@ class _Sequence(LitmusTest):
 
     __slots__ = ()
 
-    def __init__(self, *, name: str, tests: Sequence[LitmusTest]) -> None:
-        super().__init__(name=name)
+    def __init__(
+        self,
+        *,
+        name: str,
+        tests: Sequence[LitmusTest],
+        discrete_log_file: bool,
+    ) -> None:
+        super().__init__(name=name, discrete_log_file=discrete_log_file)
         self._children = tuple(tests)
 
     def build_suite(self) -> LitmusTest:

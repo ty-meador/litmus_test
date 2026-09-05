@@ -54,6 +54,47 @@ same filtered view. `PHYSICAL_LOCATION` and `LITMUS_ARTIFACT_ROOT` are read from
 view, so an allow list must let them through to keep their effect. Decoders must not
 assume any particular variable is present (ruling on issue #53, 2026-09-03).
 
+## Version 1 timeline
+
+Each `run()` creates a timestamped directory directly beneath
+`LITMUS_ARTIFACT_ROOT`. Point-in-time artifacts are stored at that run-directory root.
+Every executed node that owns a discrete log receives a child directory containing:
+
+- `timeline.log` — a streamed human view with one escaped line per entry;
+- `timeline.jsonl` — the authoritative Inspector record, with one complete JSON object
+  per physical line.
+
+Both files are flushed after each entry. Consumers may read the JSON Lines file while a
+run is active and retain every complete line after interruption. The child-directory
+name is framework-owned and must be treated as opaque; use `LitmusTest.log_path` rather
+than reconstructing it.
+
+Every version-1 timeline object contains these fields:
+
+| Field | JSON type | Meaning |
+|---|---|---|
+| `format_version` | integer | Timeline-record schema version; currently `1`. |
+| `timestamp` | string | Timezone-aware UTC timestamp ending in `Z`. |
+| `scope` | array of strings | Root-to-emitting-node path, inclusive. |
+| `level` | string | Lowercase Python logging level name. |
+| `message` | string | Fully rendered log message. Newlines remain escaped within the JSON line. |
+
+An artifact-pointer entry additionally contains all four fields below. They are absent
+from ordinary records rather than set to null.
+
+| Field | JSON type | Meaning |
+|---|---|---|
+| `artifact_name` | string | Captured artifact name. |
+| `artifact_path` | string | Absolute path published by `capture_artifact()`. |
+| `artifact_type` | string | Captured artifact type. |
+| `artifact_timestamp` | string | The artifact's timezone-aware UTC timestamp. |
+
+Authored suites, sequences, and groups own a log by default. Inline cases roll their
+records into the nearest owning ancestor. A sequence, group, or composed authored suite
+constructed with `discrete_log_file=False` also rolls up. Pending nodes create no files.
+The later summary-tree linkage is additive and is not part of the version-1 result
+fields documented below.
+
 ## Summary tree node
 
 Every `summary_tree` node contains exactly these version-1 fields:

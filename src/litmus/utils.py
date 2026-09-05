@@ -10,9 +10,10 @@ import os
 import re
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, final
+from typing import Any, cast, final
 
 from litmus.artifacts import Artifact
 from litmus.errors import ExternalIntegrationFailure, FrameworkContractViolation, TestFailure
@@ -21,6 +22,7 @@ from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
 from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouter, ExecRouting, RouterRunParams, Shell
+from litmus.timeline import RunTimeline, TimelinePaths
 
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
 
@@ -132,15 +134,32 @@ class _RunTransports:
 class _ArtifactStore:
     """Private persistence boundary shared by every node in one run."""
 
-    __slots__ = ("_root",)
+    __slots__ = ("_base_root", "_root")
 
     def __init__(self, root: str | Path) -> None:
-        self._root = Path(root).expanduser().resolve()
+        self._base_root = Path(root).expanduser().resolve()
+        self._root = self._base_root
 
     @property
     def root(self) -> Path:
         """Absolute directory where this run's captured evidence is stored."""
         return self._root
+
+    def begin_run(self) -> Path:
+        """Create and select one collision-safe timestamped run directory."""
+        self._base_root.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        collision = 0
+        while True:
+            suffix = "" if collision == 0 else f".{collision}"
+            run_root = self._base_root / f"{timestamp}{suffix}"
+            try:
+                run_root.mkdir()
+            except FileExistsError:
+                collision += 1
+                continue
+            self._root = run_root
+            return run_root
 
     async def capture(self, artifact: Artifact) -> Path:
         """Persist one artifact without blocking the event loop or overwriting evidence."""
@@ -209,17 +228,78 @@ class RunSignal:
 class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
     """A standard logger carrying the exact node path on every record."""
 
-    __slots__ = ("_scope",)
+    __slots__ = ("_scope", "_timeline", "_timeline_paths")
 
-    def __init__(self, logger: logging.Logger, scope: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        logger: logging.Logger,
+        scope: tuple[str, ...],
+        *,
+        timeline: RunTimeline | None = None,
+        timeline_paths: TimelinePaths | None = None,
+    ) -> None:
         """Bind ``logger`` records to a root-to-leaf node path."""
         self._scope = scope
+        self._timeline = timeline
+        self._timeline_paths = timeline_paths
         node = scope[-1] if scope else ""
         super().__init__(
             logger,
             {"litmus_node": node, "litmus_scope": scope},
             merge_extra=True,
         )
+
+    def isEnabledFor(self, level: int) -> bool:  # noqa: N802
+        """Keep every level live when the durable timeline is attached."""
+        if self._timeline is not None and self._timeline_paths is not None:
+            return True
+        return super().isEnabledFor(level)
+
+    def log(self, level: int, msg: object, *args: object, **kwargs: Any) -> None:
+        """Persist the record before offering it to the process logging policy."""
+        if self._timeline is not None and self._timeline_paths is not None:
+            formatting_warning: str | None = None
+            try:
+                raw_message = str(msg)
+                if len(args) == 1 and isinstance(args[0], Mapping) and args[0]:
+                    message = raw_message % args[0]
+                else:
+                    message = raw_message % args if args else raw_message
+            except Exception as error:
+                try:
+                    raw_message = str(msg)
+                except Exception:
+                    raw_message = f"<unprintable {type(msg).__name__}>"
+                try:
+                    rendered_args = repr(args)
+                except Exception:
+                    rendered_args = "<unprintable arguments>"
+                message = f"{raw_message} {rendered_args}"
+                formatting_warning = (
+                    "logging message formatting failed "
+                    f"({type(error).__name__}); preserved the unformatted "
+                    "message and arguments"
+                )
+            supplied_extra = kwargs.get("extra")
+            extra: dict[str, Any] | None = None
+            if isinstance(supplied_extra, Mapping):
+                extra = dict(cast("Mapping[str, Any]", supplied_extra))
+            self._timeline.write(
+                self._timeline_paths,
+                scope=self._scope,
+                level=level,
+                message=message,
+                extra=extra,
+            )
+            if formatting_warning is not None:
+                self._timeline.write(
+                    self._timeline_paths,
+                    scope=self._scope,
+                    level=logging.WARNING,
+                    message=formatting_warning,
+                    extra=None,
+                )
+        super().log(level, msg, *args, **kwargs)
 
     @property
     def scope(self) -> tuple[str, ...]:
@@ -248,12 +328,16 @@ class TestUtils:
         "_base_logger",
         "_ctx",
         "_env",
+        "_env_filter_warning",
         "_integration_hooks",
         "_local_exec",
         "_logger",
+        "_owns_timeline",
         "_routing",
         "_scope",
         "_signal",
+        "_timeline",
+        "_timeline_paths",
         "_transports",
     )
 
@@ -290,9 +374,21 @@ class TestUtils:
         self._base_logger = LOGGER if logger is None else logger
         self._scope: tuple[str, ...] = ()
         self._logger = ScopedLogger(self._base_logger, self._scope)
+        self._timeline: RunTimeline | None = None
+        self._timeline_paths: TimelinePaths | None = None
+        self._owns_timeline = False
         source_env = os.environ if env is None else env
         env_filter = _EnvFilter(allow=env_allow, deny=env_deny)
         self._env = MappingProxyType(env_filter.apply(source_env, self._base_logger))
+        self._env_filter_warning: str | None = None
+        if (
+            env_filter.mode is not None
+            and source_env.get(_EnvFilter.DEBUG_KEY) == _EnvFilter.DEBUG_VALUE
+        ):
+            self._env_filter_warning = (
+                f"DEBUG mode detected, ignoring provided {env_filter.mode} list "
+                "and including ALL environment variables"
+            )
         configured_artifact_root = artifact_root
         if configured_artifact_root is None:
             configured_artifact_root = self._env.get(
@@ -513,6 +609,7 @@ class TestUtils:
         node: str,
         run_abort: RunAbort,
         *,
+        discrete_log_file: bool,
         isolate_context: bool,
         audit_signal: AuditSignal | None = None,
         inherit_route: bool = True,
@@ -522,9 +619,38 @@ class TestUtils:
         scoped._artifact_store = self._artifact_store
         scoped._ctx = {} if isolate_context else self._ctx
         scoped._env = self._env
+        scoped._env_filter_warning = self._env_filter_warning
         scoped._base_logger = self._base_logger
         scoped._scope = (*self._scope, node)
-        scoped._logger = ScopedLogger(self._base_logger, scoped._scope)
+        scoped._timeline = self._timeline
+        scoped._owns_timeline = self._timeline is not None and (
+            discrete_log_file or self._timeline_paths is None
+        )
+        if scoped._owns_timeline:
+            if self._timeline is None:
+                raise FrameworkContractViolation(
+                    node,
+                    detail="a node owns a timeline without an active run timeline",
+                )
+            scoped._timeline_paths = self._timeline.register(scoped._scope)
+        else:
+            scoped._timeline_paths = self._timeline_paths
+        scoped._logger = ScopedLogger(
+            self._base_logger,
+            scoped._scope,
+            timeline=scoped._timeline,
+            timeline_paths=scoped._timeline_paths,
+        )
+        if not self._scope and scoped._env_filter_warning is not None:
+            if scoped._timeline is not None and scoped._timeline_paths is not None:
+                scoped._timeline.write(
+                    scoped._timeline_paths,
+                    scope=scoped._scope,
+                    level=logging.WARNING,
+                    message=scoped._env_filter_warning,
+                    extra=None,
+                )
+            scoped._env_filter_warning = None
         scoped._local_exec = self._local_exec
         scoped._transports = self._transports
         scoped._integration_hooks = self._integration_hooks
@@ -541,3 +667,25 @@ class TestUtils:
     async def _cancel_in_flight(self) -> None:
         """Hard-close every framework-managed transport known to this run."""
         await self._transports.cancel_in_flight()
+
+    async def _begin_run(self) -> None:
+        """Open the run directory before the root lifecycle emits evidence."""
+        run_root = await asyncio.to_thread(self._artifact_store.begin_run)
+        self._timeline = RunTimeline(run_root)
+
+    async def _end_run(self) -> None:
+        """Close any timeline handle left by an exceptional lifecycle exit."""
+        timeline = self._timeline
+        if timeline is not None:
+            await asyncio.to_thread(timeline.close_all)
+
+    def _owned_log_path(self) -> Path | None:
+        """Return this node's authoritative JSON timeline when it owns one."""
+        if not self._owns_timeline or self._timeline_paths is None:
+            return None
+        return self._timeline_paths.json_lines
+
+    def _close_timeline(self) -> None:
+        """Close this node's files at its terminal boundary."""
+        if self._owns_timeline and self._timeline is not None and self._timeline_paths is not None:
+            self._timeline.close(self._timeline_paths)

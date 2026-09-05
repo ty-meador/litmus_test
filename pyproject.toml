@@ -105,6 +105,7 @@ output = ".coverage/cobertura.xml"
 "src/litmus/base.py" = 91.2
 "src/litmus/lifecycle.py" = 97.9
 "src/litmus/executor.py" = 84.0
+"src/litmus/timeline.py" = 97.8
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

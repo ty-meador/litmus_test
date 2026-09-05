@@ -106,6 +106,11 @@ The log artifact is the authoritative chronological record of a test run. Two co
 structured pointer log entries. The public `Artifact` value has no file-writing method,
 so the framework cannot persist evidence without also recording that pointer.
 
+Every full run creates one timestamped directory beneath the configured artifact root.
+Logging nodes stream a human `timeline.log` and a versioned Inspector
+`timeline.jsonl`; inline cases roll into their nearest owning ancestor. Both views are
+flushed entry by entry, preserving the accepted chronology through interruption.
+
 **Timestamp integrity is a system requirement.** NTP sync on the test VM is not optional. The log backbone is used as a legal instrument in customer disputes ("did failures start before your 2pm firmware push?").
 
 ## Integration Hooks: The External-World Contract

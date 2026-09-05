@@ -14,7 +14,7 @@ from litmus.lifecycle import Slot, State
 def _artifact_payloads(root: Path) -> dict[str, object]:
     return {
         path.name.split(".survey.", maxsplit=1)[0]: json.loads(path.read_text())["data"]
-        for path in root.glob("*.artifact")
+        for path in root.rglob("*.artifact")
     }
 
 
@@ -153,7 +153,7 @@ class TestSurveyHooks:
             result = await Suite(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
 
         assert result.state is State.PASS
-        assert await asyncio.to_thread(lambda: list(tmp_path.glob("*.artifact"))) == []
+        assert await asyncio.to_thread(lambda: list(tmp_path.rglob("*.artifact"))) == []
         assert sum("verdict unaffected" in record.getMessage() for record in caplog.records) == 6
 
 
