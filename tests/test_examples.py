@@ -131,6 +131,30 @@ class TestCompositionExample:
         assert group.state is State.PASS
 
 
+def _detach_log_paths(tree: dict[str, Any]) -> dict[str, str | None]:
+    """Pop every node's opaque timeline link so the tree shape can be pinned exactly."""
+    links: dict[str, str | None] = {}
+    pending = [tree]
+    while pending:
+        node = pending.pop()
+        links[node["name"]] = node.pop("log_path")
+        pending.extend(node["children"])
+    return links
+
+
+def _assert_links_resolve(
+    artifact_root: Path, links: dict[str, str | None], owners: set[str]
+) -> None:
+    """Every owning node links to a real timeline beneath the single run directory."""
+    (run_root,) = [entry for entry in artifact_root.iterdir() if entry.is_dir()]
+    assert {name for name, link in links.items() if link is not None} == owners
+    for name in owners:
+        link = links[name]
+        assert link is not None
+        assert (run_root / link).name == "timeline.jsonl"
+        assert (run_root / link).is_file()
+
+
 class TestWaitForPatternsExample:
     """Pin both polling classifications and the evidence visible to an Inspector."""
 
@@ -166,6 +190,8 @@ class TestWaitForPatternsExample:
         assert payload["ancestor_names"] == ["polling device"]
         assert payload["bread_crumbs"] == "polling device"
         assert payload["physical_location"] == "bench-7"
+        links = _detach_log_paths(payload["summary_tree"])
+        _assert_links_resolve(tmp_path, links, owners={"polling device"})
         assert payload["summary_tree"] == {
             "name": "polling device",
             "type": "test-suite",
@@ -387,6 +413,12 @@ class TestPiHoleServerExample:
             "ftl": {"current": "v5.25.2", "latest": "v5.25.2"},
         }
         payload = json.loads(json.dumps(result.to_json()))
+        links = _detach_log_paths(payload["summary_tree"])
+        _assert_links_resolve(
+            tmp_path,
+            links,
+            owners={"PiHoleServer", "PiHoleServer-main-sequence", "health-checks"},
+        )
         assert payload["summary_tree"] == {
             "name": "PiHoleServer",
             "type": "test-suite",

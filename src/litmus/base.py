@@ -852,6 +852,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             type=node_type,
             state=outcome.state,
             failure=outcome.failure,
+            log_path=utils._owned_log_reference(),  # pyright: ignore[reportPrivateUsage]
             children=children,
         )
         object.__setattr__(self, "_summary_tree", summary_tree)

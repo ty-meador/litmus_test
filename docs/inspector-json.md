@@ -92,8 +92,21 @@ from ordinary records rather than set to null.
 Authored suites, sequences, and groups own a log by default. Inline cases roll their
 records into the nearest owning ancestor. A sequence, group, or composed authored suite
 constructed with `discrete_log_file=False` also rolls up. Pending nodes create no files.
-The later summary-tree linkage is additive and is not part of the version-1 result
-fields documented below.
+
+## Two records, two version fields
+
+A run therefore produces two versioned records, and each carries its own
+`format_version`:
+
+| Record | Where it lives | Version field |
+|---|---|---|
+| Result | `RunResult.to_json()`; the structural view rooted at `summary_tree` | `format_version` on the result object |
+| Timeline | `timeline.jsonl` beneath the run directory; the temporal view | `format_version` on every JSON Lines object |
+
+The two version numbers move independently. The summary tree links the structural view
+to the temporal view through each node's `log_path` (ruling on issue #106, 2026-09-04:
+the link is additive within result version 1). An Inspector selects a node in the tree,
+resolves `log_path` against the run directory, and reads that node's chronology.
 
 ## Summary tree node
 
@@ -105,11 +118,19 @@ Every `summary_tree` node contains exactly these version-1 fields:
 | `type` | string | The same node-type discriminator used by `RunResult`. |
 | `state` | string or null | Terminal state, or null when a declared sequence step did not run. |
 | `failure` | object or null | JSON-safe failure for this exact node. |
+| `log_path` | string or null | POSIX path of this node's `timeline.jsonl`, relative to the run directory. Null when the node never ran or when its records rolled up into an ancestor. |
 | `children` | array | Ordered child nodes. Groups retain declaration order after settlement. |
 
 A null tree state means pending/unreached; it is not a fourth terminal state. A stopped
 sequence retains its unexecuted descendants with null states, so the root snapshot
 still describes the full declared tree.
+
+`log_path` is relative so that a run directory copied to another machine keeps every
+link intact. Consumers resolve it against the run directory they opened, the same
+directory that holds the point-in-time artifacts. A node with a terminal `state` and a
+null `log_path` rolled its records into an ancestor; the nearest ancestor with a
+non-null `log_path` holds them, and the root always carries one. A node whose `state`
+is null never ran and has no chronology anywhere.
 
 ## Failure shape
 
