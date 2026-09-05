@@ -18,7 +18,7 @@ Not flagged: calls (composition factories, child-suite constructors, name helper
 f-strings, literals, attribute and subscript reads, unary/binary operators on them,
 and an unfiltered comprehension. The enumeration idiom (issue #110) stamps one leaf per
 core, rail, or channel from a single method:
-``[self.test(f"cpu{i}", functools.partial(self._cpu, cpu=i)) for i in range(n)]``.
+``[self.test(f"cpu{i}", self._cpu, cpu=i) for i in range(n)]``.
 That maps a known population onto leaves; it does not choose among them. A comprehension
 with an ``if`` clause chooses, and is flagged. The rule polices control flow, not
 vocabulary — a suite may compose children from a helper or enumerate them; it may not

@@ -1,6 +1,5 @@
 """Composition factories and the serial semantics they expose to authored suites."""
 
-import functools
 from collections.abc import Iterator
 from typing import cast
 
@@ -78,7 +77,7 @@ class TestCompositionFactories:
         with pytest.raises(ContractViolation, match=r"parallel node.*at least one child"):
             suite.parallel("parallel", [])
 
-    async def test_leaves_enumerate_at_runtime_through_functools_partial(self) -> None:
+    async def test_leaves_enumerate_at_runtime_by_passing_the_varying_argument(self) -> None:
         stressed: list[int] = []
 
         class Compute(LitmusTest):
@@ -90,7 +89,7 @@ class TestCompositionFactories:
                 return self.parallel(
                     "stress",
                     [
-                        self.test(f"cpu{i}_stress", functools.partial(self._cpu_stress, cpu=i))
+                        self.test(f"cpu{i}_stress", self._cpu_stress, cpu=i)
                         for i in range(self._cpu_count)
                     ],
                 )
@@ -106,6 +105,56 @@ class TestCompositionFactories:
         assert [leaf.name for leaf in leaves] == ["cpu0_stress", "cpu1_stress", "cpu2_stress"]
         assert all(leaf.state is State.PASS for leaf in leaves)
         assert sorted(stressed) == [0, 1, 2]
+
+    async def test_positional_arguments_reach_the_method_after_utils(self) -> None:
+        seen: list[tuple[str, float]] = []
+
+        class Rails(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.sequence(
+                    "rails",
+                    [
+                        self.test("v12", self._rail, "12V", 0.5, fail_after=5.0),
+                        self.test("v5", self._rail, "5V", limit=0.25),
+                    ],
+                )
+
+            async def _rail(self, utils: object, rail: str, limit: float) -> Verdict:
+                seen.append((rail, limit))
+                return PASS
+
+        outcome = await Rails(name="psu").main(TestUtils())
+
+        assert outcome.state is State.PASS
+        assert seen == [("12V", 0.5), ("5V", 0.25)]
+
+    def test_arguments_that_do_not_fit_the_method_fail_at_composition(self) -> None:
+        suite = LitmusTest(name="rack")
+
+        async def probe(_utils: object, *, cpu: int) -> Verdict:
+            del cpu
+            return PASS
+
+        with pytest.raises(
+            ContractViolation, match=r"missing a required keyword-only argument: 'cpu'"
+        ):
+            suite.test("no cpu", probe)
+        with pytest.raises(ContractViolation, match=r"unexpected keyword argument 'core'"):
+            suite.test("wrong name", probe, cpu=0, core=0)
+        with pytest.raises(ContractViolation, match=r"too many positional arguments"):
+            suite.test("extra", probe, 1, 2)
+
+    def test_budgets_are_the_leaf_s_and_never_reach_the_method(self) -> None:
+        suite = LitmusTest(name="rack")
+
+        async def clashes(_utils: object, *, fail_after: float) -> Verdict:
+            del fail_after
+            return PASS
+
+        with pytest.raises(
+            ContractViolation, match=r"missing a required keyword-only argument: 'fail_after'"
+        ):
+            suite.test("clash", clashes, fail_after=1.0)
 
     def test_test_rejects_a_function_that_is_not_a_coroutine_function(self) -> None:
         suite = LitmusTest(name="rack")

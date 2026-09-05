@@ -158,15 +158,15 @@ Every `return PASS` sits under the predicate that earns it; `litmus-check` (the
 ### Enumerate Leaves at Runtime
 
 A leaf's name is decided where the tree is composed, not where the method is defined.
-One method, many leaves: bind the varying parameter with `functools.partial` and name
-each leaf in a comprehension. `inspect.iscoroutinefunction` unwraps a partial of an
-`async def`, so `self.test()` accepts it; a `lambda` is not a coroutine function and is
-rejected with `TypeError`.
+One method, many leaves: pass the value that varies straight to `self.test()` after the
+method, and name each leaf in a comprehension. The framework calls
+`fn(utils, *args, **kwargs)`; `utils` is always first, and the developer's arguments
+follow. `fail_after` and `abort_after` are the leaf's budget, never the method's
+parameters. The arguments are checked against the method's signature when the tree is
+built, so a leaf that could never be called fails `build_suite` with a
+`ContractViolation` before any hardware is touched.
 
 ```python
-import functools
-
-
 class Compute(LitmusTest):
     def __init__(self, *, name: str, cpu_count: int) -> None:
         super().__init__(name=name)
@@ -178,11 +178,7 @@ class Compute(LitmusTest):
         return self.parallel(
             "stress",
             [
-                self.test(
-                    f"cpu{i}_stress",
-                    functools.partial(self._cpu_stress, cpu=i),
-                    fail_after=120.0,
-                )
+                self.test(f"cpu{i}_stress", self._cpu_stress, cpu=i, fail_after=120.0)
                 for i in range(self._cpu_count)
             ],
         )
