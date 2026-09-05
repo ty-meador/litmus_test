@@ -196,9 +196,14 @@ is self-contained and cannot overwrite a neighboring run.
   path relative to the run directory, so the structural record reaches the temporal
   record without the live objects. It is `null` for pending nodes and nodes whose
   records roll up; the nearest ancestor with a link holds their chronology.
+- On Pass, Fail, and Aborted, root `run()` atomically publishes the root
+  `RunResult.to_json()` as `result.json` at the run-directory root before returning.
+  The root timeline's final entry points to that file; a failed publication cannot
+  expose a partial replacement or a pointer to evidence that was not published.
 
-The persisted chronology is framework-owned. Developer code continues to use only
-`utils.logger` and `utils.capture_artifact()`; it never opens or edits timeline files.
+The persisted chronology and root result are framework-owned. Developer code continues
+to use only `utils.logger` and `utils.capture_artifact()`; it never opens or edits
+timeline or result files.
 
 **Developer obligation:** Do not write directly into the run directory or depend on its
 timestamped directory name. Treat `log_path` and captured artifact paths as opaque

@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, cast, final
+from typing import TYPE_CHECKING, Any, cast, final
 
 from litmus.artifacts import Artifact
 from litmus.errors import ExternalIntegrationFailure, FrameworkContractViolation, TestFailure
@@ -23,6 +23,9 @@ from litmus.lifecycle import AuditSignal, RunAbort
 from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouter, ExecRouting, RouterRunParams, Shell
 from litmus.timeline import RunTimeline, TimelinePaths
+
+if TYPE_CHECKING:
+    from litmus.results import RunResult
 
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
 
@@ -167,23 +170,9 @@ class _ArtifactStore:
 
     def _capture_sync(self, artifact: Artifact) -> Path:
         """Serialize and atomically publish one artifact from an executor thread."""
-        serialized = json.dumps(
-            artifact.to_json(),
-            allow_nan=False,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        serialized = f"{serialized}\n"
-        self._root.mkdir(parents=True, exist_ok=True)
-
-        temporary = self._root / f".{uuid.uuid4().hex}.artifact.tmp"
+        serialized = self._serialize(artifact.to_json())
+        temporary = self._write_temporary(serialized, kind="artifact")
         try:
-            with temporary.open("x", encoding="utf-8", newline="\n") as artifact_file:
-                artifact_file.write(serialized)
-                artifact_file.flush()
-                os.fsync(artifact_file.fileno())
-
             timestamp = artifact.timestamp.strftime("%Y%m%dT%H%M%S.%fZ")
             base_name = f"{artifact.name}.{artifact.type}.{timestamp}"
             collision = 0
@@ -198,6 +187,46 @@ class _ArtifactStore:
                 return destination
         finally:
             temporary.unlink(missing_ok=True)
+
+    async def persist_result(self, result: RunResult) -> Path:
+        """Atomically replace this run's canonical Inspector result."""
+        return await asyncio.to_thread(self._persist_result_sync, result)
+
+    def _persist_result_sync(self, result: RunResult) -> Path:
+        """Serialize and atomically publish the root result from an executor thread."""
+        serialized = self._serialize(result.to_json())
+        temporary = self._write_temporary(serialized, kind="result")
+        destination = self._root / "result.json"
+        try:
+            temporary.replace(destination)
+            return destination
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _serialize(payload: object) -> str:
+        serialized = json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        return f"{serialized}\n"
+
+    def _write_temporary(self, serialized: str, *, kind: str) -> Path:
+        """Write and fsync one private file for a later atomic publication."""
+        self._root.mkdir(parents=True, exist_ok=True)
+        temporary = self._root / f".{uuid.uuid4().hex}.{kind}.tmp"
+        try:
+            with temporary.open("x", encoding="utf-8", newline="\n") as output:
+                output.write(serialized)
+                output.flush()
+                os.fsync(output.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        return temporary
 
 
 @final
@@ -459,6 +488,22 @@ class TestUtils:
             },
         )
         return artifact_path
+
+    async def _persist_result(self, result: RunResult) -> Path:
+        """Publish the root result before appending its final timeline pointer."""
+        result_path = await self._artifact_store.persist_result(result)
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        self._logger.info(
+            "run result persisted -> %s",
+            result_path,
+            extra={
+                "artifact_name": "result",
+                "artifact_path": str(result_path),
+                "artifact_timestamp": timestamp,
+                "artifact_type": "run-result",
+            },
+        )
+        return result_path
 
     async def exec(self, command: str) -> ExecResult:
         """Run ``command`` through this node's active route.
