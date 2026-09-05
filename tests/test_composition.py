@@ -14,7 +14,7 @@ from litmus import (
     TestUtils,
     Verdict,
 )
-from litmus.lifecycle import AuditSignal, Outcome, RunAbort, Slot, State
+from litmus.lifecycle import AuditSignal, Outcome, RunAbort, Slot, State, TimeBudgetClock
 
 
 class _NonTerminalChild:
@@ -24,6 +24,7 @@ class _NonTerminalChild:
         _run_abort: RunAbort,
         *,
         audit_signal: AuditSignal | None = None,
+        time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
     ) -> Outcome:
         return Outcome(Slot.CONFIGURE, "corrupt child", None)
 

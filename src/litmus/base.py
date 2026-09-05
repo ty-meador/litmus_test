@@ -3,9 +3,11 @@
 import asyncio
 import contextlib
 import inspect
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+import math
+import weakref
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, final
+from typing import Any, cast, final
 
 from litmus.artifacts import Artifact
 from litmus.errors import (
@@ -26,12 +28,23 @@ from litmus.hooks import (
     SurveyHook,
     invoke_integration_hook,
 )
-from litmus.lifecycle import AuditSignal, ChildBoundary, Outcome, RunAbort, Slot, State
+from litmus.lifecycle import (
+    AuditSignal,
+    ChildBoundary,
+    Outcome,
+    RunAbort,
+    Slot,
+    State,
+    TimeBudget,
+    TimeBudgetClock,
+    TimeoutEvidence,
+)
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
 from litmus.verdict import Verdict
 
 type _TestFunction = Callable[[TestUtils], Awaitable[Verdict]]
+type _TimedCall = Callable[[tuple[TimeBudgetClock, ...], object], Awaitable[object]]
 
 _SEALED_METHODS = frozenset(
     {
@@ -43,11 +56,16 @@ _SEALED_METHODS = frozenset(
         "group",
         "log_path",
         "main",
+        "_execute_run",
         "run",
         "run_configure_only",
         "run_cleanup_only",
         "sequence",
         "_run_lifecycle",
+        "_run_timed_window",
+        "_settle_deadline_cut",
+        "_deadline_outcome",
+        "_deadline_failure",
         "_run_group",
         "_run_sequence",
         "_run_configure_only",
@@ -75,6 +93,80 @@ _SEALED_METHODS = frozenset(
 )
 _LIFECYCLE_COROUTINES = frozenset({"configure", "cleanup"})
 _FINALIZATION_TIMEOUT_SECONDS = 30.0
+_DEADLINE_CANCELLATION = object()
+_DEADLINE_CANCEL_COUNTS: weakref.WeakKeyDictionary[asyncio.Task[Any], int] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _time_budget(
+    node: str,
+    *,
+    fail_after: float | None,
+    abort_after: float | None,
+) -> TimeBudget | None:
+    """Validate one public deadline declaration before it can touch hardware."""
+    if fail_after is not None and abort_after is not None:
+        raise ContractViolation(
+            node,
+            "fail_after and abort_after are mutually exclusive; declare exactly one or neither",
+        )
+    raw = fail_after if fail_after is not None else abort_after
+    if raw is None:
+        return None
+    name = "fail_after" if fail_after is not None else "abort_after"
+    value = cast("object", raw)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ContractViolation(node, f"{name} must be a positive finite number of seconds")
+    try:
+        seconds = float(value)
+    except Exception as error:
+        raise ContractViolation(
+            node,
+            f"{name} must be a positive finite number of seconds",
+            cause=error,
+        ) from error
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ContractViolation(node, f"{name} must be a positive finite number of seconds")
+    if fail_after is not None:
+        return TimeBudget(name="fail_after", seconds=seconds)
+    return TimeBudget(name="abort_after", seconds=seconds)
+
+
+@contextlib.asynccontextmanager
+async def _active_time_budgets(
+    clocks: tuple[TimeBudgetClock, ...],
+    lineage: object,
+) -> AsyncGenerator[None]:
+    """Charge time while at least one descendant lineage is inside its window."""
+    for clock in clocks:
+        clock.activate(lineage)
+    try:
+        yield
+    finally:
+        for clock in reversed(clocks):
+            clock.deactivate(lineage)
+
+
+def _cancel_for_deadline(task: asyncio.Task[Any], *, requests: int = 1) -> None:
+    """Cancel a task with a marker and remember how many requests are framework-owned."""
+    _DEADLINE_CANCEL_COUNTS[task] = _DEADLINE_CANCEL_COUNTS.get(task, 0) + requests
+    task.cancel(_DEADLINE_CANCELLATION)
+
+
+def _consume_deadline_cancellation(error: asyncio.CancelledError) -> bool:
+    """Consume only requests emitted by this deadline engine, preserving collisions."""
+    if not error.args or error.args[0] is not _DEADLINE_CANCELLATION:
+        return False
+    task = asyncio.current_task()
+    if task is None:
+        return False
+    owned = _DEADLINE_CANCEL_COUNTS.pop(task, 0)
+    for _ in range(owned):
+        task.uncancel()
+    # Any count left after the framework-owned requests are removed belongs to a
+    # caller or harness collision and must keep travelling as cancellation.
+    return owned > 0 and not task.cancelling()
 
 
 def _consume_finalization_exception(future: asyncio.Future[object]) -> None:
@@ -163,6 +255,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         "_summary_tree",
         "_surveys",
         "_test",
+        "_time_budget",
         "_via",
         "_via_lease_count",
         "_via_leased",
@@ -174,6 +267,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         name: str,
         via: LitmusTest | None = None,
         discrete_log_file: bool = True,
+        fail_after: float | None = None,
+        abort_after: float | None = None,
     ) -> None:
         """Create a named, not-yet-run test node.
 
@@ -185,12 +280,19 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 call configure/cleanup on it.
             discrete_log_file: Own a per-node timeline. Set false only when this
                 composed node should roll its records into its parent.
+            fail_after: Positive finite seconds before this subtree renders Fail.
+            abort_after: Positive finite seconds before this subtree renders Aborted.
         """
         self._frozen = False
         self._has_run = False
         self._name = name
         self._via = via
         self._discrete_log_file = discrete_log_file
+        self._time_budget = _time_budget(
+            name,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
         self._log_path: Path | None = None
         self._via_leased = False
         self._via_lease_count = 0
@@ -274,13 +376,25 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """A detached JSON-safe snapshot of this node's serializable context."""
         return snapshot_run_data(self._ctx)
 
-    def case(self, name: str, test: _TestFunction) -> LitmusTest:
+    def case(
+        self,
+        name: str,
+        test: _TestFunction,
+        *,
+        fail_after: float | None = None,
+        abort_after: float | None = None,
+    ) -> LitmusTest:
         """Create an internal leaf node from an already-bound verdict method."""
         if not inspect.iscoroutinefunction(test):
             method = getattr(test, "__qualname__", repr(test))
             msg = f"test method {method} must be defined with async def"
             raise TypeError(msg)
-        return _Case(name=name, test=test)
+        return _Case(
+            name=name,
+            test=test,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
 
     def group(
         self,
@@ -288,11 +402,19 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         tests: Sequence[LitmusTest],
         *,
         discrete_log_file: bool = True,
+        fail_after: float | None = None,
+        abort_after: float | None = None,
     ) -> LitmusTest:
         """Compose independent children under one structured-concurrency owner."""
         if not tests:
             raise ContractViolation(name, "a test group must contain at least one child")
-        return _Group(name=name, tests=tests, discrete_log_file=discrete_log_file)
+        return _Group(
+            name=name,
+            tests=tests,
+            discrete_log_file=discrete_log_file,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
 
     def sequence(
         self,
@@ -300,11 +422,19 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         tests: Sequence[LitmusTest],
         *,
         discrete_log_file: bool = True,
+        fail_after: float | None = None,
+        abort_after: float | None = None,
     ) -> LitmusTest:
         """Compose dependent children that stop at the first non-pass verdict."""
         if not tests:
             raise ContractViolation(name, "a test sequence must contain at least one child")
-        return _Sequence(name=name, tests=tests, discrete_log_file=discrete_log_file)
+        return _Sequence(
+            name=name,
+            tests=tests,
+            discrete_log_file=discrete_log_file,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
 
     @final
     def use_survey(self, fn: HookFunction) -> None:
@@ -346,6 +476,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         before_each: BeforeEachHook | None = None,
         after_each: AfterEachHook | None = None,
         allow_unpaired_hooks: bool = False,
+        fail_after: float | None = None,
+        abort_after: float | None = None,
     ) -> RunResult:
         """Execute once, fanning root-owned integration hooks across every node.
 
@@ -353,22 +485,44 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         publishes; see ``TestUtils`` for the contract. Raises ``ValueError`` when both
         are given.
         """
+        run_budget = _time_budget(
+            self.name,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
+        if run_budget is not None and self._time_budget is not None:
+            raise ContractViolation(
+                self.name,
+                "a root time budget is already declared; declare exactly one "
+                "fail_after or abort_after across construction and run",
+            )
         hooks = IntegrationHooks(
             before_each=before_each,
             after_each=after_each,
             allow_unpaired=allow_unpaired_hooks,
         )
         utils = TestUtils(env=env, env_allow=env_allow, env_deny=env_deny, _integration_hooks=hooks)
-        return await self.main(utils)
+        return await self._execute_run(utils, run_budget)
 
     @final
     async def main(self, utils: TestUtils | None = None) -> RunResult:
         """Execute the sealed lifecycle with an optional framework test seed."""
         seed = TestUtils() if utils is None else utils
+        return await self._execute_run(seed, None)
+
+    @final
+    async def _execute_run(self, seed: TestUtils, run_budget: TimeBudget | None) -> RunResult:
+        """Execute one full run with an optional root declaration from ``run()``."""
         await seed._begin_run()  # pyright: ignore[reportPrivateUsage]
         try:
             run_abort = RunAbort()
-            result = await self._run_lifecycle(seed, run_abort, isolate_context=False)
+            extra = () if run_budget is None else (run_budget,)
+            result = await self._run_lifecycle(
+                seed,
+                run_abort,
+                isolate_context=False,
+                extra_time_budgets=extra,
+            )
             if run_abort.fired:
                 # Sweep once more at the root so a transport that settled open while its
                 # task was being cancelled cannot outlive the returned Aborted tree.
@@ -383,6 +537,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
         Idempotent. Framework-owned: Inspector isolation and via-device bring-up.
         Suite authors pass ``via=`` at construction instead of calling this.
+        A declared ``abort_after`` expiry raises ``TimeoutError`` on this imperative
+        adapter; internal consumers retain and adopt the structured Aborted outcome.
         """
         seed = TestUtils() if utils is None else utils
         try:
@@ -401,6 +557,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             return dict(configured.ctx)
         if outcome.failure is not None:
             raise outcome.failure
+        if outcome.timeout is not None and outcome.state is State.ABORTED:
+            raise TimeoutError(
+                f"{self.name} configure-only expired: "
+                f"{outcome.timeout.declared}={outcome.timeout.budget_seconds:g}s"
+            )
         raise FrameworkContractViolation(
             self.name,
             detail="configure-only settled in a terminal state without a failure",
@@ -423,6 +584,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         *,
         isolate_context: bool = True,
         audit_signal: AuditSignal | None = None,
+        time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
+        extra_time_budgets: tuple[TimeBudget, ...] = (),
     ) -> RunResult:
         """Execute one node while preserving the tree's shared halt signal."""
         if self._has_run:
@@ -446,9 +609,17 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         object.__setattr__(self, "_log_path", utils._owned_log_path())  # pyright: ignore[reportPrivateUsage]
 
         integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
-        boundary = ChildBoundary(self.name, run_abort, utils.logger, node_audit_signal)
+        boundary = ChildBoundary(
+            self.name,
+            run_abort,
+            utils.logger,
+            node_audit_signal,
+            time_budget_clocks=time_budget_clocks,
+        )
         after_each_started = False
         summary_children: tuple[SummaryTreeNode, ...] = ()
+        settled_outcome: Outcome | None = None
+        settled_result: RunResult | None = None
         if len(utils.logger.scope) == 1:
             integration_hooks.warn_if_unpaired(utils.logger)
         try:
@@ -474,57 +645,143 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
 
             if children is not None:
-                # Sealing forbids subclass dispatch, so the engine names its two internal
-                # composite shapes here; a third shape earns a real strategy seam.
-                if isinstance(self, _Sequence):
-                    result = await self._run_sequence(
+
+                async def run_composite(
+                    active_clocks: tuple[TimeBudgetClock, ...],
+                    _lineage: object,
+                ) -> RunResult:
+                    nonlocal boundary
+                    boundary = ChildBoundary(
+                        self.name,
+                        run_abort,
+                        utils.logger,
+                        node_audit_signal,
+                        time_budget_clocks=active_clocks,
+                    )
+                    if isinstance(self, _Sequence):
+                        return await self._run_sequence(
+                            utils,
+                            run_abort,
+                            children,
+                            audit_signal=node_audit_signal,
+                            time_budget_clocks=active_clocks,
+                        )
+                    return await self._run_group(
                         utils,
                         run_abort,
                         children,
                         audit_signal=node_audit_signal,
+                        time_budget_clocks=active_clocks,
+                    )
+
+                value, timeout = await self._run_timed_window(
+                    utils,
+                    run_abort,
+                    time_budget_clocks,
+                    extra_time_budgets,
+                    run_composite,
+                )
+                if timeout is not None:
+                    summary_children = self._pending_children()
+                    result = self._to_result(
+                        self._deadline_outcome(
+                            timeout,
+                            children=summary_children,
+                        ),
+                        utils,
+                        children=summary_children,
+                    )
+                elif not isinstance(value, RunResult):
+                    raise FrameworkContractViolation(
+                        self.name,
+                        detail="a composite time window settled without a RunResult",
                     )
                 else:
-                    result = await self._run_group(
-                        utils,
-                        run_abort,
-                        children,
-                        audit_signal=node_audit_signal,
-                    )
+                    result = value
                 summary_children = result.summary_tree.children
+                settled_result = result
                 after_each_started = True
-                return self._finish_result(
-                    await self._run_after_each(boundary, utils, run_abort, result),
-                    utils,
-                )
+                result = await self._run_after_each(boundary, utils, run_abort, result)
+                return self._finish_result(result, utils)
 
             if test is not None:
-                # ChildBoundary is the sole enforcement point for authored verdicts.
-                outcome = await boundary.run(Slot.TEST_METHOD, test(utils))
-                result = self._to_result(outcome, utils)
-                after_each_started = True
-                return self._finish_result(
-                    await self._run_after_each(boundary, utils, run_abort, result),
-                    utils,
-                )
 
+                async def run_case(
+                    active_clocks: tuple[TimeBudgetClock, ...],
+                    lineage: object,
+                ) -> Outcome:
+                    nonlocal boundary
+                    boundary = ChildBoundary(
+                        self.name,
+                        run_abort,
+                        utils.logger,
+                        node_audit_signal,
+                        time_budget_clocks=active_clocks,
+                    )
+                    async with _active_time_budgets(active_clocks, lineage):
+                        return await boundary.run(Slot.TEST_METHOD, test(utils))
+
+                value, timeout = await self._run_timed_window(
+                    utils,
+                    run_abort,
+                    time_budget_clocks,
+                    extra_time_budgets,
+                    run_case,
+                )
+                if timeout is not None:
+                    slot = (
+                        boundary.outcome.slot
+                        if boundary.outcome is not None and boundary.outcome.timeout == timeout
+                        else Slot.TEST_METHOD
+                    )
+                    outcome = self._deadline_outcome(timeout, slot=slot)
+                elif not isinstance(value, Outcome):
+                    raise FrameworkContractViolation(
+                        self.name,
+                        detail="a case time window settled without an Outcome",
+                    )
+                else:
+                    outcome = value
+                result = self._to_result(outcome, utils)
+                settled_result = result
+                after_each_started = True
+                result = await self._run_after_each(boundary, utils, run_abort, result)
+                return self._finish_result(result, utils)
+
+            ran_test = False
+            suite: LitmusTest | None = None
             try:
-                # Hop first, teardown last: surveys and audits exec through the via,
-                # not the test host. Provenance (item 6) and via ownership (item 12).
+                # Hop first, teardown last. The test budget begins at configure,
+                # after the borrowed via and pre-configure survey are ready.
                 via_failed = await self._bring_up_via(utils, run_abort)
+                if via_failed is None:
+                    await self._run_surveys(boundary, utils, "pre-configure")
                 if via_failed is not None:
                     outcome = self._adopt_via_outcome(via_failed)
                 else:
-                    await self._run_surveys(boundary, utils, "pre-configure")
-                    configured = await boundary.run(
-                        Slot.CONFIGURE, self._configure_and_merge_context(utils)
-                    )
-                    if configured.state is not None:
-                        outcome = configured
-                    else:
-                        utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
-                        await self._run_surveys(boundary, utils, "post-configure")
-                        suite = self.build_suite()
-                        await self._run_surveys(boundary, utils, "pre-test")
+
+                    async def run_authored(
+                        active_clocks: tuple[TimeBudgetClock, ...],
+                        lineage: object,
+                    ) -> Outcome:
+                        nonlocal boundary, ran_test, suite, summary_children
+                        boundary = ChildBoundary(
+                            self.name,
+                            run_abort,
+                            utils.logger,
+                            node_audit_signal,
+                            time_budget_clocks=active_clocks,
+                        )
+                        async with _active_time_budgets(active_clocks, lineage):
+                            configured = await boundary.run(
+                                Slot.CONFIGURE, self._configure_and_merge_context(utils)
+                            )
+                            if configured.state is not None:
+                                return configured
+                            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                            await self._run_surveys(boundary, utils, "post-configure")
+                            suite = self.build_suite()
+                            await self._run_surveys(boundary, utils, "pre-test")
                         if self._audits:
                             if node_audit_signal is None:
                                 raise FrameworkContractViolation(
@@ -536,50 +793,85 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                                 utils,
                                 run_abort,
                                 node_audit_signal,
+                                time_budget_clocks=active_clocks,
                             )
                         else:
                             suite_result = await suite._run_lifecycle(
                                 utils,
                                 run_abort,
                                 audit_signal=node_audit_signal,
+                                time_budget_clocks=active_clocks,
                             )
                             audit_outcome = None
-                        await self._run_surveys(boundary, utils, "post-test")
-
+                        ran_test = True
                         if audit_outcome is not None:
-                            outcome = audit_outcome
                             summary_children = (suite._pending_summary_tree(),)
-                        elif suite_result is None:
+                            return audit_outcome
+                        if suite_result is None:
                             raise FrameworkContractViolation(
                                 self.name,
                                 detail="suite settled without a result or audit verdict",
                             )
+                        summary_children = (suite_result.summary_tree,)
+                        return Outcome(
+                            Slot.TEST_METHOD,
+                            self.name,
+                            suite_result.state,
+                            failure=suite_result.failure,
+                            value=suite_result.value,
+                            timeout=suite_result.timeout,
+                        )
+
+                    value, timeout = await self._run_timed_window(
+                        utils,
+                        run_abort,
+                        time_budget_clocks,
+                        extra_time_budgets,
+                        run_authored,
+                    )
+                    if timeout is not None:
+                        if suite is not None:
+                            summary_children = (suite._pending_summary_tree(),)
                         else:
-                            outcome = Outcome(
-                                Slot.TEST_METHOD,
-                                self.name,
-                                suite_result.state,
-                                failure=suite_result.failure,
-                                value=suite_result.value,
-                            )
-                            summary_children = (suite_result.summary_tree,)
+                            summary_children = self._pending_children()
+                        slot = (
+                            boundary.outcome.slot
+                            if boundary.outcome is not None and boundary.outcome.timeout == timeout
+                            else Slot.TEST_METHOD
+                        )
+                        outcome = self._deadline_outcome(
+                            timeout,
+                            slot=slot,
+                            children=summary_children,
+                        )
+                    elif not isinstance(value, Outcome):
+                        raise FrameworkContractViolation(
+                            self.name,
+                            detail="an authored time window settled without an Outcome",
+                        )
+                    else:
+                        outcome = value
+                settled_outcome = outcome
             finally:
                 try:
-                    await self._run_surveys(boundary, utils, "pre-cleanup")
+                    if ran_test:
+                        await self._run_surveys(boundary, utils, "post-test")
                 finally:
                     try:
-                        await self._run_cleanup(boundary, utils)
+                        await self._run_surveys(boundary, utils, "pre-cleanup")
                     finally:
                         try:
-                            await self._run_surveys(boundary, utils, "post-cleanup")
+                            await self._run_cleanup(boundary, utils)
                         finally:
-                            await self._tear_down_via()
+                            try:
+                                await self._run_surveys(boundary, utils, "post-cleanup")
+                            finally:
+                                await self._tear_down_via()
             result = self._to_result(outcome, utils, children=summary_children)
+            settled_result = result
             after_each_started = True
-            return self._finish_result(
-                await self._run_after_each(boundary, utils, run_abort, result),
-                utils,
-            )
+            result = await self._run_after_each(boundary, utils, run_abort, result)
+            return self._finish_result(result, utils)
         except ExternalIntegrationFailure:
             await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
             result = self._aborted_result(
@@ -594,15 +886,55 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 await self._run_after_each(boundary, utils, run_abort, result),
                 utils,
             )
-        except asyncio.CancelledError:
-            if not run_abort.fired:
+        except asyncio.CancelledError as error:
+            if run_abort.fired:
+                result = self._aborted_result(
+                    boundary,
+                    utils,
+                    run_abort,
+                    children=summary_children or self._pending_children(),
+                )
+            elif _consume_deadline_cancellation(error):
+                if after_each_started:
+                    if settled_result is None:
+                        raise FrameworkContractViolation(
+                            self.name,
+                            detail="after_each began without a settled node result",
+                        ) from error
+                    return self._finish_result(settled_result, utils)
+                if settled_outcome is not None:
+                    result = self._to_result(
+                        settled_outcome,
+                        utils,
+                        children=summary_children,
+                    )
+                else:
+                    fired = [clock for clock in time_budget_clocks if clock.fired]
+                    if not fired:
+                        raise
+                    clock = min(
+                        fired,
+                        key=lambda candidate: candidate.fired_at or float("inf"),
+                    )
+                    await utils._cancel_opened()  # pyright: ignore[reportPrivateUsage]
+                    timeout = clock.evidence()
+                    slot = (
+                        boundary.outcome.slot
+                        if boundary.outcome is not None and boundary.outcome.timeout == timeout
+                        else Slot.TEST_METHOD
+                    )
+                    summary_children = summary_children or self._pending_children()
+                    result = self._to_result(
+                        self._deadline_outcome(
+                            timeout,
+                            slot=slot,
+                            children=summary_children,
+                        ),
+                        utils,
+                        children=summary_children,
+                    )
+            else:
                 raise
-            result = self._aborted_result(
-                boundary,
-                utils,
-                run_abort,
-                children=summary_children or self._pending_children(),
-            )
             if after_each_started:
                 return self._finish_result(result, utils)
             return self._finish_result(
@@ -612,6 +944,164 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         except BaseException:
             utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
             raise
+
+    @final
+    async def _run_timed_window(
+        self,
+        utils: TestUtils,
+        run_abort: RunAbort,
+        inherited_clocks: tuple[TimeBudgetClock, ...],
+        extra_budgets: tuple[TimeBudget, ...],
+        call: _TimedCall,
+    ) -> tuple[object | None, TimeoutEvidence | None]:
+        """Race one configure-through-test window against every active clock."""
+        declarations = (*extra_budgets, *((self._time_budget,) if self._time_budget else ()))
+        owned_clocks = tuple(
+            TimeBudgetClock(budget, clock=utils.logger.bread_crumbs) for budget in declarations
+        )
+        active_clocks = (*inherited_clocks, *owned_clocks)
+        settled_at: list[float | None] = [None]
+        lineage = object()
+
+        async def tracked_call() -> object:
+            try:
+                return await call(active_clocks, lineage)
+            finally:
+                settled_at[0] = asyncio.get_running_loop().time()
+
+        core = asyncio.create_task(tracked_call())
+        watchers = [asyncio.create_task(clock.event.wait()) for clock in active_clocks]
+        try:
+            if not watchers:
+                return await core, None
+            await asyncio.wait([core, *watchers], return_when=asyncio.FIRST_COMPLETED)
+            if run_abort.fired:
+                # A harness halt is run-wide and class-intact. If its settlement and
+                # a node clock become observable in the same loop turn, the deadline
+                # must not consume the integration failure as a node-local cut.
+                if not core.done():
+                    core.cancel()
+                return await core, None
+            fired = [
+                clock
+                for clock in active_clocks
+                if clock.fired
+                and (
+                    settled_at[0] is None
+                    or (clock.fired_at is not None and clock.fired_at <= settled_at[0])
+                )
+            ]
+            if not fired:
+                return await core, None
+            clock = min(fired, key=lambda candidate: candidate.fired_at or float("inf"))
+            await self._settle_deadline_cut(core, utils)
+            evidence = clock.evidence()
+            utils.logger.error(
+                "time budget expired: reason=%s declared=%s budget=%gs elapsed=%gs clock=%s",
+                evidence.reason,
+                evidence.declared,
+                evidence.budget_seconds,
+                evidence.elapsed_seconds,
+                evidence.clock,
+            )
+            return None, evidence
+        except asyncio.CancelledError as error:
+            if run_abort.fired:
+                raise
+            if not _consume_deadline_cancellation(error):
+                raise
+            fired = [clock for clock in active_clocks if clock.fired]
+            if not fired:
+                raise
+            clock = min(fired, key=lambda candidate: candidate.fired_at or float("inf"))
+            await self._settle_deadline_cut(core, utils)
+            evidence = clock.evidence()
+            utils.logger.error(
+                "time budget expired: reason=%s declared=%s budget=%gs elapsed=%gs clock=%s",
+                evidence.reason,
+                evidence.declared,
+                evidence.budget_seconds,
+                evidence.elapsed_seconds,
+                evidence.clock,
+            )
+            return None, evidence
+        finally:
+            for watcher in watchers:
+                if not watcher.done():
+                    watcher.cancel()
+            if watchers:
+                await asyncio.gather(*watchers, return_exceptions=True)
+            for clock in owned_clocks:
+                clock.close()
+
+    @final
+    async def _settle_deadline_cut(
+        self,
+        core: asyncio.Task[object],
+        utils: TestUtils,
+    ) -> None:
+        """Cancel the coroutine and the node-owned resources before returning evidence."""
+        _cancel_for_deadline(core)
+
+        async def settle() -> None:
+            await utils._cancel_opened()  # pyright: ignore[reportPrivateUsage]
+            await asyncio.gather(core, return_exceptions=True)
+
+        settling = asyncio.create_task(settle())
+        try:
+            await asyncio.shield(settling)
+        except asyncio.CancelledError:
+            while not settling.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(settling)
+            raise
+
+    @final
+    def _deadline_outcome(
+        self,
+        timeout: TimeoutEvidence,
+        *,
+        slot: Slot = Slot.TEST_METHOD,
+        children: tuple[SummaryTreeNode, ...] = (),
+    ) -> Outcome:
+        """Apply timeout state and ordinary composite precedence to a cut node."""
+        aborted = next((child for child in children if child.state is State.ABORTED), None)
+        if aborted is not None:
+            return Outcome(
+                slot,
+                self.name,
+                State.ABORTED,
+                failure=aborted.failure,
+                timeout=timeout,
+            )
+        if timeout.declared == "abort_after":
+            return Outcome(
+                slot,
+                self.name,
+                State.ABORTED,
+                timeout=timeout,
+            )
+        return Outcome(
+            slot,
+            self.name,
+            State.FAIL,
+            failure=self._deadline_failure(timeout),
+            timeout=timeout,
+        )
+
+    @final
+    def _deadline_failure(self, timeout: TimeoutEvidence) -> TestFailure:
+        """Describe a fail-after expiry without introducing another failure class."""
+        return TestFailure(
+            f"time budget exceeded: {timeout.declared}={timeout.budget_seconds:g}s "
+            f"at {timeout.clock}",
+            {"budget_seconds": timeout.budget_seconds},
+            {
+                "reason": timeout.reason,
+                "elapsed_seconds": timeout.elapsed_seconds,
+                "clock": timeout.clock,
+            },
+        )
 
     @final
     async def _run_after_each(
@@ -691,6 +1181,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         children: tuple[LitmusTest, ...],
         *,
         audit_signal: AuditSignal | None = None,
+        time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
     ) -> RunResult:
         """Run every child to settlement unless a harness-level halt escapes."""
         tasks: list[asyncio.Task[RunResult]] = []
@@ -698,18 +1189,34 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             async with asyncio.TaskGroup() as task_group:
                 tasks.extend(
                     task_group.create_task(
-                        child._run_lifecycle(utils, run_abort, audit_signal=audit_signal)
+                        child._run_lifecycle(
+                            utils,
+                            run_abort,
+                            audit_signal=audit_signal,
+                            time_budget_clocks=time_budget_clocks,
+                        )
                     )
                     for child in children
                 )
                 active = set(tasks)
-                while active:
-                    done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
-                    active.difference_update(done)
-                    if run_abort.fired:
+                try:
+                    while active:
+                        done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                        active.difference_update(done)
+                        if run_abort.fired:
+                            for task in active:
+                                task.cancel()
+                            break
+                except asyncio.CancelledError as error:
+                    if error.args and error.args[0] is _DEADLINE_CANCELLATION:
                         for task in active:
-                            task.cancel()
-                        break
+                            # TaskGroup issues its own second cancel while unwinding.
+                            _cancel_for_deadline(task, requests=2)
+                    else:
+                        message = error.args[0] if error.args else None
+                        for task in active:
+                            task.cancel(message)
+                    raise
         except* ExternalIntegrationFailure as failures:
             # TaskGroup has already cancelled and joined every sibling. Restore the
             # taxonomy's class-intact halt instead of leaking an ExceptionGroup.
@@ -737,6 +1244,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             state,
             failure=reported.failure,
             value=outcomes,
+            timeout=reported.timeout,
         )
         return self._to_result(
             aggregate,
@@ -752,11 +1260,17 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         children: tuple[LitmusTest, ...],
         *,
         audit_signal: AuditSignal | None = None,
+        time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
     ) -> RunResult:
         """Run dependent children in order and stop at the first non-pass verdict."""
         outcomes: list[RunResult] = []
         for index, child in enumerate(children):
-            outcome = await child._run_lifecycle(utils, run_abort, audit_signal=audit_signal)
+            outcome = await child._run_lifecycle(
+                utils,
+                run_abort,
+                audit_signal=audit_signal,
+                time_budget_clocks=time_budget_clocks,
+            )
             outcomes.append(outcome)
             if outcome.state in (State.FAIL, State.ABORTED):
                 aggregate = Outcome(
@@ -765,6 +1279,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                     outcome.state,
                     failure=outcome.failure,
                     value=tuple(outcomes),
+                    timeout=outcome.timeout,
                 )
                 pending = tuple(child._pending_summary_tree() for child in children[index + 1 :])
                 return self._to_result(
@@ -852,6 +1367,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             type=node_type,
             state=outcome.state,
             failure=outcome.failure,
+            timeout=outcome.timeout,
             log_path=utils._owned_log_reference(),  # pyright: ignore[reportPrivateUsage]
             children=children,
         )
@@ -861,6 +1377,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             node=self.name,
             state=outcome.state,
             failure=outcome.failure,
+            timeout=outcome.timeout,
             value=outcome.value,
             swallowed=outcome.swallowed,
             ancestor_names=list(utils.logger.scope),
@@ -990,10 +1507,17 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         utils: TestUtils,
         run_abort: RunAbort,
         audit_signal: AuditSignal,
+        *,
+        time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
     ) -> tuple[RunResult | None, Outcome | None]:
         """Race the authored suite against independent framework-owned audit loops."""
         suite_task = asyncio.create_task(
-            suite._run_lifecycle(utils, run_abort, audit_signal=audit_signal)
+            suite._run_lifecycle(
+                utils,
+                run_abort,
+                audit_signal=audit_signal,
+                time_budget_clocks=time_budget_clocks,
+            )
         )
         audit_tasks = [
             asyncio.create_task(self._run_audit_loop(hook, index, utils, run_abort, audit_signal))
@@ -1096,9 +1620,40 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 if via_failed is not None:
                     return via_failed
                 boundary = ChildBoundary(self.name, run_abort, utils.logger)
-                outcome = await boundary.run(
-                    Slot.CONFIGURE, self._configure_and_merge_context(utils)
+
+                async def configure_window(
+                    active_clocks: tuple[TimeBudgetClock, ...],
+                    lineage: object,
+                ) -> Outcome:
+                    nonlocal boundary
+                    boundary = ChildBoundary(
+                        self.name,
+                        run_abort,
+                        utils.logger,
+                        time_budget_clocks=active_clocks,
+                    )
+                    async with _active_time_budgets(active_clocks, lineage):
+                        return await boundary.run(
+                            Slot.CONFIGURE,
+                            self._configure_and_merge_context(utils),
+                        )
+
+                value, timeout = await self._run_timed_window(
+                    utils,
+                    run_abort,
+                    (),
+                    (),
+                    configure_window,
                 )
+                if timeout is not None:
+                    outcome = self._deadline_outcome(timeout, slot=Slot.CONFIGURE)
+                elif isinstance(value, Outcome):
+                    outcome = value
+                else:
+                    raise FrameworkContractViolation(
+                        self.name,
+                        detail="a configure-only time window settled without an Outcome",
+                    )
                 if outcome.state is None:
                     utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
                 return outcome
@@ -1188,6 +1743,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             self.name,
             outcome.state,
             failure=outcome.failure,
+            timeout=outcome.timeout,
             value=outcome.value,
             swallowed=outcome.swallowed,
         )
@@ -1199,8 +1755,20 @@ class _Case(LitmusTest):
 
     __slots__ = ()
 
-    def __init__(self, *, name: str, test: _TestFunction) -> None:
-        super().__init__(name=name, discrete_log_file=False)
+    def __init__(
+        self,
+        *,
+        name: str,
+        test: _TestFunction,
+        fail_after: float | None,
+        abort_after: float | None,
+    ) -> None:
+        super().__init__(
+            name=name,
+            discrete_log_file=False,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
         self._test = test
 
     def build_suite(self) -> LitmusTest:
@@ -1223,8 +1791,15 @@ class _Group(LitmusTest):
         name: str,
         tests: Sequence[LitmusTest],
         discrete_log_file: bool,
+        fail_after: float | None,
+        abort_after: float | None,
     ) -> None:
-        super().__init__(name=name, discrete_log_file=discrete_log_file)
+        super().__init__(
+            name=name,
+            discrete_log_file=discrete_log_file,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
         self._children = tuple(tests)
 
     def build_suite(self) -> LitmusTest:
@@ -1247,8 +1822,15 @@ class _Sequence(LitmusTest):
         name: str,
         tests: Sequence[LitmusTest],
         discrete_log_file: bool,
+        fail_after: float | None,
+        abort_after: float | None,
     ) -> None:
-        super().__init__(name=name, discrete_log_file=discrete_log_file)
+        super().__init__(
+            name=name,
+            discrete_log_file=discrete_log_file,
+            fail_after=fail_after,
+            abort_after=abort_after,
+        )
         self._children = tuple(tests)
 
     def build_suite(self) -> LitmusTest:
