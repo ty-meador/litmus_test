@@ -321,3 +321,34 @@ class TestRackScale:
             for index, transport in enumerate(transports)
             if index != parked_dut
         )
+
+    async def test_rack_deadline_keeps_moving_while_one_sibling_is_in_a_hook(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        parked_dut = 12
+        rack, coordinator, transports = _rack(install_mock_connector)
+        transports[parked_dut].park("probe")
+
+        async def slow_sibling_hook(ctx: BeforeEachContext) -> None:
+            if ctx.name == "dut-00":
+                await asyncio.sleep(0.3)
+
+        coordinator.release.set()
+        started_at = asyncio.get_running_loop().time()
+        result = await asyncio.wait_for(
+            rack.run(
+                fail_after=_PARKED_DUT_BUDGET_SECONDS,
+                before_each=slow_sibling_hook,
+                allow_unpaired_hooks=True,
+            ),
+            _WAIT_LIMIT_SECONDS,
+        )
+        elapsed = asyncio.get_running_loop().time() - started_at
+
+        assert elapsed < _PARKED_DUT_BUDGET_SECONDS + 0.15
+        assert result.state is State.FAIL
+        assert result.timeout is not None
+        assert result.timeout.clock == "synthetic rack"
+        assert all(node.state is not None for node in _dut_results(result))
+        assert transports[parked_dut].cancel_count == 1

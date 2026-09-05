@@ -98,32 +98,32 @@ class TimeoutEvidence:
 
 @final
 class TimeBudgetClock:
-    """A pausable, subtree-shared clock for one declared time budget."""
+    """A lineage-accounted, subtree-shared clock for one declared time budget."""
 
     __slots__ = (
+        "_active_lineages",
         "_active_since",
         "_budget",
         "_clock",
+        "_closed",
         "_consumed",
         "_event",
         "_fired_at",
         "_handle",
         "_loop",
-        "_pause_depth",
     )
 
     def __init__(self, budget: TimeBudget, *, clock: str) -> None:
         self._budget = budget
         self._clock = clock
+        self._closed = False
         self._loop = asyncio.get_running_loop()
         self._event = asyncio.Event()
         self._consumed = 0.0
-        self._pause_depth = 0
-        self._active_since: float | None = self._loop.time()
+        self._active_lineages: set[object] = set()
+        self._active_since: float | None = None
         self._fired_at: float | None = None
-        self._handle: asyncio.TimerHandle | None = self._loop.call_later(
-            budget.seconds, self._expire
-        )
+        self._handle: asyncio.TimerHandle | None = None
 
     @property
     def state(self) -> State:
@@ -145,37 +145,45 @@ class TimeBudgetClock:
         """One-way expiry event shared throughout the bounded subtree."""
         return self._event
 
-    def pause(self) -> None:
-        """Exclude an integration or finalization interval from this clock."""
-        if self.fired:
+    def activate(self, lineage: object) -> None:
+        """Count one descendant lineage as doing work inside this window."""
+        if self.fired or self._closed:
             return
-        if self._pause_depth == 0:
-            self._consume_active_time()
-            handle = self._handle
-            if handle is not None:
-                handle.cancel()
-            self._handle = None
-        self._pause_depth += 1
-
-    def resume(self) -> None:
-        """Resume after a paired :meth:`pause`."""
-        if self.fired or self._pause_depth <= 0:
+        if lineage in self._active_lineages:
             return
-        self._pause_depth -= 1
-        if self._pause_depth == 0:
-            remaining = self._budget.seconds - self._consumed
-            if remaining <= 0:
-                self._expire()
-                return
-            self._active_since = self._loop.time()
-            self._handle = self._loop.call_later(remaining, self._expire)
+        was_inactive = not self._active_lineages
+        self._active_lineages.add(lineage)
+        if not was_inactive:
+            return
+        remaining = self._budget.seconds - self._consumed
+        if remaining <= 0:
+            self._expire()
+            return
+        self._active_since = self._loop.time()
+        self._handle = self._loop.call_later(remaining, self._expire)
 
-    def close(self) -> None:
-        """Stop an unexpired clock after its node's test window settles."""
+    def deactivate(self, lineage: object) -> None:
+        """Stop charging this clock when its last active lineage leaves."""
+        if self.fired or lineage not in self._active_lineages:
+            return
+        self._active_lineages.remove(lineage)
+        if self._active_lineages:
+            return
+        self._consume_active_time()
         handle = self._handle
         if handle is not None:
             handle.cancel()
         self._handle = None
+
+    def close(self) -> None:
+        """Stop an unexpired clock after its node's test window settles."""
+        self._closed = True
+        handle = self._handle
+        if handle is not None:
+            handle.cancel()
+        self._handle = None
+        self._active_lineages.clear()
+        self._active_since = None
 
     def evidence(self) -> TimeoutEvidence:
         """Snapshot the expired clock's declared and measured facts."""
@@ -196,7 +204,7 @@ class TimeBudgetClock:
         self._active_since = None
 
     def _expire(self) -> None:
-        if self.fired or self._pause_depth:
+        if self.fired or not self._active_lineages:
             return
         self._consume_active_time()
         self._fired_at = self._loop.time()

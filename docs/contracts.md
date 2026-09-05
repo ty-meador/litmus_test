@@ -69,7 +69,10 @@ infinities, NaN, and non-numbers are rejected before execution.
   subtree does test work. Descendants inherit all ancestor bounds and may only tighten
   them. The clock that fires first decides the state; a descendant's longer declaration
   can never loosen an ancestor's remaining time. A `wait_for` timeout longer than the
-  effective enclosing budget never fires—the budget wins.
+  effective enclosing budget never fires—the budget wins. Concurrent descendants are
+  separate active lineages: one sibling entering an excluded hook or cleanup cannot
+  pause an ancestor clock while another sibling is still doing timed work. The clock
+  stalls only while no descendant lineage is inside its timed window.
 - Expiry settles every descendant still running with the winning clock's declared
   state. `fail_after` renders Fail with a structured `TestFailure` naming the budget.
   `abort_after` renders node-local Aborted without forging a failure verdict. Descendants
@@ -81,6 +84,9 @@ infinities, NaN, and non-numbers are rejected before execution.
 - Expiry cancels the coroutine and hard-cancels at the resource every transport the cut
   node itself opened. An inherited route or borrowed `via` hop is never in that owned
   set and is not touched; it remains available to its owner and other tunneled siblings.
+- A node used as `via=` still owns its configure window. Its declaration bounds
+  framework configure-only bring-up; a consumer adopts the via's Fail or Aborted state
+  and timeout evidence, while teardown releases any borrowed hop through its owner.
 - Every cut node carries structured `timeout` evidence with `reason="timeout"`, the
   declared name, the declared budget in seconds, active elapsed seconds, and the
   root-to-node path of the clock that fired. This evidence appears on `RunResult`, in

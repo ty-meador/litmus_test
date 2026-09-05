@@ -22,11 +22,41 @@ from litmus import (
     TestUtils,
     Verdict,
 )
+from litmus.executor import ExecResult
 from litmus.lifecycle import RunAbort, Slot, State, TimeBudget, TimeBudgetClock
 from litmus.mock import MockTransport
+from litmus.remote import RemoteInterface
 
 _BUDGET = 0.03
 _PROMPT = 1.0
+
+
+class _BlockingCancelTransport(RemoteInterface):
+    """Hold resource teardown so a second cancellation can collide with it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancel_started = asyncio.Event()
+        self.release_cancel = asyncio.Event()
+        self.cancel_count = 0
+        self.disconnect_count = 0
+
+    async def _connect(self) -> None:
+        pass
+
+    async def _disconnect(self) -> None:
+        self.disconnect_count += 1
+
+    async def _exec(self, command: str) -> ExecResult:
+        del command
+        await asyncio.Event().wait()
+        return ExecResult(stdout="", stderr="", exit_code=0)
+
+    async def _cancel_in_flight(self) -> None:
+        self.cancel_count += 1
+        self.cancel_started.set()
+        await self.release_cancel.wait()
+        await self._disconnect()
 
 
 class _OneClaim(LitmusTest):
@@ -70,6 +100,59 @@ class TestTimeBudgetValidation:
         with pytest.raises(ContractViolation, match="positive finite"):
             LitmusTest(name="invalid", fail_after=value)  # pyright: ignore[reportArgumentType]
 
+    @pytest.mark.parametrize("declared", ["fail_after", "abort_after"])
+    def test_huge_integer_is_a_contract_violation_at_composition(
+        self,
+        declared: str,
+    ) -> None:
+        huge = 10**1000
+        construct = (
+            (lambda: LitmusTest(name="invalid", fail_after=huge))
+            if declared == "fail_after"
+            else (lambda: LitmusTest(name="invalid", abort_after=huge))
+        )
+
+        with pytest.raises(ContractViolation, match="positive finite"):
+            construct()
+
+    @pytest.mark.parametrize("declared", ["fail_after", "abort_after"])
+    def test_huge_integer_is_a_contract_violation_at_a_composition_factory(
+        self,
+        declared: str,
+    ) -> None:
+        root = LitmusTest(name="root")
+
+        async def claim(utils: TestUtils) -> Verdict:
+            del utils
+            return PASS
+
+        compose = (
+            (lambda: root.case("invalid", claim, fail_after=10**1000))
+            if declared == "fail_after"
+            else (lambda: root.case("invalid", claim, abort_after=10**1000))
+        )
+
+        with pytest.raises(ContractViolation, match="positive finite"):
+            compose()
+
+    @pytest.mark.parametrize("declared", ["fail_after", "abort_after"])
+    async def test_huge_integer_run_budget_does_not_consume_the_instance(
+        self,
+        declared: str,
+    ) -> None:
+        suite = _OneClaim()
+        invalid_run = (
+            suite.run(fail_after=10**1000)
+            if declared == "fail_after"
+            else suite.run(abort_after=10**1000)
+        )
+
+        with pytest.raises(ContractViolation, match="positive finite"):
+            await invalid_run
+
+        result = await asyncio.wait_for(suite.run(abort_after=_BUDGET), _PROMPT)
+        assert result.state is State.ABORTED
+
     def test_exactly_one_name_is_accepted_at_every_composition_factory(self) -> None:
         root = LitmusTest(name="root")
 
@@ -108,34 +191,56 @@ class TestTimeBudgetValidation:
 
 
 class TestTimeBudgetClock:
-    async def test_pause_resume_and_close_exclude_time_without_firing(self) -> None:
-        clock = TimeBudgetClock(TimeBudget("fail_after", 0.2), clock="root")
+    async def test_one_departing_lineage_does_not_pause_an_active_peer(self) -> None:
+        clock = TimeBudgetClock(TimeBudget("fail_after", _BUDGET), clock="root")
+        first = object()
+        second = object()
+        clock.activate(first)
+        clock.activate(second)
+
+        clock.deactivate(first)
+
+        await asyncio.wait_for(clock.event.wait(), _PROMPT)
+        assert clock.fired
+
+    async def test_clock_stalls_only_after_its_last_active_lineage_leaves(self) -> None:
+        clock = TimeBudgetClock(TimeBudget("fail_after", _BUDGET), clock="root")
+        first = object()
+        second = object()
 
         assert clock.state is State.FAIL
         assert clock.fired_at is None
         with pytest.raises(RuntimeError, match="before the clock fires"):
             clock.evidence()
 
-        clock.pause()
-        clock.pause()
-        clock._consume_active_time()  # pyright: ignore[reportPrivateUsage]
-        await asyncio.sleep(0.01)
+        clock.activate(first)
+        clock.activate(first)
+        clock.activate(second)
+        clock.deactivate(first)
+        clock.deactivate(second)
+        clock.deactivate(second)
+        await asyncio.sleep(_BUDGET * 2)
         assert not clock.event.is_set()
-        clock.resume()
-        clock.resume()
         clock.close()
         clock.close()
-        clock.resume()
+        clock.activate(first)
+        clock.deactivate(first)
+
+        active = TimeBudgetClock(TimeBudget("fail_after", 1), clock="active")
+        active.activate(object())
+        active.close()
 
         assert not clock.fired
 
     async def test_expiry_is_one_way_and_renders_evidence(self) -> None:
         clock = TimeBudgetClock(TimeBudget("abort_after", 0.001), clock="root/child")
+        lineage = object()
+        clock.activate(lineage)
 
         await asyncio.wait_for(clock.event.wait(), _PROMPT)
         evidence = clock.evidence()
-        clock.pause()
-        clock.resume()
+        clock.activate(object())
+        clock.deactivate(lineage)
         clock._expire()  # pyright: ignore[reportPrivateUsage]
         clock.close()
 
@@ -150,14 +255,13 @@ class TestTimeBudgetClock:
             "clock": "root/child",
         }
 
-    async def test_resume_expires_a_budget_consumed_while_it_was_being_paused(self) -> None:
+    async def test_activate_expires_an_already_consumed_budget(self) -> None:
         clock = TimeBudgetClock(TimeBudget("fail_after", 1), clock="root")
-        clock.pause()
         object.__setattr__(clock, "_consumed", 1.0)
         clock._expire()  # pyright: ignore[reportPrivateUsage]
 
         assert not clock.fired
-        clock.resume()
+        clock.activate(object())
 
         assert clock.fired
 
@@ -270,14 +374,45 @@ class TestTimeBudgetStatesAndEvidence:
 
 
 class TestTimeBudgetWindowsAndComposition:
+    async def test_unmarked_caller_cancellation_propagates_through_a_group(self) -> None:
+        both_started = asyncio.Event()
+        started = 0
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.group(
+                    "group",
+                    [self.case("one", self._park), self.case("two", self._park)],
+                )
+
+            async def _park(self, utils: TestUtils) -> Verdict:
+                nonlocal started
+                del utils
+                started += 1
+                if started == 2:
+                    both_started.set()
+                await asyncio.Event().wait()
+                return PASS
+
+        running = asyncio.create_task(Suite(name="root").run())
+        await asyncio.wait_for(both_started.wait(), _PROMPT)
+
+        running.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(running, _PROMPT)
+
     async def test_integration_abort_outranks_a_same_turn_deadline(self) -> None:
         suite = _OneClaim()
         run_abort = RunAbort()
         clock = TimeBudgetClock(TimeBudget("fail_after", _PROMPT), clock="root")
         failure = ExternalIntegrationFailure("before_each", RuntimeError("integration lost"))
 
-        async def collide(active_clocks: tuple[TimeBudgetClock, ...]) -> object:
-            del active_clocks
+        async def collide(
+            active_clocks: tuple[TimeBudgetClock, ...],
+            lineage: object,
+        ) -> object:
+            active_clocks[0].activate(lineage)
             run_abort.fire(failure)
             clock._expire()  # pyright: ignore[reportPrivateUsage]
             raise failure
@@ -357,6 +492,95 @@ class TestTimeBudgetWindowsAndComposition:
         assert result.state is State.PASS
         assert result.timeout is None
 
+    async def test_sibling_before_hook_cannot_pause_an_active_ancestor_lineage(self) -> None:
+        parked_cut = asyncio.Event()
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.group(
+                    "bounded group",
+                    [
+                        self.case("slow hook", self._pass),
+                        self.case("parked", self._park),
+                    ],
+                    fail_after=0.05,
+                )
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+            async def _park(self, utils: TestUtils) -> Verdict:
+                del utils
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    parked_cut.set()
+                return PASS
+
+        async def slow_one_sibling(ctx: BeforeEachContext) -> None:
+            if ctx.name == "slow hook":
+                await asyncio.sleep(0.3)
+
+        started_at = asyncio.get_running_loop().time()
+        running = asyncio.create_task(
+            Suite(name="root").run(
+                before_each=slow_one_sibling,
+                allow_unpaired_hooks=True,
+            )
+        )
+
+        await asyncio.wait_for(parked_cut.wait(), 0.2)
+        cut_after = asyncio.get_running_loop().time() - started_at
+        result = await asyncio.wait_for(running, _PROMPT)
+
+        assert cut_after < 0.2
+        assert result.state is State.FAIL
+
+    async def test_sibling_cleanup_cannot_pause_an_active_ancestor_lineage(self) -> None:
+        cleanup_started = asyncio.Event()
+        parked_cut = asyncio.Event()
+
+        class FinishesThenCleans(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("passes", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                del utils
+                cleanup_started.set()
+                await asyncio.sleep(0.3)
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.group(
+                    "bounded group",
+                    [FinishesThenCleans(name="cleaner"), self.case("parked", self._park)],
+                    fail_after=0.05,
+                )
+
+            async def _park(self, utils: TestUtils) -> Verdict:
+                del utils
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    parked_cut.set()
+                return PASS
+
+        started_at = asyncio.get_running_loop().time()
+        running = asyncio.create_task(Suite(name="root").run())
+
+        await asyncio.wait_for(cleanup_started.wait(), 0.2)
+        await asyncio.wait_for(parked_cut.wait(), 0.2)
+        cut_after = asyncio.get_running_loop().time() - started_at
+        result = await asyncio.wait_for(running, _PROMPT)
+
+        assert cut_after < 0.2
+        assert result.state is State.FAIL
+
     async def test_group_cut_preserves_settled_sibling_and_sequence_leaves_pending_tail(
         self,
     ) -> None:
@@ -435,6 +659,39 @@ class TestTimeBudgetWindowsAndComposition:
 
 
 class TestTimeBudgetResourceCancellation:
+    async def test_caller_cancellation_during_deadline_teardown_is_restored(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        transport = _BlockingCancelTransport()
+
+        class Suite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, transport)
+                await utils.use_shell(host="dut", username="root")
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("parked", self._park)
+
+            async def _park(self, utils: TestUtils) -> Verdict:
+                await utils.exec("park")
+                return PASS
+
+        suite = Suite(name="root")
+        running = asyncio.create_task(suite.run(fail_after=_BUDGET))
+        await asyncio.wait_for(transport.cancel_started.wait(), _PROMPT)
+
+        running.cancel()
+        transport.release_cancel.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(running, _PROMPT)
+        assert transport.cancel_count == 1
+        assert transport.disconnect_count == 1
+        assert not transport.connected
+        assert suite._summary_tree is None  # pyright: ignore[reportPrivateUsage]
+
     async def test_mock_transport_is_hard_cancelled_at_owning_node_scope(
         self,
         install_mock_connector: ConnectorInstaller,
@@ -461,6 +718,187 @@ class TestTimeBudgetResourceCancellation:
         assert transport.cancel_count == 1
         assert not transport.connected
         assert not transport.has_in_flight
+
+    async def test_fail_after_bounds_a_via_configure_and_consumer_adopts_evidence(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        transport = MockTransport()
+        cleaned = asyncio.Event()
+
+        class Via(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, transport)
+                await utils.use_shell(host="gateway", username="root")
+                await asyncio.Event().wait()
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                del utils
+                assert not transport.connected
+                cleaned.set()
+
+        class Consumer(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("unreached", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+        result = await asyncio.wait_for(
+            Consumer(
+                name="consumer",
+                via=Via(name="gateway", fail_after=_BUDGET),
+            ).run(),
+            _PROMPT,
+        )
+
+        assert result.state is State.FAIL
+        assert result.slot is Slot.CONFIGURE
+        assert isinstance(result.failure, TestFailure)
+        assert result.timeout is not None
+        assert result.timeout.declared == "fail_after"
+        assert result.timeout.clock == "consumer/gateway"
+        assert transport.cancel_count == 1
+        assert cleaned.is_set()
+
+    async def test_abort_after_on_via_preserves_borrowed_hop_until_cleanup(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        hop = MockTransport()
+        target = MockTransport()
+        cleanup_topology: list[tuple[bool, bool]] = []
+
+        class Gateway(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, {"gateway": hop})
+                await utils.use_shell(host="gateway", username="root")
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+        class TimedVia(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, {"target": target})
+                await utils.use_shell(host="target", username="root")
+                await asyncio.Event().wait()
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                del utils
+                cleanup_topology.append((target.connected, hop.connected))
+
+        class Consumer(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("unreached", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+        gateway = Gateway(name="gateway")
+        timed_via = TimedVia(
+            name="timed via",
+            via=gateway,
+            abort_after=_BUDGET,
+        )
+        result = await asyncio.wait_for(
+            Consumer(name="consumer", via=timed_via).run(),
+            _PROMPT,
+        )
+
+        assert result.state is State.ABORTED
+        assert result.failure is None
+        assert result.timeout is not None
+        assert result.timeout.declared == "abort_after"
+        assert result.timeout.clock == "consumer/timed via"
+        assert target.cancel_count == 1
+        assert hop.cancel_count == 0
+        assert cleanup_topology == [(False, True)]
+        assert hop.disconnect_count == 1
+
+    async def test_public_configure_only_maps_deadline_abort_to_timeout(self) -> None:
+        cleaned = asyncio.Event()
+
+        class Via(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                del utils
+                await asyncio.Event().wait()
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                del utils
+                cleaned.set()
+
+        via = Via(name="gateway", abort_after=_BUDGET)
+        with pytest.raises(TimeoutError, match="abort_after"):
+            await asyncio.wait_for(via.run_configure_only(), _PROMPT)
+        await via.run_cleanup_only()
+
+        assert cleaned.is_set()
+
+    async def test_public_configure_only_caller_cancel_still_cancels_bring_up(self) -> None:
+        configure_started = asyncio.Event()
+        configure_cancelled = asyncio.Event()
+
+        class Via(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                del utils
+                configure_started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    configure_cancelled.set()
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.case("unused", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+        via = Via(name="gateway")
+        running = asyncio.create_task(via.run_configure_only())
+        await asyncio.wait_for(configure_started.wait(), _PROMPT)
+
+        running.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(running, _PROMPT)
+        await asyncio.wait_for(configure_cancelled.wait(), _PROMPT)
+        configure_task = via._configure_only_task  # pyright: ignore[reportPrivateUsage]
+        assert configure_task is not None
+        await asyncio.gather(configure_task, return_exceptions=True)
+        await via.run_cleanup_only()
 
     async def test_deadline_cancels_owned_tunnel_but_never_its_borrowed_hop(
         self,
