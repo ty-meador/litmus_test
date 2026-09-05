@@ -132,12 +132,13 @@ class TestCompositionExample:
 
 
 def _detach_log_paths(tree: dict[str, Any]) -> dict[str, str | None]:
-    """Pop every node's opaque timeline link so the tree shape can be pinned exactly."""
+    """Detach additive evidence fields so the established tree shape stays legible."""
     links: dict[str, str | None] = {}
     pending = [tree]
     while pending:
         node = pending.pop()
         links[node["name"]] = node.pop("log_path")
+        node.pop("timeout")
         pending.extend(node["children"])
     return links
 

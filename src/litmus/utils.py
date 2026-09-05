@@ -600,6 +600,10 @@ class TestUtils:
         """Close remotes this node opened. Inherited hops stay with their owner."""
         await self._routing.disconnect_opened()
 
+    async def _cancel_opened(self) -> None:
+        """Hard-close this node's remotes without touching an inherited hop."""
+        await self._routing.cancel_opened()
+
     def _halt_signal(self) -> RunAbort:
         """The run abort this node was scoped with. Framework lifecycle only."""
         return self._signal._run_abort  # pyright: ignore[reportPrivateUsage]

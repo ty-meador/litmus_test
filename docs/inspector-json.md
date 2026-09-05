@@ -13,6 +13,7 @@ run tree.
 | `format_version` | integer | Schema version; currently `1`. |
 | `state` | string | One terminal state: `Pass`, `Fail`, or `Aborted`. |
 | `failure` | object or null | JSON-safe framework failure, including nested causes. |
+| `timeout` | object or null | Structured time-budget evidence when a deadline determined or contributed to this state. |
 | `test_case` | string | Stable name of this node. |
 | `type` | string | `test-suite`, `test-case`, `test-group`, or `test-sequence`. |
 | `ancestor_names` | array of strings | Root-to-this path, inclusive. |
@@ -118,6 +119,7 @@ Every `summary_tree` node contains exactly these version-1 fields:
 | `type` | string | The same node-type discriminator used by `RunResult`. |
 | `state` | string or null | Terminal state, or null when a declared sequence step did not run. |
 | `failure` | object or null | JSON-safe failure for this exact node. |
+| `timeout` | object or null | Structured time-budget evidence for this exact node. |
 | `log_path` | string or null | POSIX path of this node's `timeline.jsonl`, relative to the run directory. Null when the node never ran or when its records rolled up into an ancestor. |
 | `children` | array | Ordered child nodes. Groups retain declaration order after settlement. |
 
@@ -139,6 +141,23 @@ retain the failure name, message, state, comparisons, and bug metadata. An
 `ExternalIntegrationFailure` retains its hook and JSON-safe cause. Arbitrary exception
 objects and live values degrade to descriptive JSON-safe forms rather than making
 serialization fail and masking the evidence.
+
+## Timeout shape
+
+When no deadline contributed to a node's state, `timeout` is null. Otherwise it carries
+these fields:
+
+| Field | JSON type | Meaning |
+|---|---|---|
+| `reason` | string | Always `timeout`. |
+| `declared` | string | The winning declaration: `fail_after` or `abort_after`. |
+| `budget_seconds` | number | Positive finite duration declared on the winning clock. |
+| `elapsed_seconds` | number | Active window time consumed when that clock fired. |
+| `clock` | string | Root-to-declaring-node path of the winning clock. |
+
+For `fail_after`, `failure` also contains the hardware-facing `TestFailure`. For
+`abort_after`, `failure` may be null because the framework does not forge a verdict;
+the timeout record carries the reason for the node-local Aborted state.
 
 Integrators should use `ancestor_names` as the durable node identity and
 `bread_crumbs` only for display. Names may contain `/`; the array is therefore the
