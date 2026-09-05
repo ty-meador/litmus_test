@@ -36,7 +36,8 @@ Inspector.
 Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
 `overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
 patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
-`inspector-json.md` (the versioned downstream result contract), `junit-xml.md` (the
+`inspector-json.md` (the versioned downstream result contract, with its JSON Schemas
+under `docs/schema/`), `junit-xml.md` (the
 JUnit projection of that result for CI), translated from the legacy docs and updated
 to the port's semantics, and `litmus-check.md` (the skippable tier-3 linter over
 authored suites).
