@@ -1012,6 +1012,30 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                     run_abort,
                     children=summary_children or self._pending_children(),
                 )
+            elif node_audit_signal is not None and node_audit_signal.reason is not None:
+                # An audit cancels only its subtree, but each started node still owes
+                # the integrator its completion and the Inspector its failure evidence.
+                await utils._cancel_opened()  # pyright: ignore[reportPrivateUsage]
+                if after_each_started:
+                    if settled_result is None:
+                        raise FrameworkContractViolation(
+                            self.name,
+                            detail="after_each began without a settled node result",
+                        ) from error
+                    return await self._finish_result(settled_result, utils)
+                slot = Slot.TEST_METHOD if boundary.outcome is None else boundary.outcome.slot
+                result = self._to_result(
+                    Outcome(slot, self.name, State.FAIL, failure=node_audit_signal.reason),
+                    utils,
+                    children=summary_children or self._pending_children(),
+                )
+                # This is a new lifecycle call, not suite code suppressing the
+                # delivered cancellation. Give its boundary a fresh task so a real
+                # integration error cannot be mistaken for that stale cancellation.
+                completion = asyncio.create_task(
+                    self._run_after_each(boundary, utils, run_abort, result)
+                )
+                return await self._finish_result(await completion, utils)
             elif _consume_deadline_cancellation(error):
                 if after_each_started:
                     if settled_result is None:
@@ -1693,6 +1717,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 audit_signal.fire(failure)
                 suite_task.cancel()
                 await asyncio.gather(suite_task, return_exceptions=True)
+                # A paired completion hook can fail while the audit's subtree winds
+                # down. That run-wide halt must escape the earlier local verdict.
+                if isinstance(run_abort.reason, ExternalIntegrationFailure):
+                    raise run_abort.reason
                 return None, outcome
 
             result = await suite_task
