@@ -21,6 +21,7 @@ PLAN §4.3 lives with the owner, not the borrower.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
@@ -29,8 +30,14 @@ from typing import Literal, final
 
 import asyncssh
 from asyncssh import Error as SshError
+from asyncssh import SignalReceived
 
-from litmus.executor import ExecResult
+from litmus.executor import (
+    DEFAULT_EXEC_OUTPUT_BUDGET,
+    BoundedCapture,
+    ExecResult,
+    _validate_output_budget,  # pyright: ignore[reportPrivateUsage]
+)
 from litmus.remote import RemoteInterface
 
 type AuthPath = Literal["agent", "key", "key-file", "password", "none"]
@@ -64,6 +71,10 @@ class SshInterface(RemoteInterface):
     Contract beyond `RemoteInterface`:
       - `exec` never raises for a command's own exit status. A drop, abort, or
         signal-kill settles as `ExecResult` with `exit_code == -1`.
+      - Stdout and stderr together are bounded by the same `output_budget`
+        `LocalExec` uses. Exceeding it terminates that remote process (SIGTERM
+        on the channel, then close) and settles with `truncated=True` plus the
+        bytes actually received. The SSH session stays up.
       - `cancel_in_flight` aborts the asyncssh client (socket-level destroy),
         then walks the via chain with the same hard-close. Graceful hangup is
         not used on either path — SSH disconnect is a destroy, matching legacy.
@@ -106,6 +117,7 @@ class SshInterface(RemoteInterface):
         skip_host_verification: bool = False,
         via: SshInterface | None = None,
         tunnel: SshInterface | None = None,
+        output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
     ) -> None:
         """Create an unconnected SSH interface.
 
@@ -130,7 +142,13 @@ class SshInterface(RemoteInterface):
         self._skip_host_verification = skip_host_verification
         self._via = via
         self._tunnel = tunnel
+        self._output_budget = _validate_output_budget(output_budget)
         self._connection: asyncssh.SSHClientConnection | None = None
+
+    @property
+    def output_budget(self) -> int:
+        """Stdout+stderr combined ceiling, in bytes, matching `LocalExec`."""
+        return self._output_budget
 
     @property
     def host(self) -> str:
@@ -230,22 +248,99 @@ class SshInterface(RemoteInterface):
         if connection is None:
             raise ConnectionError("remote interface is not connected")
         try:
-            result = await connection.run(command, check=False)
+            process = await connection.create_process(
+                command, encoding=None, stdin=asyncssh.DEVNULL
+            )
         except SshError as error:
             # Socket died under us (abort, peer reset) before the channel
             # settled. exit_code -1, as legacy did for orphaned awaits, and
             # the cause named on stderr: a transport that dropped is not a
             # command that was killed, and the evidence has to tell them apart.
             return ExecResult.settled("", f"transport closed: {error}", None)
-        if result.exit_signal is None and result.exit_status is None:
+        capture = BoundedCapture(self._output_budget)
+
+        async def stop() -> None:
+            # Command-level halt. Close the channel so a full pipe cannot
+            # deadlock the other stream; SIGTERM first so a real sshd can reap
+            # the remote. Never abort the client — the session stays up.
+            with contextlib.suppress(OSError, SshError):
+                process.send_signal("TERM")
+            with contextlib.suppress(Exception):
+                process.close()
+
+        try:
+            try:
+                await capture.drain(
+                    process.stdout,
+                    process.stderr,
+                    on_truncate=stop,
+                    treat_as_eof=(SshError, SignalReceived),
+                )
+                # Drain already has every byte we may keep. collect_output()
+                # would join the rest of the receive window (up to ~2 MiB)
+                # into one object — the leftover dump the budget exists to
+                # prevent. Only slurp remainder on the non-truncated EOF path.
+                if not capture.truncated:
+                    leftover_out, leftover_err = process.collect_output()
+                    if leftover_out:
+                        out_chunk = (
+                            leftover_out
+                            if isinstance(leftover_out, bytes)
+                            else leftover_out.encode("utf-8")
+                        )
+                        capture.accept(out_chunk, into=capture.stdout)
+                    if leftover_err:
+                        err_chunk = (
+                            leftover_err
+                            if isinstance(leftover_err, bytes)
+                            else leftover_err.encode("utf-8")
+                        )
+                        capture.accept(err_chunk, into=capture.stderr)
+                else:
+                    await stop()
+                await process.wait_closed()
+            except asyncio.CancelledError:
+                await stop()
+                with contextlib.suppress(Exception):
+                    await process.wait_closed()
+                raise
+            except SshError as error:
+                return ExecResult.settled(
+                    bytes(capture.stdout),
+                    (
+                        _name_transport_death(bytes(capture.stderr))
+                        if capture.stderr
+                        else f"transport closed: {error}"
+                    ),
+                    None,
+                    truncated=capture.truncated,
+                    captured_bytes=capture.captured_bytes,
+                )
+        finally:
+            with contextlib.suppress(Exception):
+                process.close()
+
+        if process.exit_signal is None and process.exit_status is None:
             # The channel closed without ever reporting a status — the
             # connection went under the command (our hard close, or the peer's
             # reset). Same -1, same named cause; the remote's stderr, if any,
             # is kept beneath it.
-            return ExecResult.settled(result.stdout, _name_transport_death(result.stderr), None)
+            return ExecResult.settled(
+                bytes(capture.stdout),
+                _name_transport_death(bytes(capture.stderr)),
+                None,
+                truncated=capture.truncated,
+                captured_bytes=capture.captured_bytes,
+            )
         # A signal kill carries no usable exit status; settle it as the no-status case.
-        exit_status = None if result.exit_signal is not None else result.exit_status
-        return ExecResult.settled(result.stdout, result.stderr, exit_status)
+        exit_status = None if process.exit_signal is not None else process.exit_status
+        return ExecResult.settled(
+            bytes(capture.stdout),
+            bytes(capture.stderr),
+            exit_status,
+            truncated=capture.truncated,
+            captured_bytes=capture.captured_bytes,
+        )
 
     async def _abort_client(self) -> None:
         connection = self._connection
