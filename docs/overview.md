@@ -52,14 +52,14 @@ Typically early-career technology enthusiast. Passionate, capable, but many are 
 - Does not know what surrounds it in the composition
 - Only knows: `configure` → `build_suite` → `cleanup`
 
-A rack-level L11 test is not a different kind of thing — it is more atoms composed together. Leaf cases, sequences, groups, and full hardware devices are all instances of `LitmusTest`; the framework is fractal. A `LitmusTest` is simultaneously a claim about hardware and a procedure for verifying that claim: **evidence at scale N−1 becomes a verdict at scale N.** The DUT tree and the test tree are one structure.
+A rack-level L11 test is not a different kind of thing — it is more atoms composed together. Leaves, sequences, parallel nodes, and full hardware devices are all instances of `LitmusTest`; the framework is fractal. A `LitmusTest` is simultaneously a claim about hardware and a procedure for verifying that claim: **evidence at scale N−1 becomes a verdict at scale N.** The DUT tree and the test tree are one structure.
 
 ## The Chemistry Mental Model
 
 | Level | Framework Construct |
 |---|---|
-| Atom | `LitmusTest` (leaf case via `self.case()`) |
-| Molecule | `TestSequence` (ordered, bails on failure), `TestGroup` (concurrent, collects all) |
+| Atom | `LitmusTest` (leaf via `self.test()`) |
+| Molecule | `self.sequence()` (ordered, bails on failure), `self.parallel()` (concurrent, collects all) |
 | Organelle | `LitmusTest` subclass (encapsulates state + lifecycle, produces atoms via `build_suite()`) |
 | Organism | Full rack/system-level suite |
 | Emulsion | L10+JBOG/JBOD — two molecules behaving as unified system under test |
@@ -91,7 +91,7 @@ A two-layer bug-guard exists alongside the three terminal states:
 Root causes the framework must make obvious:
 1. **DUT failed a check** — `TestFailure` from a test method or from `configure()` → state `Fail`. A `TestFailure` from `configure()` means "the device did not reach a testable state"; whether hardware or infrastructure is the cause is **not knowable from code** — the human triager decides.
 2. **Hardware lying** — survey artifacts expose mismatch (claimed success vs actual state)
-3. **Test case bug** — plain exception from a test method or from `configure()` → BUG signal; a missing verdict → node-local Aborted; also: a test that passes bad hardware
+3. **Test method bug** — plain exception from a test method or from `configure()` → BUG signal; a missing verdict → node-local Aborted; also: a test that passes bad hardware
 4. **Integration failure** — `ExternalIntegrationFailure` from `before_each`/`after_each` aborts the run. The test may be fine; the harness around it broke (e.g. shopfloor DB unreachable, network congestion).
 5. **Operator interrupt** — `OperatorInterrupt` from SIGINT/SIGTERM during a live run. The Floor Technician reads that the operator stopped the rack, not that the harness or the DUT failed.
 
@@ -109,7 +109,7 @@ so the framework cannot persist evidence without also recording that pointer.
 
 Every full run creates one timestamped directory beneath the configured artifact root.
 Logging nodes stream a human `timeline.log` and a versioned Inspector
-`timeline.jsonl`; inline cases roll into their nearest owning ancestor. Both views are
+`timeline.jsonl`; leaves roll into their nearest owning ancestor. Both views are
 flushed entry by entry, preserving the accepted chronology through interruption.
 When the root reaches Pass, Fail, or Aborted, the framework atomically writes its
 versioned `RunResult` to `result.json` at that run-directory root. The root timeline's
@@ -140,8 +140,8 @@ Here are some of the ways Litmus implements this:
 - **Setup is constrained to `configure()`** — All infrastructure wiring, readiness checks, and context creation must happen in `configure()`. The framework merges the return value into `utils.ctx` for the rest of the lifecycle and all descendants. This prevents hidden state coupling and makes the data flow explicit.
 - **Unmodeled failure modes are loud** — Raising anything other than a `TestFailure` (or subclass) from a test method produces a clear "CONTRACT VIOLATION" message with a BUG signal. The framework refuses to let an unhandled error silently become a pass.
 - **`use_shell()` auto-wires execution routing** — Calling `utils.use_shell()` in `configure()` automatically rebinds `utils.exec` to route through the SSH connection. Child tests and descendants inherit the routing with zero extra code. The SE never has to manually thread SSH interfaces.
-- **Composition takes bound methods directly** — `self.case("name", self._my_method)` works with a plain bound method reference. No wrapping, no binding ceremony.
-- **Sensible defaults reduce boilerplate** — `self.case("name", self._my_method)` defaults to `discrete_log_file=False`, so its logs automatically roll up into the parent. This gives you **one log per logical abstraction instead of one log per screw**.
+- **Composition takes bound methods directly** — `self.test("name", self._my_method)` works with a plain bound method reference. No wrapping, no binding ceremony.
+- **Sensible defaults reduce boilerplate** — `self.test("name", self._my_method)` defaults to `discrete_log_file=False`, so its logs automatically roll up into the parent. This gives you **one log per logical abstraction instead of one log per screw**.
 - **Survey and audit hooks belong in the constructor** — Registering them only in `__init__` makes them part of the test's stable identity (visible on the class and consistent across runs).
 - **`wait_for()` requires intent** — The `looking_for` parameter is mandatory and becomes the primary diagnostic string when a timeout occurs. This nudges developers to write human-readable failure messages.
 - **Import-time structural enforcement** — a tier the TypeScript original never had. `__init_subclass__` on `LitmusTest` verifies at class *definition* (import time, before any hardware is touched) that the subclass is structurally sound: required lifecycle methods present and async, sealed internals (`main`, `run`, `_run_lifecycle`, the `_safe_*` family) not overridden. A malformed test refuses to import; it can never reach the floor.

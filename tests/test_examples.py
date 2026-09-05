@@ -16,7 +16,7 @@ from examples.pi_hole_server import PiHoleServer
 from examples.remote_device_ssh import SshDevice
 from examples.run_data_evidence import PowerSupply
 from examples.ssh_tunneling import TunneledDevice
-from examples.test_composition import GroupedDevice, SequencedDevice
+from examples.test_composition import ParallelDevice, SequencedDevice
 from examples.wait_for_patterns import ConfigureGatedDevice, MainAssertionDevice
 from tests.loopback_sshd import LoopbackSshd
 
@@ -79,7 +79,7 @@ class TestHelloWorldExample:
 
 
 class TestCompositionExample:
-    """Pin the legacy composition lesson to modern sequence and group semantics."""
+    """Pin the legacy composition lesson to modern sequence and parallel semantics."""
 
     async def test_sequence_stops_at_first_dependent_failure(self) -> None:
         outcome = await SequencedDevice(
@@ -96,8 +96,8 @@ class TestCompositionExample:
         assert outcome.failure.expected == "active"
         assert outcome.failure.received == "inactive"
 
-    async def test_group_collects_all_independent_results(self) -> None:
-        outcome = await GroupedDevice(
+    async def test_parallel_collects_all_independent_results(self) -> None:
+        outcome = await ParallelDevice(
             name="sensor checks",
             temperature_c=92,
             voltage_v=3.3,
@@ -124,7 +124,7 @@ class TestCompositionExample:
             firmware_version="release-2.4.1",
             application_pid=412,
         ).run()
-        group = await GroupedDevice(
+        parallel = await ParallelDevice(
             name="sensor checks",
             temperature_c=42,
             voltage_v=3.3,
@@ -132,7 +132,7 @@ class TestCompositionExample:
         ).run()
 
         assert sequence.state is State.PASS
-        assert group.state is State.PASS
+        assert parallel.state is State.PASS
 
 
 def _detach_log_paths(tree: dict[str, Any]) -> dict[str, str | None]:

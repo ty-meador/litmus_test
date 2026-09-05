@@ -31,7 +31,7 @@ class TestMethodReferenceFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", lambda: self._run())
+                    return self.test("x", lambda: self._run())
         """
         violations = _check(source)
 
@@ -42,7 +42,7 @@ class TestMethodReferenceFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", lambda u: self._run(u))
+                    return self.test("x", lambda u: self._run(u))
         """
         assert _lines(source) == [4]
 
@@ -50,7 +50,7 @@ class TestMethodReferenceFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", lambda u: self._run(u, 42))
+                    return self.test("x", lambda u: self._run(u, 42))
         """
         assert _lines(source) == [4]
 
@@ -58,7 +58,7 @@ class TestMethodReferenceFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", test=lambda u: self._run(u))
+                    return self.test("x", fn=lambda u: self._run(u))
         """
         assert _lines(source) == [4]
 
@@ -70,7 +70,7 @@ class TestMethodReferenceFires:
                         if True:
                             return PASS
                         raise TestFailure("no")
-                    return self.case("x", _inner)
+                    return self.test("x", _inner)
         """
         assert _lines(source) == [8]
 
@@ -80,7 +80,7 @@ class TestMethodReferenceStaysQuiet:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("x", self._run)
+                    return self.test("x", self._run)
                 async def _run(self, utils: TestUtils) -> Verdict:
                     if True:
                         return PASS
@@ -99,7 +99,7 @@ class TestMethodReferenceStaysQuiet:
                     def other() -> None:
                         return None
                     del other
-                    return self.sequence(self.name, [self.case("x", helper)])
+                    return self.sequence(self.name, [self.test("x", helper)])
         """
         assert _lines(source) == []
 
@@ -107,21 +107,21 @@ class TestMethodReferenceStaysQuiet:
         source = """
             class Plain:
                 def build_suite(self):
-                    return self.case("x", lambda: self._run())
+                    return self.test("x", lambda: self._run())
         """
         assert _lines(source) == []
 
     def test_missing_fn_starargs_and_class_body_calls_are_ignored(self) -> None:
         source = """
             class Suite(LitmusTest):
-                dangling = object.case("x", lambda: None)
+                dangling = object.test("x", lambda: None)
                 def build_suite(self) -> LitmusTest:
                     def other() -> None:
                         return None
-                    return self.case("x")
-                    return self.case("y", extra=other)
+                    return self.test("x")
+                    return self.test("y", extra=other)
                 def factory(*args) -> LitmusTest:
-                    return args[0].case("z", lambda: None)
+                    return args[0].test("z", lambda: None)
         """
         assert _lines(source) == []
 

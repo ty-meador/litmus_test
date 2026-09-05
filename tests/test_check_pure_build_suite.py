@@ -25,7 +25,7 @@ class TestPureBuildSuiteFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    children = [self.case("a", self._a)]
+                    children = [self.test("a", self._a)]
                     return self.sequence(self.name, children)
         """
         violations = _check(source)
@@ -38,8 +38,8 @@ class TestPureBuildSuiteFires:
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
                     if self._fast:
-                        return self.case("quick", self._quick)
-                    return self.group(self.name, [self.case("slow", self._slow)])
+                        return self.test("quick", self._quick)
+                    return self.parallel(self.name, [self.test("slow", self._slow)])
         """
         violations = _check(source)
 
@@ -50,8 +50,8 @@ class TestPureBuildSuiteFires:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("a", self._a)
-                    return self.case("b", self._b)
+                    return self.test("a", self._a)
+                    return self.test("b", self._b)
         """
         violations = _check(source)
 
@@ -63,8 +63,8 @@ class TestPureBuildSuiteFires:
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
                     for port in self._ports:
-                        self._children.append(self.case(str(port), self._probe))
-                    return self.group(self.name, self._children)
+                        self._children.append(self.test(str(port), self._probe))
+                    return self.parallel(self.name, self._children)
         """
         assert _lines(source) == [4]
 
@@ -75,31 +75,58 @@ class TestPureBuildSuiteFires:
                     return self.sequence(
                         self.name,
                         [
-                            self.case("a", self._a if self._fast else self._slow),
-                            self.case("b", self._b) if self._enabled else self.case("c", self._c),
+                            self.test("a", self._a if self._fast else self._slow),
+                            self.test("b", self._b) if self._enabled else self.test("c", self._c),
                         ],
                     )
         """
         assert _lines(source) == [7, 8]
 
-    def test_comprehensions_lambdas_and_boolean_logic_inside_the_return(self) -> None:
+    def test_filtered_comprehensions_lambdas_and_boolean_logic_inside_the_return(self) -> None:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.group(
+                    return self.parallel(
                         self.name,
-                        [self.case(n, self._probe) for n in self._names if n and n != "x"],
+                        [self.test(n, self._probe) for n in self._names if n and n != "x"],
                     )
         """
-        kinds = [v.message.split(":")[1].split()[0] for v in _check(source)]
+        violations = _check(source)
+        kinds = [v.message.split(":")[1].split()[0] for v in violations]
 
         assert kinds == ["ListComp", "BoolOp", "Compare"]
+        assert "filters the composition" in violations[0].message
+
+    def test_enumeration_by_unfiltered_comprehension_is_allowed(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                def build_suite(self) -> LitmusTest:
+                    return self.parallel(
+                        "stress",
+                        [
+                            self.test(f"cpu{i}_stress", self._cpu_stress, cpu=i)
+                            for i in range(self.cpu_count)
+                        ],
+                    )
+        """
+        assert _lines(source) == []
+
+    def test_a_generator_with_a_filter_is_still_flagged(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                def build_suite(self) -> LitmusTest:
+                    return self.parallel(
+                        "rails",
+                        list(self.test(r, self._rail) for r in self._rails if r.enabled),
+                    )
+        """
+        assert _lines(source) == [6]
 
     def test_await_and_walrus_inside_the_return(self) -> None:
         source = """
             class Suite(LitmusTest):
                 async def build_suite(self) -> LitmusTest:
-                    return self.case((label := await self._label()), self._a)
+                    return self.test((label := await self._label()), self._a)
         """
         kinds = [v.message.split(":")[1].split()[0] for v in _check(source)]
 
@@ -111,7 +138,7 @@ class TestPureBuildSuiteFires:
                 def build_suite(self) -> LitmusTest:
                     \"\"\"Declare the claims.\"\"\"
                     print("building")
-                    return self.case("a", self._a)
+                    return self.test("a", self._a)
         """
         assert _lines(source) == [5]
 
@@ -121,7 +148,7 @@ class TestPureBuildSuiteFires:
             class Suite(Base):
                 def build_suite(self) -> LitmusTest:
                     x = 1
-                    return self.case("a", self._a)
+                    return self.test("a", self._a)
         """
         assert _lines(source) == [5]
 
@@ -135,8 +162,8 @@ class TestPureBuildSuiteStaysQuiet:
                     return self.sequence(
                         self.name,
                         [
-                            self.case(f"probe {self._host}", self._probe),
-                            self.group("sensors", [self.case("t", self._t)]),
+                            self.test(f"probe {self._host}", self._probe),
+                            self.parallel("sensors", [self.test("t", self._t)]),
                             Child(name="child", via=self, ports=self._ports[1:]),
                             -self._weight,
                             self._names[0] + "-suffix",
@@ -166,7 +193,7 @@ class TestPureBuildSuiteStaysQuiet:
                         return {"fast": True}
                     return {"fast": False}
                 def build_suite(self) -> LitmusTest:
-                    return self.case("a", self._a)
+                    return self.test("a", self._a)
         """
         assert _lines(source) == []
 
