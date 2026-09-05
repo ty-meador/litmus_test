@@ -4,7 +4,8 @@ The Inspector TUI is outside the Python port's current scope. Its input contract
 not. Every completed node produces a `RunResult`, and `RunResult.to_json()` returns a
 plain Python object that `json.dumps()` accepts without an encoder. The root result is
 self-contained: consumers do not need the live `LitmusTest` objects to reconstruct the
-run tree.
+run tree. CI that already speaks JUnit XML consumes a projection of the same tree
+(`docs/junit-xml.md`); that reporter is not a second evidence record.
 
 Every full `LitmusTest.run()` atomically writes the root `RunResult.to_json()` payload
 to `result.json` in the timestamped run directory beneath `LITMUS_ARTIFACT_ROOT`. The
