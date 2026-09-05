@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Any
 
 import asyncssh
 import pytest
@@ -35,6 +36,16 @@ class LoopbackSshd:
         """The ephemeral port the in-process listener bound."""
         return self._listener.get_port()
 
+    def abort_connections(self) -> None:
+        """Hard-drop every accepted client. A peer reset, not a graceful hangup."""
+        for connection in tuple(self._accepted):
+            connection.abort()
+
+    def close_connections(self) -> None:
+        """Graceful close of every accepted client. EOF, not a reset."""
+        for connection in tuple(self._accepted):
+            connection.close()
+
     async def aclose(self) -> None:
         """Stop the listener and wait until acceptors are gone."""
         self._listener.close()
@@ -47,17 +58,27 @@ class LoopbackSshd:
         username: str = "root",
         password: str | None = "admin",
         authorized_key: asyncssh.SSHKey | None = None,
+        encoding: str | None = "utf-8",
+        drop_on_connect: bool = False,
     ) -> LoopbackSshd:
-        """Listen on 127.0.0.1:0 with password and/or public-key auth."""
+        """Listen on 127.0.0.1:0 with password and/or public-key auth.
+
+        `encoding=None` puts the process factory in bytes mode so a test can
+        emit binary or non-UTF-8 output. `drop_on_connect` aborts the accepted
+        socket during the handshake.
+        """
         host_key = LoopbackSshd.ed25519()
         expected_user = username
         expected_password = password
         authorized = authorized_key
         accepted: list[asyncssh.SSHServerConnection] = []
+        drop = drop_on_connect
 
         class _Auth(asyncssh.SSHServer):
             def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
                 accepted.append(conn)
+                if drop:
+                    conn.abort()
 
             def begin_auth(self, username: str) -> bool:
                 return True
@@ -85,13 +106,16 @@ class LoopbackSshd:
             ) -> bool:
                 return True
 
+        async def process_factory(process: asyncssh.SSHServerProcess[Any]) -> None:
+            await LoopbackSshd._handle(process, encoding=encoding)
+
         listener = await asyncssh.listen(
             "127.0.0.1",
             0,
             server_host_keys=[host_key],
             server_factory=_Auth,
-            process_factory=LoopbackSshd._handle,
-            encoding="utf-8",
+            process_factory=process_factory,
+            encoding=encoding,
         )
         return cls(listener, username=username, password=password, accepted=accepted)
 
@@ -115,30 +139,42 @@ class LoopbackSshd:
         return sock, pid
 
     @staticmethod
-    async def _handle(process: asyncssh.SSHServerProcess[str]) -> None:
-        command = process.command or ""
+    def _write(stream: asyncssh.SSHWriter[Any], data: str | bytes, *, encoding: str | None) -> None:
+        if encoding is None:
+            stream.write(data if isinstance(data, bytes) else data.encode("utf-8"))
+            return
+        stream.write(data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data)
+
+    @staticmethod
+    async def _handle(process: asyncssh.SSHServerProcess[Any], *, encoding: str | None) -> None:
+        raw = process.command or ""
+        command = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
         if command == "fail":
-            process.stderr.write("nope")
+            LoopbackSshd._write(process.stderr, "nope", encoding=encoding)
             process.exit(1)
         elif command.startswith("sleep "):
             try:
                 await asyncio.sleep(float(command.split()[1]))
-                process.stdout.write("woke")
+                LoopbackSshd._write(process.stdout, "woke", encoding=encoding)
                 process.exit(0)
             except asyncio.CancelledError:
                 process.exit(255)
                 raise
         elif command.startswith("dump "):
             remaining = int(command.split()[1])
-            await LoopbackSshd._write_chunks(process, process.stdout, "x", remaining)
+            await LoopbackSshd._write_chunks(
+                process, process.stdout, "x", remaining, encoding=encoding
+            )
         elif command.startswith("dump-err "):
             remaining = int(command.split()[1])
-            await LoopbackSshd._write_chunks(process, process.stderr, "y", remaining)
+            await LoopbackSshd._write_chunks(
+                process, process.stderr, "y", remaining, encoding=encoding
+            )
         elif command.startswith("say-sleep "):
             _prefix, message, seconds = command.split(" ", 2)
             del _prefix
             try:
-                process.stdout.write(message)
+                LoopbackSshd._write(process.stdout, message, encoding=encoding)
                 await asyncio.sleep(float(seconds))
                 process.exit(0)
             except asyncio.CancelledError:
@@ -148,19 +184,33 @@ class LoopbackSshd:
                 with contextlib.suppress(Exception):
                     process.exit(255)
         elif command == "flood":
-            await LoopbackSshd._write_chunks(process, process.stdout, "x", None)
+            await LoopbackSshd._write_chunks(process, process.stdout, "x", None, encoding=encoding)
+        elif command == "stall":
+            try:
+                await asyncio.get_running_loop().create_future()
+            except asyncio.CancelledError:
+                process.exit(255)
+                raise
+        elif command == "binary":
+            LoopbackSshd._write(process.stdout, b"\x00hello\x01world", encoding=encoding)
+            process.exit(0)
+        elif command == "non-utf8":
+            LoopbackSshd._write(process.stdout, b"pre\xffpost", encoding=encoding)
+            process.exit(0)
         else:
-            process.stdout.write(command)
+            LoopbackSshd._write(process.stdout, command, encoding=encoding)
             process.exit(0)
         process.close()
         await process.wait_closed()
 
     @staticmethod
     async def _write_chunks(
-        process: asyncssh.SSHServerProcess[str],
-        stream: asyncssh.SSHWriter[str],
+        process: asyncssh.SSHServerProcess[Any],
+        stream: asyncssh.SSHWriter[Any],
         token: str,
         remaining: int | None,
+        *,
+        encoding: str | None,
     ) -> None:
         """Write `token` forever, or `remaining` times, then exit.
 
@@ -170,7 +220,7 @@ class LoopbackSshd:
         try:
             while remaining is None or remaining > 0:
                 take = 1024 if remaining is None else min(remaining, 1024)
-                stream.write(token * take)
+                LoopbackSshd._write(stream, token * take, encoding=encoding)
                 if remaining is not None:
                     remaining -= take
                 await asyncio.sleep(0)
