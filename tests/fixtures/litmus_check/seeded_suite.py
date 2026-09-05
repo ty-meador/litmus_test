@@ -23,7 +23,7 @@ class SeededBlade(LitmusTest):
         return {}
 
     def build_suite(self) -> LitmusTest:
-        claims = [self.test("temperature", lambda u: self._temperature(u))]  # two seeds
+        claims = [self.test("temperature", lambda u: self._temperature(u))]  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]  # two seeds
         return self.group(self.name, claims)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # seed: litmus/retired-names
 
     async def _temperature(self, _utils: TestUtils) -> Verdict:
