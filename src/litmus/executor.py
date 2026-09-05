@@ -248,8 +248,14 @@ class LocalExec:
                     proc.stderr,
                     on_truncate=stop,
                 )
-                if capture.truncated and proc.returncode is None:
-                    await self._terminate(proc)
+                # Pipe EOF is not process exit. communicate() reaped; drain does
+                # not. A child that closed its pipes and then exited 0 would
+                # otherwise settle as abort (-1) and vanish from _in_flight.
+                if capture.truncated:
+                    if proc.returncode is None:
+                        await self._terminate(proc)
+                else:
+                    await proc.wait()
                 return ExecResult.settled(
                     bytes(capture.stdout),
                     bytes(capture.stderr),

@@ -1056,7 +1056,16 @@ class TestSshOutputBudget:
             await ssh.disconnect()
             await peer.aclose()
 
-    async def test_a_flood_is_killed_and_the_session_stays_up(self) -> None:
+    async def test_a_flood_is_killed_and_the_session_stays_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        slurps: list[int] = []
+
+        def tracked(_process: object) -> tuple[bytes, bytes]:
+            slurps.append(1)
+            return (b"", b"")
+
+        monkeypatch.setattr(asyncssh.SSHClientProcess, "collect_output", tracked)
         peer = await _LoopbackSshd.start()
         ssh = SshInterface(
             host="127.0.0.1",
@@ -1071,6 +1080,7 @@ class TestSshOutputBudget:
             result = await asyncio.wait_for(ssh.exec("flood"), timeout=5)
             assert result.truncated is True
             assert result.captured_bytes == 1024
+            assert slurps == []
             assert ssh.connected is True
             follow = await ssh.exec("uname")
             assert follow.exit_code == 0
