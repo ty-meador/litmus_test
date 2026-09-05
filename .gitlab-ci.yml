@@ -69,3 +69,26 @@ dependency-update:
   script:
     - uv sync --locked
     - uv run python tools/dependency_update.py
+
+# Nightly (schedule: SCHEDULED_JOB=nightly-soak). The full suite SOAK_RUNS times and the
+# rack suite RACK_REPEATS times on the main head (#68). The night is recorded on issue
+# #68 through LITMUS_BOT_TOKEN, and a red night reaches #general through
+# DISCORD_WEBHOOK_URL (masked CI variable). The schedule's own variables override the
+# defaults below. The Phase 6 exit counts fourteen consecutive green nights on the issue.
+nightly-soak:
+  extends: .uv-job
+  interruptible: false
+  timeout: 2h
+  variables:
+    SOAK_RUNS: "8"
+    RACK_REPEATS: "20"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULED_JOB == "nightly-soak"
+  script:
+    - uv sync --locked
+    - uv run python tools/nightly_soak.py
+  artifacts:
+    when: always
+    expire_in: 2 weeks
+    paths:
+      - .soak/

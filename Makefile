@@ -1,5 +1,5 @@
 # litmus — development entry points. All tooling config lives in pyproject.toml.
-.PHONY: install format lint fix typecheck test coverage audit check soak hooks clean
+.PHONY: install format lint fix typecheck test coverage audit check soak nightly hooks clean
 
 install:  ## Sync venv (incl. dev deps) and install git hooks
 	uv sync
@@ -37,6 +37,7 @@ check:  ## CI gate — verify only, no auto-fix. Must be green before push.
 	$(MAKE) audit
 
 SOAK_RUNS ?= 8
+RACK_REPEATS ?= 20
 
 soak:  ## Race gate — full suite SOAK_RUNS times; one green run proves nothing about timing
 	@i=1; while [ $$i -le $(SOAK_RUNS) ]; do \
@@ -45,9 +46,12 @@ soak:  ## Race gate — full suite SOAK_RUNS times; one green run proves nothing
 		i=$$((i + 1)); \
 	done
 
+nightly:  ## The nightly soak as CI runs it (soak + rack suite RACK_REPEATS times); posts nothing
+	SOAK_RUNS=$(SOAK_RUNS) RACK_REPEATS=$(RACK_REPEATS) uv run python tools/nightly_soak.py --no-post
+
 hooks:  ## Point git at the shared hooks (auto-lint on commit)
 	git config core.hooksPath .githooks
 
 clean:
-	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit dist
+	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak dist
 	find . -type d -name __pycache__ -exec rm -rf {} +

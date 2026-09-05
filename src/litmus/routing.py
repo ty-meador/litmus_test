@@ -401,7 +401,8 @@ class ExecRouting:
             self._on_open(remote)
         # Logged on the way up, not on the way in: what is recorded is a connection
         # that exists, with the credential path the transport actually selected.
-        self._logger.info("%s", remote.connect_provenance)
+        for line in remote.provenance_lines:
+            self._logger.info("%s", line)
         return Shell(remote.exec, remote)
 
     def routing_line(self) -> str:
