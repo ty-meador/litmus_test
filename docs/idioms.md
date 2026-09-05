@@ -403,6 +403,10 @@ Every `RunResult` carries the node's position in the tree:
 The versioned payload and recursive node fields are defined in
 [`inspector-json.md`](inspector-json.md).
 
+A full `run()` also persists the root payload automatically as `result.json` in that
+run's artifact directory. Authored suites should consume the returned `RunResult` when
+they need the live value; they never write the canonical Inspector file themselves.
+
 ## Fractal Design: Litmus exposes a single class
 | Need | Use |
 |---|---|

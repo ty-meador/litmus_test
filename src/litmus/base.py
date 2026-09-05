@@ -702,7 +702,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 settled_result = result
                 after_each_started = True
                 result = await self._run_after_each(boundary, utils, run_abort, result)
-                return self._finish_result(result, utils)
+                return await self._finish_result(result, utils)
 
             if test is not None:
 
@@ -746,7 +746,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 settled_result = result
                 after_each_started = True
                 result = await self._run_after_each(boundary, utils, run_abort, result)
-                return self._finish_result(result, utils)
+                return await self._finish_result(result, utils)
 
             ran_test = False
             suite: LitmusTest | None = None
@@ -871,7 +871,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             settled_result = result
             after_each_started = True
             result = await self._run_after_each(boundary, utils, run_abort, result)
-            return self._finish_result(result, utils)
+            return await self._finish_result(result, utils)
         except ExternalIntegrationFailure:
             await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
             result = self._aborted_result(
@@ -881,8 +881,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 children=summary_children or self._pending_children(),
             )
             if after_each_started:
-                return self._finish_result(result, utils)
-            return self._finish_result(
+                return await self._finish_result(result, utils)
+            return await self._finish_result(
                 await self._run_after_each(boundary, utils, run_abort, result),
                 utils,
             )
@@ -901,7 +901,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                             self.name,
                             detail="after_each began without a settled node result",
                         ) from error
-                    return self._finish_result(settled_result, utils)
+                    return await self._finish_result(settled_result, utils)
                 if settled_outcome is not None:
                     result = self._to_result(
                         settled_outcome,
@@ -936,8 +936,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             else:
                 raise
             if after_each_started:
-                return self._finish_result(result, utils)
-            return self._finish_result(
+                return await self._finish_result(result, utils)
+            return await self._finish_result(
                 await self._run_after_each(boundary, utils, run_abort, result),
                 utils,
             )
@@ -1389,9 +1389,29 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
 
     @final
-    def _finish_result(self, result: RunResult, utils: TestUtils) -> RunResult:
-        """Close this node's durable timeline after all node-local hooks settle."""
-        utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
+    async def _finish_result(self, result: RunResult, utils: TestUtils) -> RunResult:
+        """Publish the root result, then close this node's durable timeline."""
+        try:
+            if len(utils.logger.scope) == 1 and utils._owned_log_path() is not None:  # pyright: ignore[reportPrivateUsage]
+                persistence = asyncio.create_task(
+                    _bounded_finalization(
+                        utils._persist_result(result),  # pyright: ignore[reportPrivateUsage]
+                        node=self.name,
+                        operation="root result persistence",
+                    )
+                )
+                try:
+                    await asyncio.shield(persistence)
+                except asyncio.CancelledError:
+                    # A terminal result is accepted evidence. Repeated shutdown
+                    # requests may not separate its file from the final pointer.
+                    while not persistence.done():
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await asyncio.shield(persistence)
+                    persistence.result()
+                    raise
+        finally:
+            utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
         return result
 
     @final
