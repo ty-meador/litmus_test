@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import Any, cast, final
 
 from litmus.artifacts import Artifact
-from litmus.errors import ExternalIntegrationFailure, FrameworkContractViolation, TestFailure
+from litmus.errors import FrameworkContractViolation, HaltReason, TestFailure
 from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, ExecResult, LocalExec
 from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
@@ -90,13 +90,14 @@ class _EnvFilter:
 class _RunTransports:
     """Every transport opened during one run, without changing node ownership."""
 
-    __slots__ = ("_halted", "_late_closes", "_local_exec", "_remotes")
+    __slots__ = ("_close_lock", "_halted", "_late_closes", "_local_exec", "_remotes")
 
     def __init__(self, local_exec: LocalExec) -> None:
         self._local_exec = local_exec
         self._remotes: list[RemoteInterface] = []
         self._halted = False
         self._late_closes: set[asyncio.Task[None]] = set()
+        self._close_lock = asyncio.Lock()
 
     def register(self, remote: RemoteInterface) -> None:
         """Remember an opened resource and hard-close late arrivals after an abort."""
@@ -109,13 +110,14 @@ class _RunTransports:
 
     async def cancel_in_flight(self) -> None:
         """Close local work and every known remote; one broken close cannot mask another."""
-        self._halted = True
-        await asyncio.gather(
-            self._close_local(),
-            *(self._close_remote(remote) for remote in tuple(self._remotes)),
-        )
-        while self._late_closes:
-            await asyncio.gather(*tuple(self._late_closes))
+        async with self._close_lock:
+            self._halted = True
+            await asyncio.gather(
+                self._close_local(),
+                *(self._close_remote(remote) for remote in tuple(self._remotes)),
+            )
+            while self._late_closes:
+                await asyncio.gather(*tuple(self._late_closes))
 
     async def _close_local(self) -> None:
         try:
@@ -217,7 +219,7 @@ class RunSignal:
         return self.reason is not None
 
     @property
-    def reason(self) -> ExternalIntegrationFailure | TestFailure | None:
+    def reason(self) -> HaltReason | TestFailure | None:
         """The failure that asked this node to stop, if one exists."""
         if self._run_abort.reason is not None:
             return self._run_abort.reason

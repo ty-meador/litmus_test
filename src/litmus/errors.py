@@ -8,6 +8,9 @@ latter two. The distinction between them is load-bearing, not cosmetic:
   - `ExternalIntegrationFailure` is **control flow**. It is a harness-level halt raised
     when an integration hook throws. It propagates class-intact through every ancestor,
     is never rewrapped, and cancels the run.
+  - `OperatorInterrupt` is **control flow**. It is a harness-level halt raised when the
+    operator sends SIGINT or SIGTERM to a live run. The Floor Technician reads the
+    operator's name on every Aborted node.
   - `MissingVerdict` is **the absence of data**. The node returned something other than
     the PASS sentinel, so no verdict exists. The framework refuses to forge one; the
     node renders Aborted and its siblings are untouched.
@@ -17,6 +20,7 @@ guard: a developer bug and a framework bug, each with its own banner so the read
 a log can tell instantly whose code is wrong.
 """
 
+import signal
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar, Literal, cast, final
 
@@ -72,7 +76,9 @@ def _json_safe(value: object) -> Any:
     hand because `BaseException` has no JSON form; anything already serializable
     passes through; everything else degrades to `str()`.
     """
-    if isinstance(value, TestFailure | ExternalIntegrationFailure | MissingVerdict):
+    if isinstance(
+        value, TestFailure | ExternalIntegrationFailure | MissingVerdict | OperatorInterrupt
+    ):
         return value.to_json()
     if isinstance(value, BaseException):
         return {"name": type(value).__name__, "message": str(value)}
@@ -311,5 +317,54 @@ class ExternalIntegrationFailure(LitmusError):
         }
 
 
-type Failure = TestFailure | ExternalIntegrationFailure | MissingVerdict
+def _signal_name(signum: int) -> str:
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal {signum}"
+
+
+@final
+class OperatorInterrupt(LitmusError):
+    """A harness-level halt: the operator interrupted the run.
+
+    One instance is the failure recorded on every Aborted node and the reason
+    carried by the run-level abort. It is not a `TestFailure` and not an
+    integration-hook failure: the recovery is "the operator stopped the rack."
+    """
+
+    def __init__(self, signum: int) -> None:
+        """Name the operator and the signal that stopped the run.
+
+        Args:
+            signum: The POSIX signal number (`SIGINT`, `SIGTERM`).
+        """
+        name = _signal_name(signum)
+        fail_message = f"operator interrupted the test run ({name})"
+        super().__init__(fail_message)
+        self.fail_message = fail_message
+        self.signum = int(signum)
+        self.signal_name = name
+
+    @property
+    def is_bug(self) -> bool:
+        """False: the operator stopped the run, not the suite and not the hardware."""
+        return False
+
+    def to_json(self) -> dict[str, Any]:
+        """JSON-safe snapshot for the run artifact. Never raises."""
+        return {
+            "name": type(self).__name__,
+            "fail_message": self.fail_message,
+            "state": "Aborted",
+            "operator": True,
+            "signal": self.signal_name,
+        }
+
+
+type HaltReason = ExternalIntegrationFailure | OperatorInterrupt
+"""Everything that can fire the run-level abort. First reason wins."""
+
+
+type Failure = TestFailure | HaltReason | MissingVerdict
 """Everything that can be recorded on a settled node. Pass records nothing."""
