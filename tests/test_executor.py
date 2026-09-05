@@ -17,7 +17,8 @@ import pytest
 
 # Internal machinery on purpose: the choke point is the subject under test, and the
 # self-test suite is the one consumer allowed to reach past the public surface.
-from litmus.executor import ExecResult, LocalExec
+from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, BoundedCapture, ExecResult, LocalExec
+from litmus.ssh import SshInterface
 
 
 class TestExecResultSettled:
@@ -41,6 +42,18 @@ class TestExecResultSettled:
 
     def test_invalid_utf8_degrades_with_replacement(self) -> None:
         assert ExecResult.settled(b"\xff", b"", 0).stdout == "�"
+
+    def test_settled_records_truncation_without_breaking_existing_fields(self) -> None:
+        result = ExecResult.settled(b"abc", b"", 0, truncated=True, captured_bytes=3)
+        assert result.truncated is True
+        assert result.captured_bytes == 3
+        assert result.stdout == "abc"
+        assert result.exit_code == 0
+
+    def test_existing_constructor_defaults_are_not_truncated(self) -> None:
+        result = ExecResult(stdout="ok", stderr="", exit_code=0)
+        assert result.truncated is False
+        assert result.captured_bytes == 2
 
 
 class _Child:
@@ -133,6 +146,15 @@ class TestLocalExecNeverThrows:
         assert result.exit_code == 0
         assert result.stdout.strip() == "hello"
         assert result.stderr == ""
+
+    async def test_closing_pipes_then_exiting_zero_is_not_aborted(self) -> None:
+        # Drain returns on pipe EOF. communicate() also waited; without an
+        # explicit wait() after drain, returncode is still None and settlement
+        # forges abort (-1) for a command that then exits 0.
+        result = await LocalExec().run("echo done; exec 1>&- 2>&-; sleep 0.4; exit 0")
+        assert result.exit_code == 0
+        assert result.truncated is False
+        assert result.stdout.strip() == "done"
 
     async def test_a_nonzero_exit_is_evidence_not_an_exception(self) -> None:
         result = await LocalExec().run("exit 7")
@@ -234,3 +256,185 @@ class TestRunBlocking:
         tick_task.cancel()
         with suppress(asyncio.CancelledError):
             await tick_task
+
+
+def _dump_command(nbytes: int, *, stream: str = "stdout") -> str:
+    if stream == "stderr":
+        script = f"import sys; sys.stderr.buffer.write(b'y'*{nbytes})"
+    else:
+        script = f"import sys; sys.stdout.buffer.write(b'x'*{nbytes})"
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+
+def _write_then_sleep_command(marker_path: Path, message: str, seconds: int = 60) -> str:
+    script = (
+        "import sys, time; "
+        f"sys.stdout.buffer.write({message.encode()!r}); sys.stdout.buffer.flush(); "
+        f"open({str(marker_path)!r}, 'w').write('ready'); "
+        f"time.sleep({seconds})"
+    )
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+
+def _flood_command(pid_path: Path) -> str:
+    script = (
+        "import os, sys\n"
+        f"open({str(pid_path)!r}, 'w').write(str(os.getpid()))\n"
+        "while True:\n"
+        "    sys.stdout.buffer.write(b'x'*4096)\n"
+        "    sys.stdout.buffer.flush()\n"
+    )
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+
+class TestBoundedCapture:
+    """The shared stdout+stderr accumulator both transports drain through."""
+
+    def test_an_empty_chunk_does_not_count_or_truncate(self) -> None:
+        capture = BoundedCapture(8)
+        assert capture.accept(b"", into=capture.stdout) is True
+        assert capture.captured_bytes == 0
+        assert capture.truncated is False
+
+    def test_a_full_capture_rejects_further_chunks(self) -> None:
+        capture = BoundedCapture(4)
+        assert capture.accept(b"abcd", into=capture.stdout) is True
+        assert capture.accept(b"x", into=capture.stdout) is False
+        assert capture.truncated is True
+        assert capture.captured_bytes == 4
+        assert bytes(capture.stdout) == b"abcd"
+
+    def test_a_zero_room_chunk_marks_truncated(self) -> None:
+        capture = BoundedCapture(2)
+        capture.captured_bytes = 2
+        assert capture.accept(b"z", into=capture.stdout) is False
+        assert capture.truncated is True
+        assert bytes(capture.stdout) == b""
+
+    async def test_a_missing_stream_is_a_completed_pump(self) -> None:
+        capture = BoundedCapture(8)
+        await capture.drain(None, None)
+        assert capture.captured_bytes == 0
+        assert capture.truncated is False
+
+    async def test_a_str_chunk_is_counted_as_utf8_bytes(self) -> None:
+        class _StrReader:
+            def __init__(self) -> None:
+                self._chunks = ["hi", ""]
+
+            async def read(self, n: int = -1) -> str:
+                del n
+                return self._chunks.pop(0)
+
+        capture = BoundedCapture(8)
+        await capture.drain(_StrReader(), None)
+        assert capture.stdout == bytearray(b"hi")
+        assert capture.captured_bytes == 2
+
+    async def test_a_treat_as_eof_error_ends_the_pump(self) -> None:
+        class _Boom:
+            async def read(self, n: int = -1) -> bytes:
+                del n
+                raise ConnectionError("closed")
+
+        capture = BoundedCapture(8)
+        await capture.drain(_Boom(), None, treat_as_eof=(ConnectionError,))
+        assert capture.truncated is False
+        assert capture.captured_bytes == 0
+
+    async def test_truncation_without_a_stop_callback_still_settles(self) -> None:
+        class _Flood:
+            def __init__(self) -> None:
+                self._sent = False
+
+            async def read(self, n: int = -1) -> bytes:
+                del n
+                if self._sent:
+                    return b""
+                self._sent = True
+                return b"x" * 32
+
+        capture = BoundedCapture(8)
+        await capture.drain(_Flood(), None)
+        assert capture.truncated is True
+        assert capture.captured_bytes == 8
+
+
+class TestOutputBudget:
+    """One named ceiling, defaulted, per LocalExec instance — not a process-global."""
+
+    def test_local_and_ssh_share_the_same_default_budget(self) -> None:
+        local = LocalExec()
+        ssh = SshInterface(host="127.0.0.1", username="root", password="x")
+        assert local.output_budget == DEFAULT_EXEC_OUTPUT_BUDGET
+        assert ssh.output_budget == local.output_budget
+
+    def test_budget_is_per_instance_not_process_global(self) -> None:
+        left = LocalExec(output_budget=8)
+        right = LocalExec(output_budget=64)
+        assert left.output_budget == 8
+        assert right.output_budget == 64
+        assert LocalExec().output_budget == DEFAULT_EXEC_OUTPUT_BUDGET
+
+    def test_a_budget_below_one_byte_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="at least 1 byte"):
+            LocalExec(output_budget=0)
+        with pytest.raises(ValueError, match="at least 1 byte"):
+            SshInterface(host="127.0.0.1", username="root", password="x", output_budget=-1)
+
+    async def test_output_under_the_budget_is_kept_in_full(self) -> None:
+        result = await LocalExec(output_budget=64).run(_dump_command(16))
+        assert result.truncated is False
+        assert result.captured_bytes == 16
+        assert result.stdout == "x" * 16
+        assert result.exit_code == 0
+
+    async def test_exceeding_the_budget_truncates_and_does_not_throw(self) -> None:
+        result = await LocalExec(output_budget=64).run(_dump_command(10_000))
+        assert result.truncated is True
+        assert result.captured_bytes == 64
+        assert len(result.stdout.encode("utf-8")) == 64
+        assert result.stdout == "x" * 64
+
+    async def test_stdout_and_stderr_share_one_budget(self) -> None:
+        script = "import sys; sys.stdout.buffer.write(b'o'*80); sys.stderr.buffer.write(b'e'*80)"
+        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+        result = await LocalExec(output_budget=100).run(command)
+        assert result.truncated is True
+        assert result.captured_bytes == 100
+        assert len(result.stdout.encode("utf-8")) + len(result.stderr.encode("utf-8")) == 100
+
+    async def test_a_cut_utf8_sequence_decodes_with_replacement(self) -> None:
+        # U+2603 SNOWMAN is e2 98 83. A 2-byte budget keeps an incomplete sequence.
+        script = "import sys; sys.stdout.buffer.write(b'\\xe2\\x98\\x83'*4)"
+        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+        result = await LocalExec(output_budget=2).run(command)
+        assert result.truncated is True
+        assert result.captured_bytes == 2
+        assert "\ufffd" in result.stdout or "�" in result.stdout
+
+    async def test_a_runaway_writer_is_killed_like_abort(self, tmp_path: Path) -> None:
+        host = LocalExec(output_budget=1024)
+        pid_path = tmp_path / "pid"
+        result = await asyncio.wait_for(host.run(_flood_command(pid_path)), timeout=5)
+        assert result.truncated is True
+        assert result.captured_bytes == 1024
+        assert result.exit_code == -1
+        pid = await _Child.wait_for_pidfile(pid_path)
+        await _Child.wait_until_gone(pid)
+
+
+class TestStreamingPreservesOutput:
+    async def test_abort_keeps_bytes_already_received(self, tmp_path: Path) -> None:
+        host = LocalExec()
+        marker = tmp_path / "ready"
+        task = asyncio.create_task(host.run(_write_then_sleep_command(marker, "hello-partial")))
+        deadline = time.monotonic() + 2
+        while not marker.exists():
+            assert time.monotonic() < deadline, "child never flushed its prefix"
+            await asyncio.sleep(0.02)
+        await host.cancel_in_flight()
+        result = await task
+        assert result.exit_code == -1
+        assert result.truncated is False
+        assert result.stdout == "hello-partial"

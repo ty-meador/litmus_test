@@ -988,3 +988,200 @@ class TestTopologyFromArtifacts:
             "exec routing: via 127.0.0.1 -> 127.0.0.1 (declared via use_shell)",
             "exec routing: via 127.0.0.1 -> 127.0.0.1 (inherited from parent)",
         ]
+
+
+class TestSshOutputBudget:
+    """The SSH session applies the same named budget as LocalExec."""
+
+    async def test_output_under_the_budget_is_kept_in_full(self) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+            output_budget=64,
+        )
+        try:
+            await ssh.connect()
+            result = await ssh.exec("dump 16")
+            assert result.truncated is False
+            assert result.captured_bytes == 16
+            assert result.stdout == "x" * 16
+            assert result.exit_code == 0
+            assert ssh.connected is True
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_exceeding_the_budget_truncates_without_throwing(self) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+            output_budget=64,
+        )
+        try:
+            await ssh.connect()
+            result = await ssh.exec("dump 10000")
+            assert result.truncated is True
+            assert result.captured_bytes == 64
+            assert result.stdout == "x" * 64
+            assert ssh.connected is True
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_stderr_counts_against_the_same_budget(self) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+            output_budget=50,
+        )
+        try:
+            await ssh.connect()
+            result = await ssh.exec("dump-err 200")
+            assert result.truncated is True
+            assert result.captured_bytes == 50
+            assert result.stderr == "y" * 50
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_a_flood_is_killed_and_the_session_stays_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        slurps: list[int] = []
+
+        def tracked(_process: object) -> tuple[bytes, bytes]:
+            slurps.append(1)
+            return (b"", b"")
+
+        monkeypatch.setattr(asyncssh.SSHClientProcess, "collect_output", tracked)
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+            output_budget=1024,
+        )
+        try:
+            await ssh.connect()
+            result = await asyncio.wait_for(ssh.exec("flood"), timeout=5)
+            assert result.truncated is True
+            assert result.captured_bytes == 1024
+            assert slurps == []
+            assert ssh.connected is True
+            follow = await ssh.exec("uname")
+            assert follow.exit_code == 0
+            assert follow.stdout == "uname"
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_abort_keeps_bytes_already_received(self) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+        )
+        try:
+            await ssh.connect()
+            task = asyncio.create_task(ssh.exec("say-sleep hello-partial 30"))
+            await asyncio.sleep(0.2)
+            await ssh.cancel_in_flight()
+            result = await task
+            assert result.exit_code == -1
+            assert "hello-partial" in result.stdout
+            assert "transport closed" in result.stderr
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_task_cancellation_during_exec_propagates_and_keeps_the_session(self) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+        )
+        try:
+            await ssh.connect()
+            task = asyncio.create_task(ssh.exec("sleep 30"))
+            await asyncio.sleep(0.2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert ssh.connected is True
+            follow = await ssh.exec("uname")
+            assert follow.exit_code == 0
+            assert follow.stdout == "uname"
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_create_process_error_settles_as_transport_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        peer = await _LoopbackSshd.start()
+        ssh = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+        )
+        try:
+            await ssh.connect()
+
+            async def boom(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                raise asyncssh.Error(0, "peer reset")
+
+            connection = ssh._connection  # pyright: ignore[reportPrivateUsage]
+            assert connection is not None
+            monkeypatch.setattr(connection, "create_process", boom)
+            result = await ssh.exec("uname")
+            assert result.exit_code == -1
+            assert "transport closed" in result.stderr
+            assert result.truncated is False
+        finally:
+            await ssh.disconnect()
+            await peer.aclose()
+
+    async def test_connector_threads_the_run_budget_into_the_session(self) -> None:
+        peer = await _LoopbackSshd.start()
+        connector = SshConnector(output_budget=32)
+        opened = await connector.open(
+            ShellOpenRequest(
+                host="127.0.0.1",
+                username=peer.username,
+                port=peer.port,
+                password=peer.password,
+                skip_host_verification=True,
+            )
+        )
+        try:
+            assert isinstance(opened, SshInterface)
+            assert opened.output_budget == 32
+            result = await opened.exec("dump 200")
+            assert result.truncated is True
+            assert result.captured_bytes == 32
+        finally:
+            await opened.disconnect()
+            await peer.aclose()

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, final
 
-from litmus.executor import ExecResult
+from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, ExecResult
 from litmus.remote import RemoteInterface
 from litmus.ssh import SshInterface
 
@@ -104,7 +104,13 @@ class SshConnector:
     `via=jump` Shell wraps a connected remote. The opened interface therefore
     *borrows* the hop through the transport's `tunnel=` channel; it never
     claims ownership via `via=`, and teardown of the hop stays with the router.
+
+    `output_budget` is the same named ceiling `LocalExec` enforces, so a run's
+    local and remote exec share one bound.
     """
+
+    def __init__(self, *, output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET) -> None:
+        self._output_budget = output_budget
 
     async def open(self, request: ShellOpenRequest) -> RemoteInterface:
         """Reject a non-SSH or dead via; open an `SshInterface` borrowing the hop."""
@@ -126,6 +132,7 @@ class SshConnector:
             agent=request.agent,
             skip_host_verification=request.skip_host_verification,
             tunnel=via,
+            output_budget=self._output_budget,
         )
         await ssh.connect()
         return ssh
@@ -219,6 +226,7 @@ class ExecRouting:
         connector: ShellConnector | None = None,
         logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
         on_open: TransportOpened | None = None,
+        output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
     ) -> None:
         """Start local, or already inherited from a parent's `RouterRunParams`.
 
@@ -229,6 +237,8 @@ class ExecRouting:
             logger: Where connect provenance is recorded. A node's scoped adapter
                 keeps the line in that node's evidence trail.
             on_open: Run-level observer for every successfully opened transport.
+            output_budget: Ceiling applied to SSH sessions this node opens. The
+                local executor is constructed with the same number by `TestUtils`.
         """
         self._local_exec = local_exec
         self._logger = logger if logger is not None else LOGGER
@@ -242,7 +252,7 @@ class ExecRouting:
         if connector is not None:
             self._connector: ShellConnector = connector
         else:
-            self._connector = SshConnector()
+            self._connector = SshConnector(output_budget=output_budget)
         self._opened: list[RemoteInterface] = []
 
     @property
