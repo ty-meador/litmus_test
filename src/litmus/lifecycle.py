@@ -27,7 +27,7 @@ import logging
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import final
+from typing import Literal, final
 
 from litmus.errors import (
     ContractViolation,
@@ -38,6 +38,7 @@ from litmus.errors import (
     MissingVerdict,
     TestFailure,
 )
+from litmus.evidence import JsonObject
 from litmus.verdict import PASS
 
 LOGGER = logging.getLogger("litmus")
@@ -54,6 +55,161 @@ class State(StrEnum):
     PASS = "Pass"
     FAIL = "Fail"
     ABORTED = "Aborted"
+
+
+type TimeBudgetName = Literal["fail_after", "abort_after"]
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class TimeBudget:
+    """One already-validated deadline declaration on a test node."""
+
+    name: TimeBudgetName
+    seconds: float
+
+    @property
+    def state(self) -> State:
+        """The terminal state named by this declaration."""
+        return State.FAIL if self.name == "fail_after" else State.ABORTED
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class TimeoutEvidence:
+    """Structured evidence emitted when a time-budget clock cuts a subtree."""
+
+    reason: Literal["timeout"]
+    declared: TimeBudgetName
+    budget_seconds: float
+    elapsed_seconds: float
+    clock: str
+
+    def to_json(self) -> JsonObject:
+        """Return the stable Inspector representation."""
+        return {
+            "reason": self.reason,
+            "declared": self.declared,
+            "budget_seconds": self.budget_seconds,
+            "elapsed_seconds": self.elapsed_seconds,
+            "clock": self.clock,
+        }
+
+
+@final
+class TimeBudgetClock:
+    """A lineage-accounted, subtree-shared clock for one declared time budget."""
+
+    __slots__ = (
+        "_active_lineages",
+        "_active_since",
+        "_budget",
+        "_clock",
+        "_closed",
+        "_consumed",
+        "_event",
+        "_fired_at",
+        "_handle",
+        "_loop",
+    )
+
+    def __init__(self, budget: TimeBudget, *, clock: str) -> None:
+        self._budget = budget
+        self._clock = clock
+        self._closed = False
+        self._loop = asyncio.get_running_loop()
+        self._event = asyncio.Event()
+        self._consumed = 0.0
+        self._active_lineages: set[object] = set()
+        self._active_since: float | None = None
+        self._fired_at: float | None = None
+        self._handle: asyncio.TimerHandle | None = None
+
+    @property
+    def state(self) -> State:
+        """The state the declaring node named for expiry."""
+        return self._budget.state
+
+    @property
+    def fired(self) -> bool:
+        """Whether this clock has expired."""
+        return self._fired_at is not None
+
+    @property
+    def fired_at(self) -> float | None:
+        """Monotonic instant at which this clock expired."""
+        return self._fired_at
+
+    @property
+    def event(self) -> asyncio.Event:
+        """One-way expiry event shared throughout the bounded subtree."""
+        return self._event
+
+    def activate(self, lineage: object) -> None:
+        """Count one descendant lineage as doing work inside this window."""
+        if self.fired or self._closed:
+            return
+        if lineage in self._active_lineages:
+            return
+        was_inactive = not self._active_lineages
+        self._active_lineages.add(lineage)
+        if not was_inactive:
+            return
+        remaining = self._budget.seconds - self._consumed
+        if remaining <= 0:
+            self._expire()
+            return
+        self._active_since = self._loop.time()
+        self._handle = self._loop.call_later(remaining, self._expire)
+
+    def deactivate(self, lineage: object) -> None:
+        """Stop charging this clock when its last active lineage leaves."""
+        if self.fired or lineage not in self._active_lineages:
+            return
+        self._active_lineages.remove(lineage)
+        if self._active_lineages:
+            return
+        self._consume_active_time()
+        handle = self._handle
+        if handle is not None:
+            handle.cancel()
+        self._handle = None
+
+    def close(self) -> None:
+        """Stop an unexpired clock after its node's test window settles."""
+        self._closed = True
+        handle = self._handle
+        if handle is not None:
+            handle.cancel()
+        self._handle = None
+        self._active_lineages.clear()
+        self._active_since = None
+
+    def evidence(self) -> TimeoutEvidence:
+        """Snapshot the expired clock's declared and measured facts."""
+        if not self.fired:
+            raise RuntimeError("cannot render timeout evidence before the clock fires")
+        return TimeoutEvidence(
+            reason="timeout",
+            declared=self._budget.name,
+            budget_seconds=self._budget.seconds,
+            elapsed_seconds=max(self._budget.seconds, self._consumed),
+            clock=self._clock,
+        )
+
+    def _consume_active_time(self) -> None:
+        if self._active_since is None:
+            return
+        self._consumed += max(0.0, self._loop.time() - self._active_since)
+        self._active_since = None
+
+    def _expire(self) -> None:
+        if self.fired or not self._active_lineages:
+            return
+        self._consume_active_time()
+        self._fired_at = self._loop.time()
+        self._handle = None
+        self._event.set()
 
 
 class Slot(StrEnum):
@@ -133,6 +289,9 @@ class Outcome:
     swallowed: BaseException | None = None
     """An error from cleanup or survey that was logged and discarded so it could not
     mask the hardware verdict."""
+
+    timeout: TimeoutEvidence | None = None
+    """Structured time-budget evidence when a clock settled this node."""
 
     @property
     def is_bug(self) -> bool:
@@ -232,6 +391,7 @@ class ChildBoundary:
         run_abort: RunAbort | None = None,
         logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
         audit_signal: AuditSignal | None = None,
+        time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
     ) -> None:
         """Bind the boundary to the one node it guards.
 
@@ -246,6 +406,7 @@ class ChildBoundary:
         self._run_abort = run_abort if run_abort is not None else RunAbort()
         self._logger = logger if logger is not None else LOGGER
         self._audit_signal = audit_signal
+        self._time_budget_clocks = time_budget_clocks
         self._outcome: Outcome | None = None
 
     @property
@@ -366,6 +527,29 @@ class ChildBoundary:
         reason = self._run_abort.reason
         if reason is not None:
             return Outcome(slot, self._node, State.ABORTED, failure=reason)
+        fired = [clock for clock in self._time_budget_clocks if clock.fired]
+        if fired:
+            clock = min(fired, key=lambda candidate: candidate.fired_at or float("inf"))
+            evidence = clock.evidence()
+            failure = None
+            if clock.state is State.FAIL:
+                failure = TestFailure(
+                    f"time budget exceeded: {evidence.declared}="
+                    f"{evidence.budget_seconds:g}s at {evidence.clock}",
+                    {"budget_seconds": evidence.budget_seconds},
+                    {
+                        "reason": evidence.reason,
+                        "elapsed_seconds": evidence.elapsed_seconds,
+                        "clock": evidence.clock,
+                    },
+                )
+            return Outcome(
+                slot,
+                self._node,
+                clock.state,
+                failure=failure,
+                timeout=evidence,
+            )
         if self._audit_signal is not None:
             audit_reason = self._audit_signal.reason
             if audit_reason is not None:
