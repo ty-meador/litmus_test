@@ -93,6 +93,7 @@ Root causes the framework must make obvious:
 2. **Hardware lying** — survey artifacts expose mismatch (claimed success vs actual state)
 3. **Test case bug** — plain exception from a test method or from `configure()` → BUG signal; a missing verdict → node-local Aborted; also: a test that passes bad hardware
 4. **Integration failure** — `ExternalIntegrationFailure` from `before_each`/`after_each` aborts the run. The test may be fine; the harness around it broke (e.g. shopfloor DB unreachable, network congestion).
+5. **Operator interrupt** — `OperatorInterrupt` from SIGINT/SIGTERM during a live run. The Floor Technician reads that the operator stopped the rack, not that the harness or the DUT failed.
 
 **A human must always make the final determination.** The framework presents evidence clearly enough that the tech can make the call without a software engineer's help.
 

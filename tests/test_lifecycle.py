@@ -20,6 +20,7 @@ from litmus import (
     ExternalIntegrationFailure,
     FrameworkContractViolation,
     MissingVerdict,
+    OperatorInterrupt,
     TestFailure,
 )
 
@@ -547,6 +548,20 @@ class TestRunAbortSignal:
         abort.fire(first)
         abort.fire(second)
         assert abort.reason is first
+
+    def test_an_operator_interrupt_fires_it(self) -> None:
+        abort = RunAbort()
+        reason = OperatorInterrupt(2)
+        abort.fire(reason)
+        assert abort.fired is True
+        assert abort.reason is reason
+
+    def test_an_operator_interrupt_does_not_overwrite_a_hook_failure(self) -> None:
+        abort = RunAbort()
+        hook = ExternalIntegrationFailure("before_each", RuntimeError("db down"))
+        abort.fire(hook)
+        abort.fire(OperatorInterrupt(2))
+        assert abort.reason is hook
 
     async def test_a_hook_failure_fires_it(self) -> None:
         abort = RunAbort()
