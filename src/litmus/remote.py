@@ -47,8 +47,10 @@ class RemoteInterface(ABC):
         poll.
       - `endpoint`, `hop`, and `route_label` state where this transport sits in
         the topology; `connect_provenance` is the line the router logs when it
-        comes up. The Floor Technician reconstructs the path to the DUT from
-        those lines, so a transport that hides its hop hides the topology.
+        comes up. `provenance_lines` is that line plus any protocol-specific
+        follow-ups (SSH host-key verification skipped). The Floor Technician
+        reconstructs the path to the DUT from those lines, so a transport that
+        hides its hop hides the topology.
     """
 
     def __init__(self) -> None:
@@ -115,6 +117,15 @@ class RemoteInterface(ABC):
         default states the route alone.
         """
         return f"connect: {self.route_label}"
+
+    @property
+    def provenance_lines(self) -> tuple[str, ...]:
+        """Every evidence line the router logs when this transport comes up.
+
+        `connect_provenance` is always first. Subclasses append protocol-specific
+        lines that the Floor Technician must see without opening the suite.
+        """
+        return (self.connect_provenance,)
 
     @final
     async def connect(self, host: str | None = None, port: int | None = None) -> None:
