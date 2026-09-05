@@ -9,15 +9,19 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from examples.hardware_device_lifecycle import PoweredDevice
 from examples.hello_world import HelloWorld
+from examples.networked_device import DutDevice, Gateway
 from examples.pi_hole_server import PiHoleServer
 from examples.remote_device_ssh import SshDevice
+from examples.run_data_evidence import PowerSupply
 from examples.ssh_tunneling import TunneledDevice
 from examples.test_composition import GroupedDevice, SequencedDevice
 from examples.wait_for_patterns import ConfigureGatedDevice, MainAssertionDevice
 from tests.loopback_sshd import LoopbackSshd
 
 from litmus import ExecResult, RunResult, TestFailure, TestUtils
+from litmus.executor import LocalExec
 from litmus.lifecycle import Outcome, State
 from litmus.mock import MockTransport
 from litmus.remote import RemoteInterface
@@ -568,3 +572,171 @@ class TestPiHoleServerExample:
         assert "SSH connect failed" in result.failure.fail_message
         assert "peer unreachable" in result.failure.fail_message
         assert transport.commands == ()
+
+
+_ARP_TABLE = """\
+IP address       HW type     Flags       HW address            Mask     Device
+10.0.0.50        0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0
+"""
+_PING_OK = (
+    "PING 10.0.0.50 (10.0.0.50) 56(84) bytes of data.\n"
+    "--- 10.0.0.50 ping statistics ---\n"
+    "1 packets transmitted, 1 received, 0% packet loss, time 0ms\n"
+)
+_FIRMWARE = "2.4.1\n"
+
+
+def _script_arp_dut(transport: MockTransport) -> None:
+    transport.script("true", _ok())
+    transport.script("cat /proc/net/arp", _ok(_ARP_TABLE))
+    transport.script("ping -c 1 10.0.0.50", _ok(_PING_OK))
+    transport.script("curl -sf http://10.0.0.50/api/version", _ok(_FIRMWARE))
+
+
+async def _scripted_local_exec(self: LocalExec, command: str) -> ExecResult:
+    del self
+    scripts = {
+        "cat /proc/net/arp": _ok(_ARP_TABLE),
+        "ping -c 1 10.0.0.50": _ok(_PING_OK),
+        "curl -sf http://10.0.0.50/api/version": _ok(_FIRMWARE),
+    }
+    return scripts.get(command, ExecResult(stdout="", stderr=f"unscripted: {command}", exit_code=1))
+
+
+class TestNetworkedDeviceExample:
+    """ArpResolver in configure, locally and through a via hop."""
+
+    async def test_local_resolve_ping_and_firmware(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(LocalExec, "run", _scripted_local_exec)
+        result = await DutDevice(name="networked device", mac="aa:bb:cc:dd:ee:ff").run(
+            env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)}
+        )
+
+        assert result.state is State.PASS
+        assert result.run_data["ip"] == "10.0.0.50"
+        assert "arp" not in result.run_data
+        assert result.summary_tree.children[0].children[0].name == "reachability"
+        assert result.summary_tree.children[0].children[1].name == "firmware-version"
+
+    async def test_missing_mac_in_configure_is_fail_not_a_bug(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def empty_arp(self: LocalExec, command: str) -> ExecResult:
+            del self
+            if command == "cat /proc/net/arp":
+                return _ok(
+                    "IP address       HW type     Flags       HW address"
+                    "            Mask     Device\n"
+                )
+            return ExecResult(stdout="", stderr=f"unscripted: {command}", exit_code=1)
+
+        monkeypatch.setattr(LocalExec, "run", empty_arp)
+        result = await DutDevice(name="missing dut", mac="aa:bb:cc:dd:ee:ff").run(
+            env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)}
+        )
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "did not appear on the network" in result.failure.fail_message
+        assert result.failure.is_bug is False
+
+    async def test_via_hop_resolves_through_the_gateway(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transport = MockTransport()
+        _script_arp_dut(transport)
+        _patch_ssh_connector(monkeypatch, transport)
+        gateway = Gateway(
+            name="gateway",
+            host="10.0.0.1",
+            username="ops",
+            password="gateway-secret",
+        )
+        result = await DutDevice(
+            name="networked device",
+            mac="aa:bb:cc:dd:ee:ff",
+            via=gateway,
+        ).run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.PASS
+        assert result.run_data["ip"] == "10.0.0.50"
+        assert "cat /proc/net/arp" in transport.commands
+        assert "ping -c 1 10.0.0.50" in transport.commands
+        assert transport.connected is False
+
+
+class TestHardwareDeviceLifecycleExample:
+    """Survey and audit around rail, enumeration, and cleanup."""
+
+    async def test_rail_up_enumerates_and_cleanup_drops_the_rail(self, tmp_path: Path) -> None:
+        result = await PoweredDevice(
+            name="powered device",
+            rail_states=("off", "ramping", "on"),
+            temperatures=(41.0, 42.5),
+            enumerated=True,
+            interval=0.001,
+            timeout_seconds=0.1,
+            audit_interval=0.001,
+            claim_seconds=0.02,
+        ).run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.PASS
+        assert result.run_data["rail"] == "off"
+        assert result.run_data["enumerated"] is True
+        assert result.run_data["cleanup_complete"] is True
+        artifacts = _artifact_payloads(tmp_path)
+        assert artifacts["pre-configure-1"]["data"]["rail"] == "unknown"
+        assert artifacts["post-configure-1"]["data"]["rail"] == "on"
+        assert artifacts["post-cleanup-1"]["data"]["rail"] == "off"
+        assert artifacts["post-cleanup-1"]["data"]["cleanup_complete"] is True
+
+    async def test_over_temperature_audit_fails_the_suite(self, tmp_path: Path) -> None:
+        result = await PoweredDevice(
+            name="hot device",
+            rail_states=("on",),
+            temperatures=(96.0,),
+            enumerated=True,
+            limit_c=85.0,
+            interval=0.001,
+            timeout_seconds=0.1,
+            audit_interval=0.001,
+            claim_seconds=0.03,
+        ).run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "temperature over limit" in result.failure.fail_message
+
+
+class TestRunDataEvidenceExample:
+    """ctx readings appear in run_data; within_spec is the computed extra."""
+
+    async def test_in_spec_run_publishes_within_spec_true(self) -> None:
+        suite = PowerSupply(name="power supply", output_voltage_v=12.1, temperature_c=48.0)
+        result = await suite.run()
+
+        assert result.state is State.PASS
+        assert result.run_data["output_voltage_v"] == 12.1
+        assert result.run_data["temperature_c"] == 48.0
+        assert result.run_data["within_spec"] is True
+        assert result.run_data["measurements"] == []
+        assert suite.run_data["within_spec"] is True
+
+    async def test_out_of_spec_voltage_fails_and_within_spec_is_false(self) -> None:
+        result = await PowerSupply(
+            name="power supply",
+            output_voltage_v=10.0,
+            temperature_c=48.0,
+        ).run()
+
+        assert result.state is State.FAIL
+        assert result.run_data["output_voltage_v"] == 10.0
+        assert result.run_data["within_spec"] is False

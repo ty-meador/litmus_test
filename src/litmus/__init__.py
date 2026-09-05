@@ -1,9 +1,10 @@
 """litmus — React-for-hardware HIL testing framework.
 
 The public surface. Suite authors need `LitmusTest`, `TestUtils`, `ExecResult`,
-`Artifact`, `PASS`, `Verdict`, and `TestFailure`; the rest of the taxonomy is
-exported because it appears in artifacts and logs, where a reader will follow a
-name back to its meaning (`ExternalIntegrationFailure`, `OperatorInterrupt`).
+`Artifact`, `PASS`, `Verdict`, `TestFailure`, and `ArpResolver`; the rest of the
+taxonomy is exported because it appears in artifacts and logs, where a reader
+will follow a name back to its meaning (`ExternalIntegrationFailure`,
+`OperatorInterrupt`, `ArpResolutionFailure`).
 Harness integrators may also import the narrow `BeforeEachContext` and
 `AfterEachContext` surfaces.
 
@@ -13,9 +14,11 @@ author never holds an instance of any of them, so they do not belong in the outw
 API. The framework and its self-tests import them from `litmus.lifecycle` directly.
 """
 
+from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
 from litmus.base import LitmusTest
 from litmus.errors import (
+    ArpResolutionFailure,
     ContractViolation,
     ExternalIntegrationFailure,
     Failure,
@@ -35,6 +38,8 @@ __all__ = [
     "PASS",
     "AfterEachContext",
     "AfterEachHook",
+    "ArpResolutionFailure",
+    "ArpResolver",
     "Artifact",
     "BeforeEachContext",
     "BeforeEachHook",

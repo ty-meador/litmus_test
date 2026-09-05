@@ -234,6 +234,10 @@ publication within the bounded evidence budget, even under repeated cancellation
 intervals must be positive and finite, and the framework stops every audit loop as soon
 as the authored suite settles.
 
+See `examples/hardware_device_lifecycle.py` for survey and audit around a device
+with real state transitions — rail up in `configure`, thermal audit during the claim,
+rail down in `cleanup`.
+
 ## Integration Hooks: `before_each` / `after_each` on the Run Params
 
 For composing Litmus into a larger harness (shop-floor DB, lab coordinator, audit pipeline), pass `before_each` and `after_each` to the root `run()` call:
@@ -435,17 +439,28 @@ Use when tests are fully independent. The Floor Technician sees everything broke
 
 ## ArpResolver — MAC to IP
 
-`ArpResolver` is a composable utility for resolving a device's IP from its MAC. Create one via `utils.get_arp_resolver()` in `configure()`, call `resolve()`, and return both the resolved data and the resolver into ctx. Access ctx fields via `self.ctx` inside class methods. Call `arp.ping(utils)` for reachability. Call `arp.reacquire(utils)` after anything that may change the IP (reboot, firmware flash, DHCP churn).
+`ArpResolver` is a composable utility for resolving a device's IP from its MAC. Create one via `utils.get_arp_resolver()` in `configure()`, call `resolve()`, and return both the resolved data and the resolver into ctx. Test methods read the IP and the resolver from `utils.ctx`. Call `arp.ping(utils)` for reachability. Call `arp.reacquire(utils)` after anything that may change the IP (reboot, firmware flash, DHCP churn).
+
+`ArpResolutionFailure` is not a `TestFailure`. Catch it in `configure` and re-raise as `TestFailure` so a missing ARP entry is a verdict. Uncaught, it is a developer bug — the suite did not model the failure mode.
 
 ```python
 # In configure():
 arp = utils.get_arp_resolver(mac=self._mac)
-resolved = await arp.resolve()
+try:
+    resolved = await arp.resolve()
+except ArpResolutionFailure as error:
+    raise TestFailure(
+        f"{error.mac} did not appear on the network",
+        error.mac,
+        error.host,
+    ) from error
 return {**resolved, "arp": arp}
 
 # In build_suite():
-self.case("reachability", lambda utils: self.ctx["arp"].ping(utils))
+self.case("reachability", self._reachability)
 ```
+
+See `examples/networked_device.py`.
 
 ---
 
@@ -463,6 +478,8 @@ return {**resolved, "arp": arp}
 gateway = Gateway(name="gateway")
 target = MyDevice(name="target", mac="aa:bb:cc:dd:ee:ff", via=gateway)
 ```
+
+See `examples/networked_device.py`. The DUT class is the same one used locally.
 
 ---
 
@@ -512,3 +529,5 @@ root `summary_tree` without adding another evidence API.
 ## run_data — Structured Evidence
 
 Configure's return values flow into ctx and appear in `RunResult.run_data` automatically. Class instances and non-serializable values are stripped. Override `run_data` only when you need computed or filtered output.
+
+See `examples/run_data_evidence.py`.
