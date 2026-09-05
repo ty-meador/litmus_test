@@ -32,7 +32,12 @@ import asyncssh
 from asyncssh import Error as SshError
 from asyncssh import SignalReceived
 
-from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, BoundedCapture, ExecResult
+from litmus.executor import (
+    DEFAULT_EXEC_OUTPUT_BUDGET,
+    BoundedCapture,
+    ExecResult,
+    _validate_output_budget,  # pyright: ignore[reportPrivateUsage]
+)
 from litmus.remote import RemoteInterface
 
 type AuthPath = Literal["agent", "key", "key-file", "password", "none"]
@@ -137,9 +142,7 @@ class SshInterface(RemoteInterface):
         self._skip_host_verification = skip_host_verification
         self._via = via
         self._tunnel = tunnel
-        if output_budget < 1:
-            raise ValueError("output_budget must be at least 1 byte")
-        self._output_budget = output_budget
+        self._output_budget = _validate_output_budget(output_budget)
         self._connection: asyncssh.SSHClientConnection | None = None
 
     @property
@@ -273,22 +276,27 @@ class SshInterface(RemoteInterface):
                     on_truncate=stop,
                     treat_as_eof=(SshError, SignalReceived),
                 )
-                leftover_out, leftover_err = process.collect_output()
-                if leftover_out:
-                    out_chunk = (
-                        leftover_out
-                        if isinstance(leftover_out, bytes)
-                        else leftover_out.encode("utf-8")
-                    )
-                    capture.accept(out_chunk, into=capture.stdout)
-                if leftover_err:
-                    err_chunk = (
-                        leftover_err
-                        if isinstance(leftover_err, bytes)
-                        else leftover_err.encode("utf-8")
-                    )
-                    capture.accept(err_chunk, into=capture.stderr)
-                if capture.truncated:
+                # Drain already has every byte we may keep. collect_output()
+                # would join the rest of the receive window (up to ~2 MiB)
+                # into one object — the leftover dump the budget exists to
+                # prevent. Only slurp remainder on the non-truncated EOF path.
+                if not capture.truncated:
+                    leftover_out, leftover_err = process.collect_output()
+                    if leftover_out:
+                        out_chunk = (
+                            leftover_out
+                            if isinstance(leftover_out, bytes)
+                            else leftover_out.encode("utf-8")
+                        )
+                        capture.accept(out_chunk, into=capture.stdout)
+                    if leftover_err:
+                        err_chunk = (
+                            leftover_err
+                            if isinstance(leftover_err, bytes)
+                            else leftover_err.encode("utf-8")
+                        )
+                        capture.accept(err_chunk, into=capture.stderr)
+                else:
                     await stop()
                 await process.wait_closed()
             except asyncio.CancelledError:
