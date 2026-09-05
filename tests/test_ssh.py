@@ -804,6 +804,30 @@ class TestAuthProvenance:
         assert line == "ssh connect: ops@10.0.0.1:2222 auth=password via=direct"
         assert "hunter2" not in line
 
+    def test_skip_host_verification_names_the_host(self) -> None:
+        skipped = SshInterface(
+            host="10.0.0.1",
+            username="ops",
+            port=2222,
+            password="hunter2",
+            skip_host_verification=True,
+        )
+        verified = SshInterface(
+            host="10.0.0.1",
+            username="ops",
+            port=2222,
+            password="hunter2",
+        )
+
+        assert skipped.provenance_lines == (
+            "ssh connect: ops@10.0.0.1:2222 auth=password via=direct",
+            "ssh host-key verification skipped: 10.0.0.1:2222",
+        )
+        assert "hunter2" not in "".join(skipped.provenance_lines)
+        assert verified.provenance_lines == (
+            "ssh connect: ops@10.0.0.1:2222 auth=password via=direct",
+        )
+
     def test_an_in_memory_key_names_no_file(self) -> None:
         transport = SshInterface(
             host="10.0.0.1",
