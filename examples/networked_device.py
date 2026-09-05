@@ -76,7 +76,7 @@ class Gateway(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Confirm the hop executes; unused when this node is only a via."""
-        return self.case("gateway-up", self._gateway_up)
+        return self.test("gateway-up", self._gateway_up)
 
     async def _gateway_up(self, utils: TestUtils) -> Verdict:
         result = await utils.exec("true")
@@ -130,8 +130,8 @@ class DutDevice(LitmusTest):
         return self.sequence(
             self.name,
             [
-                self.case("reachability", self._reachability),
-                self.case("firmware-version", self._firmware_version_check),
+                self.test("reachability", self._reachability),
+                self.test("firmware-version", self._firmware_version_check),
             ],
         )
 

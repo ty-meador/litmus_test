@@ -49,7 +49,7 @@ class TestViaLifecycleOrder:
                 return {"gateway": "up"}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 calls.append("gateway-test")
@@ -64,7 +64,7 @@ class TestViaLifecycleOrder:
                 return {"target": "up"}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("target-test")
@@ -97,7 +97,7 @@ class TestViaLifecycleOrder:
 
         class Hop(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append(f"{self.name}-configure")
@@ -112,7 +112,7 @@ class TestViaLifecycleOrder:
 
         class Target(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append("target-configure")
@@ -152,7 +152,7 @@ class TestViaLifecycleOrder:
                 return {"secret": "gateway-only"}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -163,7 +163,7 @@ class TestViaLifecycleOrder:
                 return {"target": "up"}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 seen.append(dict(utils.ctx))
@@ -190,7 +190,7 @@ class TestViaFailurePaths:
                 raise TestFailure("gateway did not reach a testable state")
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -204,7 +204,7 @@ class TestViaFailurePaths:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("target-test")
@@ -235,7 +235,7 @@ class TestViaFailurePaths:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -249,7 +249,7 @@ class TestViaFailurePaths:
                 raise TestFailure("target did not boot")
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 calls.append("target-test")
@@ -283,14 +283,14 @@ class TestViaFailurePaths:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
 
         class Target(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -331,7 +331,7 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -343,7 +343,7 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 result = await utils.exec("id")
@@ -383,14 +383,14 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
 
         class Target(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 extra = await utils.get_shell(
@@ -446,14 +446,14 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
 
         class Probe(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -502,14 +502,14 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
 
         class Probe(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -543,7 +543,7 @@ class TestViaHopContracts:
             await second.run_cleanup_only()
             await jump_peer.aclose()
 
-    async def test_group_siblings_sharing_a_via_both_route_through_it(self) -> None:
+    async def test_parallel_siblings_sharing_a_via_both_route_through_it(self) -> None:
         jump_peer = await LoopbackSshd.start(username="ops", password="jump")
         configures = 0
         hops: list[RemoteInterface] = []
@@ -568,14 +568,14 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
 
         class Probe(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 result = await utils.exec("id")
@@ -589,7 +589,7 @@ class TestViaHopContracts:
 
         class Rack(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "siblings",
                     [
                         Probe(name="alpha", via=gateway),
@@ -624,7 +624,7 @@ class TestViaHopContracts:
 
         class Gateway(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -635,7 +635,7 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 result = await utils.exec("id")
@@ -667,14 +667,14 @@ class TestViaHopContracts:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
 
         class Probe(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -724,7 +724,7 @@ class TestViaSurveyAndAuditRouting:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -742,7 +742,7 @@ class TestViaSurveyAndAuditRouting:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _survey(self, utils: TestUtils) -> object:
                 result = await utils.exec("survey-on-hop")
@@ -788,7 +788,7 @@ class TestViaSurveyAndAuditRouting:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._unused)
+                return self.test("unused", self._unused)
 
             async def _unused(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -802,7 +802,7 @@ class TestViaSurveyAndAuditRouting:
                 self.use_audit(interval=0.001, fn=self._audit)
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _audit(self, utils: TestUtils) -> object:
                 probe = await utils.exec("audit-on-hop")

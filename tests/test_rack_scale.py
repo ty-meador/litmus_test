@@ -90,10 +90,10 @@ class _SyntheticDut(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Run the DUT probe and, for one peer, the harness-abort trigger."""
-        tests = [self.case("probe", self._probe)]
+        tests = [self.test("probe", self._probe)]
         if self._include_abort_trigger:
-            tests.append(self.case("trigger whole-rack abort", self._abort_trigger))
-        return self.group(f"{self.name} claims", tests)
+            tests.append(self.test("trigger whole-rack abort", self._abort_trigger))
+        return self.parallel(f"{self.name} claims", tests)
 
     async def _probe(self, utils: TestUtils) -> Verdict:
         await self._coordinator.rendezvous(self._dut_id)
@@ -139,7 +139,7 @@ class _SyntheticRack(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Run all DUT lifecycles under the rack's structured-concurrency owner."""
-        return self.group("rack DUTs", self._duts)
+        return self.parallel("rack DUTs", self._duts)
 
 
 def _rack(

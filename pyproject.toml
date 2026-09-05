@@ -86,7 +86,7 @@ data_file = ".coverage/data"
 precision = 1
 # Global floor. Ratchet-only: raise it to the new measurement when coverage rises,
 # never lower it (STANDARDS.md section 6). Per-file floors: [tool.litmus.coverage].
-fail_under = 95.1
+fail_under = 95.2
 exclude_also = [
     "if TYPE_CHECKING:",
     "^\\s*\\.\\.\\.\\s*$",
@@ -103,8 +103,8 @@ output = ".coverage/cobertura.xml"
 # tools/coverage_floor.py after the suite runs. Ratchet-only, like fail_under.
 [tool.litmus.coverage.floors]
 "src/litmus/verdict.py" = 100.0
-"src/litmus/base.py" = 91.8
-"src/litmus/lifecycle.py" = 97.9
+"src/litmus/base.py" = 93.0
+"src/litmus/lifecycle.py" = 98.5
 "src/litmus/executor.py" = 92.8
 "src/litmus/timeline.py" = 97.8
 

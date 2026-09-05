@@ -14,7 +14,7 @@ static analysis.
 ## Lifecycle Contract
 **Developer obligation:** Implement `configure()`, `build_suite()`, and `cleanup()` with the correct intent.
 - `configure()` — put the test in a known state. Readiness gates and polling live here. Its framework return annotation is `Mapping[str, Any]`, wide enough that a suite may narrow it to a local `TypedDict` under pyright strict; returning a plain `dict[str, Any]` is the default. The returned value is always an ordinary dict whose entries are copied into `utils.ctx` for test methods, cleanup, and all descendant tests.
-- `build_suite()` — pure table-of-contents composition. Return a `LitmusTest` built from `self.case()` / `self.sequence()` / `self.group()`. Test methods (private class methods passed to `self.case()`) carry the actual verdict logic — return the `PASS` sentinel to pass, raise `TestFailure` to fail intentionally.
+- `build_suite()` — pure table-of-contents composition. Return a `LitmusTest` built from `self.test()` / `self.sequence()` / `self.parallel()`. Test methods (private class methods passed to `self.test()`) carry the actual verdict logic — return the `PASS` sentinel to pass, raise `TestFailure` to fail intentionally.
 - `cleanup()` — restore state. Must not throw (errors are swallowed and logged).
 
 **Framework obligation:** Execute configure → build_suite → cleanup in order, guaranteed.
@@ -43,7 +43,7 @@ static analysis.
 
 **Developer obligation:** Recognize the taxonomy. A `TestFailure` means "the DUT failed a check"; an `ExternalIntegrationFailure` means "the harness around the test broke"; an `OperatorInterrupt` means "the operator stopped the rack." Never conflate them — the Floor Technician's recovery protocol depends on knowing which. A `KeyboardInterrupt` raised from suite code is not an operator signal: the child boundary still passes it through unrecorded.
 
-**Framework obligation:** When a descendant's hook throws, the `ExternalIntegrationFailure` propagates up through every ancestor class-intact. Sequences and groups do not rewrap it. Every ancestor's state cascades to Aborted.
+**Framework obligation:** When a descendant's hook throws, the `ExternalIntegrationFailure` propagates up through every ancestor class-intact. Sequences and parallel nodes do not rewrap it. Every ancestor's state cascades to Aborted.
 
 ---
 
@@ -56,12 +56,12 @@ ancestors. Durations must be positive, finite numbers; booleans, zero, negatives
 infinities, NaN, and non-numbers are rejected before execution.
 
 - The pair is part of the `LitmusTest` fractal atom. It is accepted by authored-node
-  construction, `self.case()`, `self.group()`, `self.sequence()`, and root `run()`.
+  construction, `self.test()`, `self.parallel()`, `self.sequence()`, and root `run()`.
   Every node is a suite, so every placement reads the same way: this suite completes
   within the budget or the named state is raised. Construction and `run()` are two
   ways to declare the root's one budget, not a way to attach two clocks to one node.
 - The window opens when the node enters `configure` and closes when its test method, or
-  its last child, settles. Internal cases, groups, and sequences open the equivalent
+  its last child, settles. Leaves, parallel nodes, and sequences open the equivalent
   window at their test/child boundary. Cleanup runs after the cut on its own
   finalization budget. Root-owned `before_each` and `after_each` integration hooks are
   outside every declared node window; time spent in them cannot spend an ancestor's
@@ -108,7 +108,7 @@ the record identifies the exact clock and budget without requiring the suite sou
 **Framework obligation:** Every failure must be traceable to one of the following root causes, made obvious by signal:
 1. **DUT failed a check** — `TestFailure` from a test method or from `configure()`. State = Fail. A `TestFailure` from `configure()` carries an extra ambiguity: the device did not reach a testable state, but whether the cause is hardware or infrastructure cannot be determined from code. The framework surfaces the `looking_for` / failure message; the human triager decides.
 2. **Hardware lying** — survey artifacts expose mismatch between claimed and actual state.
-3. **Test case bug** — a plain exception from a test method or from `configure()` → all failure modes modeled by the developer must raise `TestFailure`. Anything else raised is a bug. Full stop. A missing verdict (non-PASS return) is likewise a contract violation, rendered as node-local Aborted because no verdict exists to report.
+3. **Test method bug** — a plain exception from a test method or from `configure()` → all failure modes modeled by the developer must raise `TestFailure`. Anything else raised is a bug. Full stop. A missing verdict (non-PASS return) is likewise a contract violation, rendered as node-local Aborted because no verdict exists to report.
 4. **External integration failure** — `ExternalIntegrationFailure` from a `before_each`/`after_each` hook. State = Aborted.
 5. **Operator interrupt** — `OperatorInterrupt` from SIGINT/SIGTERM during a live `run()`. State = Aborted. The failure names the operator and the signal.
 
@@ -138,7 +138,7 @@ the record identifies the exact clock and budget without requiring the suite sou
     reaches. The artifact name identifies the dispatch point and registered-hook index;
     audit names identify both the hook and interval dispatch. Both use artifact type
     `survey`, keeping one Inspector evidence contract.
-- Log artifacts are co-located with their test case.
+- Log artifacts are co-located with their node.
 - All serializable values (primitives, plain dicts, lists) added to `ctx` are automatically added to `run_data`.
   - Functions, class instances, and live handles (e.g. SSH connections) are stripped.
   - Context annotations do not bypass this filter. A `TypedDict` is an ordinary dict at runtime, and each value still has to satisfy the same serialization rules.
@@ -189,8 +189,8 @@ is self-contained and cannot overwrite a neighboring run.
 - A logging node opens its files lazily on its first record and closes them when that
   node reaches its terminal boundary. A declared node that never executes opens
   nothing.
-- Authored suites, sequences, and groups own a log by default. Inline cases roll up to
-  the nearest owning ancestor. Sequences, groups, and composed authored suites may opt
+- Authored suites, sequences, and parallel nodes own a log by default. Leaves roll up
+  to the nearest owning ancestor. Sequences, parallel nodes, and composed suites may opt
   into the same roll-up with `discrete_log_file=False`; a root still owns the run log.
 - `LitmusTest.log_path` exposes the owning node's absolute `timeline.jsonl` path after
   execution. It remains `None` for pending nodes and nodes whose records roll up.
@@ -230,7 +230,7 @@ leave point-in-time artifacts at the configured base root; authored suites use `
 - The read-only `utils.signal` combines the run-level integration halt with the nearest
   authored audit scope. Audit scope is inherited only by that node's composed suite: an
   audit failure cancels its own in-flight work and produces Fail without cancelling an
-  independent group sibling. If an audit verdict and suite completion occur in the same
+  independent parallel sibling. If an audit verdict and suite completion occur in the same
   event-loop turn, the audit verdict wins; evidence is not discarded by timing luck.
 - `utils.exec` threads cancellation to the underlying child process. When a cancellation fires, in-flight shell commands are killed (SIGTERM) immediately — no zombie processes outlive the test.
 
@@ -305,4 +305,4 @@ The operator-signal handler is installed by `run()`/`main()` only while that run
 ## Composability Contract
 **Framework obligation:** Any `LitmusTest` or subclass thereof can be composed indefinitely in any shape the SE deems appropriate.
 
-**Developer obligation:** Test cases must be self-contained — declare their own readiness preconditions in `configure()`, not in the parent sequence.
+**Developer obligation:** Leaves must be self-contained — declare their own readiness preconditions in `configure()`, not in the parent sequence.

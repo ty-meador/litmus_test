@@ -17,7 +17,7 @@ class TestLitmusTestPublicSurface:
     def test_litmus_test_is_the_single_public_node_class(self) -> None:
         assert litmus.LitmusTest is LitmusTest
         assert "LitmusTest" in litmus.__all__
-        assert not hasattr(litmus, "_Case")
+        assert not hasattr(litmus, "_Test")
 
     def test_main_cannot_be_overridden(self) -> None:
         with pytest.raises(TypeError, match=r"main.*framework-owned"):
@@ -37,7 +37,7 @@ class TestLitmusTestImmutability:
                 self.serial = serial
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: object) -> Verdict:
                 return PASS
@@ -69,7 +69,7 @@ class TestLitmusTestMain:
                 self.calls = calls
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: object) -> Verdict:
                 self.calls.append(utils)
@@ -88,7 +88,7 @@ class TestLitmusTestMain:
     async def test_instance_cannot_run_twice(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: object) -> Verdict:
                 return PASS
@@ -110,7 +110,7 @@ class TestExecRoutingProvenance:
             def build_suite(self) -> LitmusTest:
                 return self.sequence(
                     "claims",
-                    [self.case("first", self._first), self.case("second", self._second)],
+                    [self.test("first", self._first), self.test("second", self._second)],
                 )
 
             async def _first(self, utils: TestUtils) -> Verdict:
@@ -155,7 +155,7 @@ class TestConfigureReturnTyping:
                 return {"host": "dut", "port": 22}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 seen.update(utils.ctx)
