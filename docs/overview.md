@@ -111,6 +111,9 @@ Every full run creates one timestamped directory beneath the configured artifact
 Logging nodes stream a human `timeline.log` and a versioned Inspector
 `timeline.jsonl`; inline cases roll into their nearest owning ancestor. Both views are
 flushed entry by entry, preserving the accepted chronology through interruption.
+When the root reaches Pass, Fail, or Aborted, the framework atomically writes its
+versioned `RunResult` to `result.json` at that run-directory root. The root timeline's
+final entry points to the file, so the structural and temporal views remain joined.
 
 **Timestamp integrity is a system requirement.** NTP sync on the test VM is not optional. The log backbone is used as a legal instrument in customer disputes ("did failures start before your 2pm firmware push?").
 
