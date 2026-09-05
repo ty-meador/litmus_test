@@ -179,11 +179,19 @@ elapsed time, and the root-to-node path of the winning clock.
 The timed window is configure through the test method or last child. Cleanup retains
 its separate finalization allowance. Root-owned `before_each`/`after_each` hooks are
 excluded from every time-budget clock, so a slow shop-floor database cannot manufacture
-a hardware Fail. Do not catch or suppress `asyncio.CancelledError` around awaited work.
+a hardware Fail. In a concurrent group, however, a sibling still inside its timed
+window keeps the shared ancestor clock moving; another sibling's hook or cleanup cannot
+lend it extra time. Do not catch or suppress `asyncio.CancelledError` around awaited
+work.
 
 A deadline closes only transports opened by the cut node. An inherited route and a
 borrowed `via` hop remain their owner's resources; this is what keeps a timed-out DUT
 from taking down a healthy sibling behind the same gateway.
+
+A `LitmusTest` used as `via=` may declare the same budget pair. Its clock begins when
+that via enters `configure`; if bring-up expires, the consumer adopts its state and
+timeout evidence, then the framework runs the via's cleanup and releases any borrowed
+upstream hop.
 
 ## Pass/Fail/Aborted Contract
 - A test method returning the `PASS` sentinel → test passes (state `Pass`). The check is `result is PASS` — identity, not equality. The string `"PASS"` does not pass.
