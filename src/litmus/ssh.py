@@ -87,7 +87,9 @@ class SshInterface(RemoteInterface):
       - `connect_provenance` names the endpoint, the credential path selected,
         and the full via chain. The credential's *value* is never rendered.
       - `skip_host_verification` is `known_hosts=None` (lab hosts without
-        known_hosts entries). Default is to verify.
+        known_hosts entries). Default is to verify. Skipping writes a second
+        provenance line naming the host, so an FT can see that verification
+        was off.
     """
 
     def __init__(
@@ -174,6 +176,17 @@ class SshInterface(RemoteInterface):
         return (
             f"ssh connect: {self._username}@{self._host}:{self._port} "
             f"auth={self._auth_choice()} via={via}"
+        )
+
+    @property
+    def provenance_lines(self) -> tuple[str, ...]:
+        """Connect line, plus a loud skip when host-key verification is off."""
+        lines = (self.connect_provenance,)
+        if not self._skip_host_verification:
+            return lines
+        return (
+            *lines,
+            f"ssh host-key verification skipped: {self._host}:{self._port}",
         )
 
     async def _connect(self) -> None:
