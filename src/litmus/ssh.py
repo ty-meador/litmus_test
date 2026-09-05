@@ -70,7 +70,10 @@ class SshInterface(RemoteInterface):
 
     Contract beyond `RemoteInterface`:
       - `exec` never raises for a command's own exit status. A drop, abort, or
-        signal-kill settles as `ExecResult` with `exit_code == -1`.
+        signal-kill settles as `ExecResult` with `exit_code == -1`. Remote
+        stdout/stderr are bytes on the wire; `ExecResult.settled` decodes them
+        (UTF-8 with replacement), so a DUT's binary or non-UTF-8 output is
+        evidence, not a dead channel.
       - Stdout and stderr together are bounded by the same `output_budget`
         `LocalExec` uses. Exceeding it terminates that remote process (SIGTERM
         on the channel, then close) and settles with `truncated=True` plus the
@@ -248,6 +251,8 @@ class SshInterface(RemoteInterface):
         if connection is None:
             raise ConnectionError("remote interface is not connected")
         try:
+            # Bytes in; ExecResult.settled is the decode path. Strict UTF-8
+            # here would turn a DUT's non-UTF-8 output into a dead channel.
             process = await connection.create_process(
                 command, encoding=None, stdin=asyncssh.DEVNULL
             )
