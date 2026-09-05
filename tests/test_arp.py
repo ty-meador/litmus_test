@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
+from typing import Any
 
 import pytest
 
 from litmus import PASS, ArpResolutionFailure, ArpResolver, TestFailure, TestUtils
 from litmus.executor import ExecResult, LocalExec
+from litmus.utils import ScopedLogger
 
 _ARP_TABLE = """\
 IP address       HW type     Flags       HW address            Mask     Device
@@ -24,6 +27,13 @@ _PING_LOSS = (
     "PING 10.0.0.50 (10.0.0.50) 56(84) bytes of data.\n"
     "--- 10.0.0.50 ping statistics ---\n"
     "1 packets transmitted, 0 received, 100% packet loss, time 0ms\n"
+)
+_PING_DUPES = (
+    "PING 10.0.0.50 (10.0.0.50) 56(84) bytes of data.\n"
+    "64 bytes from 10.0.0.50: icmp_seq=1 ttl=64 time=0.3 ms\n"
+    "64 bytes from 10.0.0.50: icmp_seq=1 ttl=64 time=0.4 ms (DUP!)\n"
+    "--- 10.0.0.50 ping statistics ---\n"
+    "1 packets transmitted, 2 received, +1 duplicates, 0% packet loss, time 0ms\n"
 )
 
 
@@ -58,7 +68,7 @@ def _resolver(exec_fn: _ScriptedExec, *, mac: str = "AA-BB-CC-DD-EE-FF") -> ArpR
     return ArpResolver(
         mac=mac,
         exec_fn=exec_fn,
-        logger=logging.getLogger("litmus"),
+        logger=ScopedLogger(logging.getLogger("litmus"), ()),
         cache_key="local",
     )
 
@@ -162,6 +172,20 @@ class TestPingAndReacquire:
             del self
             assert command == "ping -c 1 10.0.0.50"
             return _ok(_PING_OK)
+
+        monkeypatch.setattr(LocalExec, "run", ping_run)
+        resolver = _resolver(_ScriptedExec({"cat /proc/net/arp": _ok(_ARP_TABLE)}))
+        utils = TestUtils()
+        utils.ctx["ip"] = "10.0.0.50"
+        assert await resolver.ping(utils) is PASS
+
+    async def test_ping_duplicate_replies_are_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def ping_run(self: LocalExec, _command: str) -> ExecResult:
+            del self
+            return _ok(_PING_DUPES)
 
         monkeypatch.setattr(LocalExec, "run", ping_run)
         resolver = _resolver(_ScriptedExec({"cat /proc/net/arp": _ok(_ARP_TABLE)}))
@@ -281,16 +305,76 @@ class TestPingAndReacquire:
             await release.wait()
             return _ok(_ARP_TABLE)
 
-        resolver = ArpResolver(
+        first = ArpResolver(
             mac="aa:bb:cc:dd:ee:ff",
             exec_fn=slow_exec,
             cache_key="local",
         )
-        first = asyncio.create_task(resolver.resolve())
+        second = ArpResolver(
+            mac="aa:bb:cc:dd:ee:ff",
+            exec_fn=slow_exec,
+            cache_key="local",
+        )
+        first_task = asyncio.create_task(first.resolve())
         await started.wait()
-        second = asyncio.create_task(resolver.resolve())
+        second_task = asyncio.create_task(second.resolve())
         await asyncio.sleep(0)
         release.set()
-        assert await first == {"ip": "10.0.0.50"}
-        assert await second == {"ip": "10.0.0.50"}
+        assert await first_task == {"ip": "10.0.0.50"}
+        assert await second_task == {"ip": "10.0.0.50"}
         assert calls == 1
+
+    async def test_cancelled_refresh_does_not_strand_a_sibling(self) -> None:
+        first_entered = asyncio.Event()
+        release_first = asyncio.Event()
+        calls = 0
+
+        async def gated_exec(_command: str) -> ExecResult:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_entered.set()
+                await release_first.wait()
+            return _ok(_ARP_TABLE)
+
+        first = ArpResolver(
+            mac="aa:bb:cc:dd:ee:ff",
+            exec_fn=gated_exec,
+            cache_key="shared",
+        )
+        second = ArpResolver(
+            mac="aa:bb:cc:dd:ee:ff",
+            exec_fn=gated_exec,
+            cache_key="shared",
+        )
+        first_task = asyncio.create_task(first.resolve())
+        await first_entered.wait()
+        second_task = asyncio.create_task(second.resolve())
+        await asyncio.sleep(0)
+        first_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_task
+        release_first.set()
+        assert await asyncio.wait_for(second_task, timeout=1) == {"ip": "10.0.0.50"}
+        assert calls == 2
+
+    async def test_failed_table_read_does_not_leak_an_unretrieved_future(self) -> None:
+        loop = asyncio.get_running_loop()
+        leaked: list[dict[str, Any]] = []
+
+        def handler(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+            leaked.append(context)
+
+        previous = loop.get_exception_handler()
+        loop.set_exception_handler(handler)
+        try:
+            exec_fn = _ScriptedExec(
+                {"cat /proc/net/arp": ExecResult(stdout="", stderr="nope", exit_code=1)}
+            )
+            with pytest.raises(ArpResolutionFailure, match="not readable"):
+                await _resolver(exec_fn).resolve()
+            gc.collect()
+            await asyncio.sleep(0)
+            assert leaked == []
+        finally:
+            loop.set_exception_handler(previous)
