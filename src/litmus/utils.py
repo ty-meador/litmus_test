@@ -17,7 +17,7 @@ from typing import Any, cast, final
 
 from litmus.artifacts import Artifact
 from litmus.errors import ExternalIntegrationFailure, FrameworkContractViolation, TestFailure
-from litmus.executor import ExecResult, LocalExec
+from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, ExecResult, LocalExec
 from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
 from litmus.remote import RemoteInterface
@@ -350,6 +350,7 @@ class TestUtils:
         env_deny: Iterable[str] | None = None,
         logger: logging.Logger | None = None,
         artifact_root: str | Path | None = None,
+        output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
         _integration_hooks: IntegrationHooks | None = None,
     ) -> None:
         """Create an unscoped run seed; lifecycle execution creates node views.
@@ -369,6 +370,9 @@ class TestUtils:
             logger: Logging sink beneath the per-node scope adapter.
             artifact_root: Directory for point-in-time evidence. Defaults to the
                 ``LITMUS_ARTIFACT_ROOT`` environment snapshot, then ``./artifacts``.
+            output_budget: Combined stdout+stderr ceiling in bytes for every
+                ``exec`` this run issues, local or SSH. Defaults to
+                ``DEFAULT_EXEC_OUTPUT_BUDGET`` (4 MiB).
         """
         self._ctx = {} if ctx is None else ctx
         self._base_logger = LOGGER if logger is None else logger
@@ -395,7 +399,7 @@ class TestUtils:
                 "LITMUS_ARTIFACT_ROOT", Path.cwd() / "artifacts"
             )
         self._artifact_store = _ArtifactStore(configured_artifact_root)
-        self._local_exec = LocalExec()
+        self._local_exec = LocalExec(output_budget=output_budget)
         self._transports = _RunTransports(self._local_exec)
         self._integration_hooks = (
             IntegrationHooks() if _integration_hooks is None else _integration_hooks
@@ -404,6 +408,7 @@ class TestUtils:
             self._local_exec.run,
             logger=self._logger,
             on_open=self._transports.register,
+            output_budget=self._local_exec.output_budget,
         )
         self._signal = RunSignal(RunAbort())
 
@@ -469,8 +474,10 @@ class TestUtils:
         (including after `cancel_in_flight`) settles the same way, with the
         protocol error on stderr — `RemoteInterface.exec` still raises
         `ConnectionError` internally; this method is the author-facing surface
-        and stays total. `CancelledError` still propagates: that is TaskGroup
-        teardown, not a command outcome.
+        and stays total. Hitting the output budget terminates the command and
+        settles with `truncated=True`; that is evidence, not an exception.
+        `CancelledError` still propagates: that is TaskGroup teardown, not a
+        command outcome.
         """
         self._logger.info("attempting to run command >%s<", command)
         try:
@@ -480,6 +487,12 @@ class TestUtils:
         if result.stderr:
             self._logger.error("stderr: \n%s", result.stderr)
         self._logger.info("exit code: %s", result.exit_code)
+        if result.truncated:
+            self._logger.warning(
+                "exec output truncated: captured %s bytes (budget %s)",
+                result.captured_bytes,
+                self._local_exec.output_budget,
+            )
         self._logger.info("stdout: \n%s", result.stdout)
         return result
 
@@ -664,6 +677,7 @@ class TestUtils:
             inherited=inherited,
             logger=scoped._logger,
             on_open=self._transports.register,
+            output_budget=self._local_exec.output_budget,
         )
         scoped._signal = RunSignal(run_abort, audit_signal)
         return scoped
