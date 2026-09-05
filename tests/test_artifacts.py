@@ -93,7 +93,7 @@ class TestCaptureArtifact:
         assert len(captured_paths) == 1
         artifact_path = captured_paths[0]
         assert artifact_path.is_absolute()
-        assert artifact_path.parent == tmp_path
+        assert artifact_path.parent.parent == tmp_path
         assert artifact_path.name.startswith("pre-flash.hardware-survey.")
         assert artifact_path.suffix == ".artifact"
 

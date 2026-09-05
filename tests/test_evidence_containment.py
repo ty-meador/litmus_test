@@ -38,7 +38,9 @@ class TestEvidenceContainment:
 
         assert result.state is State.PASS
         written = [path for path in (tmp_path / "artifacts").rglob("*") if path.is_file()]
-        assert len(written) == 1
+        assert len([path for path in written if path.suffix == ".artifact"]) == 1
+        assert len([path for path in written if path.name == "timeline.log"]) == 1
+        assert len([path for path in written if path.name == "timeline.jsonl"]) == 1
         assert checkout_evidence() == before
 
     def test_guard_snapshot_sees_a_file_written_into_the_checkout(
