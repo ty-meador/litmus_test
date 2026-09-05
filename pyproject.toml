@@ -102,7 +102,7 @@ output = ".coverage/cobertura.xml"
 # tools/coverage_floor.py after the suite runs. Ratchet-only, like fail_under.
 [tool.litmus.coverage.floors]
 "src/litmus/verdict.py" = 100.0
-"src/litmus/base.py" = 91.2
+"src/litmus/base.py" = 91.8
 "src/litmus/lifecycle.py" = 97.9
 "src/litmus/executor.py" = 84.0
 "src/litmus/timeline.py" = 97.8
