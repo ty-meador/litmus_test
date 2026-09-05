@@ -36,11 +36,12 @@ static analysis.
 
 1. **Pass** — a test method returned the `PASS` sentinel. The check is `result is PASS` — identity, not equality. Nothing else can forge it.
 2. **Fail** — a test method raised a `TestFailure` (or subclass): the DUT produced a verdict and the verdict was negative. OR the developer didn't model a failure mode: a plain exception → BUG-signaled Fail.
-3. **Aborted** — no verdict was produced. Peer to Pass/Fail, **NOT** a flavor of failure. Two causes:
-   - **Harness-level:** a `before_each`/`after_each` integration hook threw; the error is wrapped as `ExternalIntegrationFailure` and the run halts before a verdict could be produced.
+3. **Aborted** — no verdict was produced. Peer to Pass/Fail, **NOT** a flavor of failure. Three causes:
+   - **Harness-level (integration):** a `before_each`/`after_each` integration hook threw; the error is wrapped as `ExternalIntegrationFailure` and the run halts before a verdict could be produced.
+   - **Harness-level (operator):** SIGINT or SIGTERM arrived while a run was live; the failure is `OperatorInterrupt` so the Floor Technician reads that the operator stopped the rack. The same run-abort path fires as a hook throw: Aborted everywhere, transports hard-closed, `RunResult` returned.
    - **Node-local:** a test method returned anything other than the `PASS` sentinel — `None` fall-through or an explicit wrong value (`MissingVerdict`). No verdict exists, so the framework refuses to forge Fail (or Pass) on its behalf. Siblings are unaffected. *(Deliberate deviation from the TypeScript original, which folded this into the bug/Fail path.)*
 
-**Developer obligation:** Recognize the taxonomy. A `TestFailure` means "the DUT failed a check"; an `ExternalIntegrationFailure` means "the harness around the test broke." Never conflate them — the Floor Technician's recovery protocol depends on knowing which.
+**Developer obligation:** Recognize the taxonomy. A `TestFailure` means "the DUT failed a check"; an `ExternalIntegrationFailure` means "the harness around the test broke"; an `OperatorInterrupt` means "the operator stopped the rack." Never conflate them — the Floor Technician's recovery protocol depends on knowing which. A `KeyboardInterrupt` raised from suite code is not an operator signal: the child boundary still passes it through unrecorded.
 
 **Framework obligation:** When a descendant's hook throws, the `ExternalIntegrationFailure` propagates up through every ancestor class-intact. Sequences and groups do not rewrap it. Every ancestor's state cascades to Aborted.
 
@@ -109,6 +110,7 @@ the record identifies the exact clock and budget without requiring the suite sou
 2. **Hardware lying** — survey artifacts expose mismatch between claimed and actual state.
 3. **Test case bug** — a plain exception from a test method or from `configure()` → all failure modes modeled by the developer must raise `TestFailure`. Anything else raised is a bug. Full stop. A missing verdict (non-PASS return) is likewise a contract violation, rendered as node-local Aborted because no verdict exists to report.
 4. **External integration failure** — `ExternalIntegrationFailure` from a `before_each`/`after_each` hook. State = Aborted.
+5. **Operator interrupt** — `OperatorInterrupt` from SIGINT/SIGTERM during a live `run()`. State = Aborted. The failure names the operator and the signal.
 
 **Developer obligation:** Use the right signal for the right category.
 - Raise `TestFailure` for any verdict — from a test method or from `configure()` — never a plain exception.
@@ -152,7 +154,7 @@ the record identifies the exact clock and budget without requiring the suite sou
     of scope; the reserved slot must not be mistaken for an implemented statistical
     process-control model.
 - Every `RunResult` includes `ancestor_names: list[str]` (path from root) and `bread_crumbs: str` (joined for display), plus a `summary_tree` snapshot of the node's subtree state at completion. Downstream integrators can reconstruct the full Inspector tree from the root's RunResult alone.
-- `TestFailure` and `ExternalIntegrationFailure` both implement `to_json()`. Serializing a `RunResult` produces clean JSON for downstream integrators without any custom serializer.
+- `TestFailure`, `ExternalIntegrationFailure`, and `OperatorInterrupt` all implement `to_json()`. Serializing a `RunResult` produces clean JSON for downstream integrators without any custom serializer.
 - **Provenance.** Every executed node records one `exec routing: <where> (<why>)` line — `where` is `local` or `via <chain>`, `why` names the call that put it there (`declared via use_shell`, `inherited from parent`, `declared via use_shell(inherit=False)`). A node that never declared a route renders `where` alone. The line is emitted after `configure` returns, since `use_shell` lives there and the route is not final until it does.
 - Every transport the router opens records its provenance lines as it comes up. SSH renders `ssh connect: <user>@<host>:<port> auth=<label> via=<chain>`; `via=direct` means the connection dials out from the test host itself. When host-key verification is skipped, SSH records a second line, `ssh host-key verification skipped: <host>:<port>`, so the Floor Technician can see that verification was off without opening the suite.
 - Via chains are rendered **in full and test-host-first** (`bastion -> edge -> dut`), never summarized to the last hop.
@@ -241,7 +243,7 @@ leave point-in-time artifacts at the configured base root; authored suites use `
 - `before_each` fires immediately before a node's lifecycle begins.
 - `after_each` fires immediately after a node's lifecycle completes, receiving the node's `RunResult`.
 - **Pair invariant:** `after_each` fires EVEN IF `before_each` threw. An integrator writing a "started" row in `before_each` always gets a "finished" row in `after_each` — no orphan records in the external system.
-- Throw from either hook → framework wraps as `ExternalIntegrationFailure` → the shared run-abort fires → every in-flight framework→user await across the tree unwinds at its own framework boundary → every in-flight transport is closed via `cancel_in_flight()` → enclosing node transitions to Aborted. The integrator's own error class arrives intact as the failure's cause.
+- Throw from either hook → framework wraps as `ExternalIntegrationFailure` → the shared run-abort fires → every in-flight framework→user await across the tree unwinds at its own framework boundary → every in-flight transport is closed via `cancel_in_flight()` → enclosing node transitions to Aborted. The integrator's own error class arrives intact as the failure's cause. An operator SIGINT/SIGTERM during a live run takes this same halt path, with `OperatorInterrupt` as the reason.
 - Hooks receive a deliberately narrow context (`BeforeEachContext` / `AfterEachContext`): node name, ancestor chain, breadcrumbs, scoped logger, env snapshot. NOT `exec`, `get_shell`, or `capture_artifact`. Integration hooks are for external coordination, not for exercising the hardware.
 - Unpaired registration (only `before_each` or only `after_each`) emits a loud warning at run start unless `allow_unpaired_hooks=True` is passed. The pairing enforces the started/finished symmetry.
 
@@ -250,7 +252,9 @@ leave point-in-time artifacts at the configured base root; authored suites use `
 ---
 
 ## In-Flight Termination Contract
-**Framework obligation:** When the run-level abort fires (integration hook throws anywhere in the tree), every framework-managed transport is closed HARD immediately — not at the next polling boundary. Cancelling the coroutine is not enough; the framework cancels the RESOURCE.
+**Framework obligation:** When the run-level abort fires (an integration hook throws anywhere in the tree, or the operator sends SIGINT/SIGTERM to a live run), every framework-managed transport is closed HARD immediately — not at the next polling boundary. Cancelling the coroutine is not enough; the framework cancels the RESOURCE.
+
+The operator-signal handler is installed by `run()`/`main()` only while that run is live, on the running loop, and removed on the way out so a library caller never leaks it. The first signal fires `RunAbort` with an `OperatorInterrupt` and hard-closes transports; a second signal inside the finalization window exits the process immediately.
 
 - `SshInterface` destroys its underlying asyncssh connection, closing every open channel and failing every pending `exec` stream at the socket level.
 - Recursively propagates through `via` chains — a jump-host tunnel and everything tunneled through it collapse together.

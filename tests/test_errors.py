@@ -9,6 +9,7 @@ from litmus import (
     FrameworkContractViolation,
     LitmusError,
     MissingVerdict,
+    OperatorInterrupt,
     TestFailure,
 )
 from litmus.errors import MISSING
@@ -60,6 +61,22 @@ class TestTaxonomyShape:
         assert not isinstance(missing, TestFailure)
         assert missing.is_bug is True
         assert missing.returned is None
+
+    def test_operator_interrupt_names_the_operator_and_is_not_a_test_failure(self) -> None:
+        failure = OperatorInterrupt(2)
+        assert isinstance(failure, LitmusError)
+        assert not isinstance(failure, TestFailure)
+        assert not isinstance(failure, ExternalIntegrationFailure)
+        assert failure.is_bug is False
+        assert "operator" in failure.fail_message
+        assert failure.signal_name == "SIGINT"
+        assert failure.signum == 2
+
+    def test_an_unknown_signum_still_names_the_operator(self) -> None:
+        failure = OperatorInterrupt(99)
+        assert failure.signal_name == "signal 99"
+        assert "operator" in failure.fail_message
+        assert "signal 99" in failure.fail_message
 
 
 class TestBugSignal:
@@ -162,6 +179,17 @@ class TestJsonSerialization:
             TestFailure("odd value", received={1: "non-string key"}).to_json()
         )
         assert isinstance(payload["received"], str)
+
+    def test_an_operator_interrupt_serializes_the_signal_and_names_the_operator(
+        self,
+    ) -> None:
+        payload = self._round_trip(OperatorInterrupt(15).to_json())
+        assert payload["name"] == "OperatorInterrupt"
+        assert payload["state"] == "Aborted"
+        assert payload["operator"] is True
+        assert payload["signal"] == "SIGTERM"
+        assert "operator" in payload["fail_message"]
+        assert "SIGTERM" in payload["fail_message"]
 
     def test_nested_serializable_containers_pass_through(self) -> None:
         payload = self._round_trip(

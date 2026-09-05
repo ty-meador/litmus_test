@@ -3,8 +3,9 @@
 The public surface. Suite authors need `LitmusTest`, `TestUtils`, `ExecResult`,
 `Artifact`, `PASS`, `Verdict`, and `TestFailure`; the rest of the taxonomy is
 exported because it appears in artifacts and logs, where a reader will follow a
-name back to its meaning. Harness integrators may also import the narrow
-`BeforeEachContext` and `AfterEachContext` surfaces.
+name back to its meaning (`ExternalIntegrationFailure`, `OperatorInterrupt`).
+Harness integrators may also import the narrow `BeforeEachContext` and
+`AfterEachContext` surfaces.
 
 The lifecycle machinery (`litmus.lifecycle`) is deliberately absent. The child
 boundary, its slots, and its policies are the framework's internal organs — a suite
@@ -21,6 +22,7 @@ from litmus.errors import (
     FrameworkContractViolation,
     LitmusError,
     MissingVerdict,
+    OperatorInterrupt,
     TestFailure,
 )
 from litmus.executor import ExecResult
@@ -44,6 +46,7 @@ __all__ = [
     "LitmusError",
     "LitmusTest",
     "MissingVerdict",
+    "OperatorInterrupt",
     "RunResult",
     "SummaryTreeNode",
     "TestFailure",
