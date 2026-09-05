@@ -42,12 +42,19 @@ class SummaryTreeNode:
 
     ``state is None`` means the node was declared but did not run, as can happen to
     later steps in a failed sequence. It is not a fourth terminal state.
+
+    ``log_path`` links this node to its persisted timeline. It is the POSIX path of the
+    node's ``timeline.jsonl`` relative to the run directory, so a copied run directory
+    keeps every link intact. It is ``None`` for a node that never ran and for a node
+    whose records rolled up into an ancestor; an Inspector resolves the latter by
+    walking to the nearest ancestor that carries a path.
     """
 
     name: str
     type: NodeType
     state: State | None
     failure: Failure | None = None
+    log_path: str | None = None
     children: tuple[SummaryTreeNode, ...] = ()
 
     def to_json(self) -> JsonObject:
@@ -57,6 +64,7 @@ class SummaryTreeNode:
             "type": self.type.value,
             "state": None if self.state is None else self.state.value,
             "failure": _failure_json(self.failure),
+            "log_path": self.log_path,
             "children": [child.to_json() for child in self.children],
         }
 
