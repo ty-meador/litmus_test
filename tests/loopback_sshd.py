@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import asyncssh
 import pytest
@@ -127,8 +128,56 @@ class LoopbackSshd:
             except asyncio.CancelledError:
                 process.exit(255)
                 raise
+        elif command.startswith("dump "):
+            remaining = int(command.split()[1])
+            await LoopbackSshd._write_chunks(process, process.stdout, "x", remaining)
+        elif command.startswith("dump-err "):
+            remaining = int(command.split()[1])
+            await LoopbackSshd._write_chunks(process, process.stderr, "y", remaining)
+        elif command.startswith("say-sleep "):
+            _prefix, message, seconds = command.split(" ", 2)
+            del _prefix
+            try:
+                process.stdout.write(message)
+                await asyncio.sleep(float(seconds))
+                process.exit(0)
+            except asyncio.CancelledError:
+                process.exit(255)
+                raise
+            except Exception:
+                with contextlib.suppress(Exception):
+                    process.exit(255)
+        elif command == "flood":
+            await LoopbackSshd._write_chunks(process, process.stdout, "x", None)
         else:
             process.stdout.write(command)
             process.exit(0)
         process.close()
         await process.wait_closed()
+
+    @staticmethod
+    async def _write_chunks(
+        process: asyncssh.SSHServerProcess[str],
+        stream: asyncssh.SSHWriter[str],
+        token: str,
+        remaining: int | None,
+    ) -> None:
+        """Write `token` forever, or `remaining` times, then exit.
+
+        A client that hits its output budget closes the channel mid-write; that
+        must not take the SSH connection down with an unhandled exception.
+        """
+        try:
+            while remaining is None or remaining > 0:
+                take = 1024 if remaining is None else min(remaining, 1024)
+                stream.write(token * take)
+                if remaining is not None:
+                    remaining -= take
+                await asyncio.sleep(0)
+            process.exit(0)
+        except asyncio.CancelledError:
+            process.exit(255)
+            raise
+        except Exception:
+            with contextlib.suppress(Exception):
+                process.exit(255)

@@ -17,6 +17,7 @@ from litmus.errors import (
     TestFailure,
 )
 from litmus.evidence import JsonObject, snapshot_run_data
+from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET
 from litmus.hooks import (
     AfterEachContext,
     AfterEachHook,
@@ -478,12 +479,14 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         allow_unpaired_hooks: bool = False,
         fail_after: float | None = None,
         abort_after: float | None = None,
+        output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
     ) -> RunResult:
         """Execute once, fanning root-owned integration hooks across every node.
 
         ``env_allow`` / ``env_deny`` select which environment variables the run
         publishes; see ``TestUtils`` for the contract. Raises ``ValueError`` when both
-        are given.
+        are given. ``output_budget`` is the combined stdout+stderr ceiling for every
+        ``exec`` this run issues, local or SSH.
         """
         run_budget = _time_budget(
             self.name,
@@ -501,7 +504,13 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             after_each=after_each,
             allow_unpaired=allow_unpaired_hooks,
         )
-        utils = TestUtils(env=env, env_allow=env_allow, env_deny=env_deny, _integration_hooks=hooks)
+        utils = TestUtils(
+            env=env,
+            env_allow=env_allow,
+            env_deny=env_deny,
+            output_budget=output_budget,
+            _integration_hooks=hooks,
+        )
         return await self._execute_run(utils, run_budget)
 
     @final
