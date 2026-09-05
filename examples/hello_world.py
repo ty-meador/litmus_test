@@ -19,7 +19,7 @@ class HelloWorld(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         """Build one leaf whose explicit verdict is Pass."""
-        return self.case("say hello", self._say_hello)
+        return self.test("say hello", self._say_hello)
 
     async def _say_hello(self, utils: TestUtils) -> Verdict:
         if self._greeting:

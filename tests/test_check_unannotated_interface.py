@@ -71,7 +71,7 @@ class TestUnannotatedInterfaceFire:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.case("probe", self._probe)
+                    return self.test("probe", self._probe)
                 async def _probe(self, utils: TestUtils):
                     return PASS
         """
@@ -84,7 +84,7 @@ class TestUnannotatedInterfaceFire:
         source = """
             class Suite(LitmusTest):
                 def build_suite(this) -> LitmusTest:
-                    return this.case(name="probe", test=this._probe)
+                    return this.test(name="probe", fn=this._probe)
                 async def _probe(this, utils: TestUtils) -> object:
                     return PASS
         """
@@ -111,7 +111,7 @@ class TestUnannotatedInterfaceStayQuiet:
                         return attempt > 0
                     return {"ready": await ready(1)}
                 def build_suite(self) -> LitmusTest:
-                    return self.case("probe", self._probe)
+                    return self.test("probe", self._probe)
                 async def _probe(self, utils: TestUtils) -> Verdict:
                     if utils.ctx["ready"]:
                         return PASS
@@ -131,7 +131,7 @@ class TestUnannotatedInterfaceStayQuiet:
                     def render(self, value):
                         return value
                 def build_suite(self) -> LitmusTest:
-                    return self.case("probe", self._probe)
+                    return self.test("probe", self._probe)
                 async def _probe(self, utils: TestUtils) -> Verdict:
                     return PASS
         """
@@ -141,10 +141,10 @@ class TestUnannotatedInterfaceStayQuiet:
         source = """
             class Suite(LitmusTest):
                 def build_suite(self) -> LitmusTest:
-                    return self.group("claims", [
-                        self.case("bare", self._bare),
-                        self.case("qualified", self._qualified),
-                        self.case("forward", self._forward),
+                    return self.parallel("claims", [
+                        self.test("bare", self._bare),
+                        self.test("qualified", self._qualified),
+                        self.test("forward", self._forward),
                     ])
                 async def _bare(self, utils: TestUtils) -> Verdict:
                     return PASS

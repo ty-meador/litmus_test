@@ -38,7 +38,7 @@ class _InconsistentChildren:
 
 
 class TestCompositionFactories:
-    async def test_case_sequence_and_group_compose_with_bound_methods(self) -> None:
+    async def test_test_sequence_and_parallel_compose_with_bound_methods(self) -> None:
         calls: list[tuple[str, LitmusTest]] = []
 
         class Suite(LitmusTest):
@@ -46,10 +46,10 @@ class TestCompositionFactories:
                 return self.sequence(
                     self.name,
                     [
-                        self.case("first claim", self._first_claim),
-                        self.group(
+                        self.test("first claim", self._first_claim),
+                        self.parallel(
                             "independent claims",
-                            [self.case("second claim", self._second_claim)],
+                            [self.test("second claim", self._second_claim)],
                         ),
                     ],
                 )
@@ -74,20 +74,110 @@ class TestCompositionFactories:
 
         with pytest.raises(ContractViolation, match=r"sequence.*at least one child"):
             suite.sequence("sequence", [])
-        with pytest.raises(ContractViolation, match=r"group.*at least one child"):
-            suite.group("group", [])
+        with pytest.raises(ContractViolation, match=r"parallel node.*at least one child"):
+            suite.parallel("parallel", [])
+
+    async def test_leaves_enumerate_at_runtime_by_passing_the_varying_argument(self) -> None:
+        stressed: list[int] = []
+
+        class Compute(LitmusTest):
+            def __init__(self, *, name: str, cpu_count: int) -> None:
+                super().__init__(name=name)
+                self._cpu_count = cpu_count
+
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "stress",
+                    [
+                        self.test(f"cpu{i}_stress", self._cpu_stress, cpu=i)
+                        for i in range(self._cpu_count)
+                    ],
+                )
+
+            async def _cpu_stress(self, utils: object, *, cpu: int) -> Verdict:
+                stressed.append(cpu)
+                return PASS
+
+        outcome = await Compute(name="compute", cpu_count=3).main(TestUtils())
+
+        assert outcome.state is State.PASS
+        leaves = outcome.summary_tree.children[0].children
+        assert [leaf.name for leaf in leaves] == ["cpu0_stress", "cpu1_stress", "cpu2_stress"]
+        assert all(leaf.state is State.PASS for leaf in leaves)
+        assert sorted(stressed) == [0, 1, 2]
+
+    async def test_positional_arguments_reach_the_method_after_utils(self) -> None:
+        seen: list[tuple[str, float]] = []
+
+        class Rails(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.sequence(
+                    "rails",
+                    [
+                        self.test("v12", self._rail, "12V", 0.5, fail_after=5.0),
+                        self.test("v5", self._rail, "5V", limit=0.25),
+                    ],
+                )
+
+            async def _rail(self, utils: object, rail: str, limit: float) -> Verdict:
+                seen.append((rail, limit))
+                return PASS
+
+        outcome = await Rails(name="psu").main(TestUtils())
+
+        assert outcome.state is State.PASS
+        assert seen == [("12V", 0.5), ("5V", 0.25)]
+
+    def test_arguments_that_do_not_fit_the_method_fail_at_composition(self) -> None:
+        suite = LitmusTest(name="rack")
+
+        async def probe(_utils: object, *, cpu: int) -> Verdict:
+            del cpu
+            return PASS
+
+        with pytest.raises(
+            ContractViolation, match=r"missing a required keyword-only argument: 'cpu'"
+        ):
+            suite.test("no cpu", probe)
+        with pytest.raises(ContractViolation, match=r"unexpected keyword argument 'core'"):
+            suite.test("wrong name", probe, cpu=0, core=0)
+        with pytest.raises(ContractViolation, match=r"too many positional arguments"):
+            suite.test("extra", probe, 1, 2)
+
+    def test_budgets_are_the_leaf_s_and_never_reach_the_method(self) -> None:
+        suite = LitmusTest(name="rack")
+
+        async def clashes(_utils: object, *, fail_after: float) -> Verdict:
+            del fail_after
+            return PASS
+
+        with pytest.raises(
+            ContractViolation, match=r"missing a required keyword-only argument: 'fail_after'"
+        ):
+            suite.test("clash", clashes, fail_after=1.0)
+
+    def test_test_rejects_a_function_that_is_not_a_coroutine_function(self) -> None:
+        suite = LitmusTest(name="rack")
+
+        def plain(_utils: object) -> Verdict:
+            return PASS
+
+        with pytest.raises(TypeError, match="must be defined with async def"):
+            suite.test("plain", plain)  # pyright: ignore[reportArgumentType]
+        with pytest.raises(TypeError, match="must be defined with async def"):
+            suite.test("lambda", lambda _utils: PASS)  # pyright: ignore[reportArgumentType, reportUnknownLambdaType]
 
     async def test_internal_nodes_report_direct_build_as_framework_bugs(self) -> None:
         async def passes(_utils: object) -> Verdict:
             return PASS
 
         suite = LitmusTest(name="rack")
-        case = suite.case("case", passes)
+        leaf = suite.test("leaf", passes)
         nodes = (
-            (case, "an internal case has no child suite"),
-            (suite.group("group", [case]), "an internal group has no child suite"),
+            (leaf, "an internal test has no child suite"),
+            (suite.parallel("parallel", [leaf]), "an internal parallel node has no child suite"),
             (
-                suite.sequence("sequence", [case]),
+                suite.sequence("sequence", [leaf]),
                 "an internal sequence has no child suite",
             ),
         )
@@ -130,9 +220,9 @@ class TestSequenceExecution:
                 return self.sequence(
                     "dependent claims",
                     [
-                        self.case("first claim", self._first_claim),
-                        self.case("failing claim", self._failing_claim),
-                        self.case("unreachable claim", self._unreachable_claim),
+                        self.test("first claim", self._first_claim),
+                        self.test("failing claim", self._failing_claim),
+                        self.test("unreachable claim", self._unreachable_claim),
                     ],
                 )
 
@@ -163,8 +253,8 @@ class TestSequenceExecution:
                 return self.sequence(
                     "dependent claims",
                     [
-                        self.case("first claim", self._first_claim),
-                        self.case("second claim", self._second_claim),
+                        self.test("first claim", self._first_claim),
+                        self.test("second claim", self._second_claim),
                     ],
                 )
 

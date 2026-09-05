@@ -80,7 +80,7 @@ class _OneClaim(LitmusTest):
         self._claim_override = claim
 
     def build_suite(self) -> LitmusTest:
-        return self.case(
+        return self.test(
             "claim",
             self._claim,
             fail_after=self._claim_fail_after,
@@ -127,9 +127,9 @@ class TestTimeBudgetValidation:
             return PASS
 
         compose = (
-            (lambda: root.case("invalid", claim, fail_after=10**1000))
+            (lambda: root.test("invalid", claim, fail_after=10**1000))
             if declared == "fail_after"
-            else (lambda: root.case("invalid", claim, abort_after=10**1000))
+            else (lambda: root.test("invalid", claim, abort_after=10**1000))
         )
 
         with pytest.raises(ContractViolation, match="positive finite"):
@@ -161,10 +161,10 @@ class TestTimeBudgetValidation:
             return PASS
 
         with pytest.raises(ContractViolation, match="mutually exclusive"):
-            root.case("case", claim, fail_after=1, abort_after=1)
-        child = root.case("child", claim)
+            root.test("case", claim, fail_after=1, abort_after=1)
+        child = root.test("child", claim)
         with pytest.raises(ContractViolation, match="mutually exclusive"):
-            root.group("group", [child], fail_after=1, abort_after=1)
+            root.parallel("group", [child], fail_after=1, abort_after=1)
         with pytest.raises(ContractViolation, match="mutually exclusive"):
             root.sequence("sequence", [child], fail_after=1, abort_after=1)
 
@@ -292,11 +292,11 @@ class TestTimeBudgetStatesAndEvidence:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "claims",
                     [
-                        self.case("parked", self._parked, abort_after=_BUDGET),
-                        self.case("sibling", self._sibling),
+                        self.test("parked", self._parked, abort_after=_BUDGET),
+                        self.test("sibling", self._sibling),
                     ],
                 )
 
@@ -374,15 +374,15 @@ class TestTimeBudgetStatesAndEvidence:
 
 
 class TestTimeBudgetWindowsAndComposition:
-    async def test_unmarked_caller_cancellation_propagates_through_a_group(self) -> None:
+    async def test_unmarked_caller_cancellation_propagates_through_a_parallel_node(self) -> None:
         both_started = asyncio.Event()
         started = 0
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "group",
-                    [self.case("one", self._park), self.case("two", self._park)],
+                    [self.test("one", self._park), self.test("two", self._park)],
                 )
 
             async def _park(self, utils: TestUtils) -> Verdict:
@@ -438,7 +438,7 @@ class TestTimeBudgetWindowsAndComposition:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unreached", self._claim)
+                return self.test("unreached", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -462,7 +462,7 @@ class TestTimeBudgetWindowsAndComposition:
     async def test_cleanup_and_all_root_owned_integration_hooks_are_excluded(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -497,11 +497,11 @@ class TestTimeBudgetWindowsAndComposition:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "bounded group",
                     [
-                        self.case("slow hook", self._pass),
-                        self.case("parked", self._park),
+                        self.test("slow hook", self._pass),
+                        self.test("parked", self._park),
                     ],
                     fail_after=0.05,
                 )
@@ -543,7 +543,7 @@ class TestTimeBudgetWindowsAndComposition:
 
         class FinishesThenCleans(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("passes", self._pass)
+                return self.test("passes", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -556,9 +556,9 @@ class TestTimeBudgetWindowsAndComposition:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "bounded group",
-                    [FinishesThenCleans(name="cleaner"), self.case("parked", self._park)],
+                    [FinishesThenCleans(name="cleaner"), self.test("parked", self._park)],
                     fail_after=0.05,
                 )
 
@@ -581,19 +581,19 @@ class TestTimeBudgetWindowsAndComposition:
         assert cut_after < 0.2
         assert result.state is State.FAIL
 
-    async def test_group_cut_preserves_settled_sibling_and_sequence_leaves_pending_tail(
+    async def test_parallel_cut_preserves_settled_sibling_and_sequence_leaves_pending_tail(
         self,
     ) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                group = self.group(
+                group = self.parallel(
                     "bounded group",
-                    [self.case("settled", self._pass), self.case("parked", self._park)],
+                    [self.test("settled", self._pass), self.test("parked", self._park)],
                     fail_after=_BUDGET,
                 )
                 sequence = self.sequence(
                     "bounded sequence",
-                    [self.case("parked first", self._park), self.case("never", self._pass)],
+                    [self.test("parked first", self._park), self.test("never", self._pass)],
                     abort_after=_BUDGET,
                 )
                 return self.sequence("root sequence", [group, sequence])
@@ -619,7 +619,7 @@ class TestTimeBudgetWindowsAndComposition:
             def build_suite(self) -> LitmusTest:
                 return self.sequence(
                     "bounded sequence",
-                    [self.case("parked first", self._park), self.case("never", self._pass)],
+                    [self.test("parked first", self._park), self.test("never", self._pass)],
                     abort_after=_BUDGET,
                 )
 
@@ -632,11 +632,11 @@ class TestTimeBudgetWindowsAndComposition:
     async def test_settled_aborted_child_outranks_later_parent_fail_cut(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "bounded group",
                     [
-                        self.case("aborts first", self._park, abort_after=_BUDGET),
-                        self.case("still parked", self._park),
+                        self.test("aborts first", self._park, abort_after=_BUDGET),
+                        self.test("still parked", self._park),
                     ],
                     fail_after=_BUDGET * 2,
                 )
@@ -672,7 +672,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("parked", self._park)
+                return self.test("parked", self._park)
 
             async def _park(self, utils: TestUtils) -> Verdict:
                 await utils.exec("park")
@@ -706,7 +706,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("parked", self._park)
+                return self.test("parked", self._park)
 
             async def _park(self, utils: TestUtils) -> Verdict:
                 await utils.exec("park")
@@ -734,7 +734,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._pass)
+                return self.test("unused", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -747,7 +747,7 @@ class TestTimeBudgetResourceCancellation:
 
         class Consumer(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("unreached", self._pass)
+                return self.test("unreached", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -785,7 +785,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._pass)
+                return self.test("unused", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -799,7 +799,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._pass)
+                return self.test("unused", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -811,7 +811,7 @@ class TestTimeBudgetResourceCancellation:
 
         class Consumer(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("unreached", self._pass)
+                return self.test("unreached", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -848,7 +848,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._pass)
+                return self.test("unused", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -880,7 +880,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._pass)
+                return self.test("unused", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -915,7 +915,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("unused", self._pass)
+                return self.test("unused", self._pass)
 
             async def _pass(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -928,7 +928,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("parked", self._park)
+                return self.test("parked", self._park)
 
             async def _park(self, utils: TestUtils) -> Verdict:
                 await utils.exec("park")
@@ -972,7 +972,7 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("parked", self._park)
+                return self.test("parked", self._park)
 
             async def _park(self, utils: TestUtils) -> Verdict:
                 await utils.exec("sleep 30")

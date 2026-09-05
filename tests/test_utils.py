@@ -40,6 +40,7 @@ class TestTestUtilsPublicSurface:
 
         assert callable(utils.exec)
         assert callable(utils.wait_for)
+        assert callable(utils.get_arp_resolver)
         assert isinstance(utils.ctx, dict)
         assert utils.logger.scope == ()
         assert not utils.signal.fired
@@ -51,7 +52,7 @@ class TestTestUtilsInjection:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 received.append(utils)
@@ -77,8 +78,8 @@ class TestTestUtilsInjection:
                 return self.sequence(
                     "claims",
                     [
-                        self.case("first", self._first),
-                        self.case("second", self._second),
+                        self.test("first", self._first),
+                        self.test("second", self._second),
                     ],
                 )
 
@@ -161,7 +162,7 @@ class TestWaitForContract:
 
             def build_suite(self) -> LitmusTest:
                 built.append("built")
-                return self.case("unreachable", self._unreachable)
+                return self.test("unreachable", self._unreachable)
 
             async def _unreachable(self, utils: TestUtils) -> Verdict:
                 return PASS
@@ -176,7 +177,7 @@ class TestWaitForContract:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("wait for stress test", self._wait_for_stress_test)
+                return self.test("wait for stress test", self._wait_for_stress_test)
 
             async def _wait_for_stress_test(self, utils: TestUtils) -> Verdict:
                 await utils.wait_for(
@@ -297,7 +298,7 @@ class TestUtilsExecNeverThrows:
     async def test_a_suite_method_inspects_failure_and_decides_the_verdict(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("service", self._service)
+                return self.test("service", self._service)
 
             async def _service(self, utils: TestUtils) -> Verdict:
                 result = await utils.exec("exit 1")
@@ -315,7 +316,7 @@ class TestUtilsExecNeverThrows:
     async def test_exec_logs_land_on_the_leaf(self, caplog: pytest.LogCaptureFixture) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("probe", self._probe)
+                return self.test("probe", self._probe)
 
             async def _probe(self, utils: TestUtils) -> Verdict:
                 await utils.exec("echo observed")
@@ -395,7 +396,7 @@ class TestUtilsExecNeverThrows:
 
 class _EnvSuite(LitmusTest):
     def build_suite(self) -> LitmusTest:
-        return self.group("claims", [self.case("probe", self._probe)])
+        return self.parallel("claims", [self.test("probe", self._probe)])
 
     async def _probe(self, _utils: TestUtils) -> Verdict:
         return PASS
@@ -521,7 +522,7 @@ class _OverflowDut(LitmusTest):
     """One DUT whose probe dumps past the run's exec output budget."""
 
     def build_suite(self) -> LitmusTest:
-        return self.case("overflow", self._overflow)
+        return self.test("overflow", self._overflow)
 
     async def _overflow(self, utils: TestUtils) -> Verdict:
         result = await utils.exec("head -c 65536 /dev/zero")
@@ -544,7 +545,7 @@ class _OverflowRack(LitmusTest):
         )
 
     def build_suite(self) -> LitmusTest:
-        return self.group("rack DUTs", self._duts)
+        return self.parallel("rack DUTs", self._duts)
 
 
 async def _run_overflow_rack() -> None:
@@ -573,7 +574,7 @@ class TestUtilsOutputBudget:
     async def test_the_scoped_log_names_truncation(self, caplog: pytest.LogCaptureFixture) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("probe", self._probe)
+                return self.test("probe", self._probe)
 
             async def _probe(self, utils: TestUtils) -> Verdict:
                 await utils.exec("head -c 4096 /dev/zero")

@@ -67,7 +67,7 @@ class _ParkedSuite(LitmusTest):
         self.release_cleanup = asyncio.Event() if release_cleanup is None else release_cleanup
 
     def build_suite(self) -> LitmusTest:
-        return self.case("probe", self._probe)
+        return self.test("probe", self._probe)
 
     async def _probe(self, utils: TestUtils) -> Verdict:
         del utils
@@ -83,7 +83,7 @@ class _ParkedSuite(LitmusTest):
 
 class _PassingSuite(LitmusTest):
     def build_suite(self) -> LitmusTest:
-        return self.case("ok", self._ok)
+        return self.test("ok", self._ok)
 
     async def _ok(self, utils: TestUtils) -> Verdict:
         del utils
@@ -97,11 +97,11 @@ class _GroupedParkedSuite(LitmusTest):
         self._halt_started = halt_started
 
     def build_suite(self) -> LitmusTest:
-        return self.group(
+        return self.parallel(
             "parallel",
             [
-                self.case("slow", self._slow),
-                self.case("halt", self._halt),
+                self.test("slow", self._slow),
+                self.test("halt", self._halt),
             ],
         )
 
@@ -161,7 +161,7 @@ class TestOperatorInterruptTaxonomyOnALiveRun:
         assert _summary_states(result)["probe"] is State.ABORTED
         assert _loop_signal_handlers() == handlers_before
 
-    async def test_every_node_in_a_group_is_aborted_with_the_same_operator_failure(
+    async def test_every_node_in_a_parallel_node_is_aborted_with_the_same_operator_failure(
         self,
     ) -> None:
         parked = asyncio.Event()
@@ -207,7 +207,7 @@ class TestHandlerScope:
 
         class Boom(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("boom", self._boom)
+                return self.test("boom", self._boom)
 
             async def _boom(self, utils: TestUtils) -> Verdict:
                 del utils
@@ -276,7 +276,7 @@ class TestOperatorAbortHardClosesTransports:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.case("flash", self._flash)
+                return self.test("flash", self._flash)
 
             async def _flash(self, utils: TestUtils) -> Verdict:
                 in_flight.set()
@@ -329,7 +329,7 @@ class _SshDut(LitmusTest):
         return {}
 
     def build_suite(self) -> LitmusTest:
-        return self.case("flash", self._flash)
+        return self.test("flash", self._flash)
 
     async def _flash(self, utils: TestUtils) -> Verdict:
         await self._coordinator.rendezvous(self._dut_id)
@@ -368,7 +368,7 @@ class _SshRack(LitmusTest):
         )
 
     def build_suite(self) -> LitmusTest:
-        return self.group("rack DUTs", self._duts)
+        return self.parallel("rack DUTs", self._duts)
 
 
 class _AbortCounter:

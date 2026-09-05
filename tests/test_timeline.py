@@ -22,7 +22,7 @@ class TestPersistedTimeline:
         class Suite(LitmusTest):
             def __init__(self, *, name: str) -> None:
                 super().__init__(name=name)
-                self._snapshot_case = self.case("snapshot", self._snapshot)
+                self._snapshot_case = self.test("snapshot", self._snapshot)
                 self._checks = self.sequence("checks", [self._snapshot_case])
 
             def build_suite(self) -> LitmusTest:
@@ -86,7 +86,7 @@ class TestPersistedTimeline:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("wait", self._wait)
+                return self.test("wait", self._wait)
 
             async def _wait(self, utils: TestUtils) -> Verdict:
                 utils.logger.info("durable before cancellation")
@@ -112,7 +112,7 @@ class TestPersistedTimeline:
     async def test_unreached_discrete_node_opens_no_log(self, tmp_path: Path) -> None:
         class Later(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("later claim", self._claim)
+                return self.test("later claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 if utils.logger.scope:
@@ -125,7 +125,7 @@ class TestPersistedTimeline:
                 self._later = Later(name="later")
                 self._checks = self.sequence(
                     "checks",
-                    [self.case("stop", self._stop), self._later],
+                    [self.test("stop", self._stop), self._later],
                 )
 
             def build_suite(self) -> LitmusTest:
@@ -148,7 +148,7 @@ class TestPersistedTimeline:
     ) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 if utils.env.get("SECRET") == "published":
@@ -194,7 +194,7 @@ class TestPersistedTimeline:
     ) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", self._claim)
+                return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
                 utils.logger.info(message, *args)
@@ -236,7 +236,7 @@ class TestPersistedTimeline:
         class Suite(LitmusTest):
             def __init__(self, *, name: str) -> None:
                 super().__init__(name=name)
-                self._claim = self.case("claim", passing_case)
+                self._claim = self.test("claim", passing_case)
                 self._checks = self.sequence("checks", [self._claim], discrete_log_file=False)
 
             def build_suite(self) -> LitmusTest:
@@ -257,7 +257,7 @@ class TestPersistedTimeline:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.case("claim", passing_case)
+                return self.test("claim", passing_case)
 
         suite = Suite(name="rack", discrete_log_file=False)
         result = await suite.run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
@@ -266,15 +266,15 @@ class TestPersistedTimeline:
         assert suite.log_path is not None
         assert _records(suite.log_path)
 
-    def test_sequence_and_group_can_roll_up_explicitly(self) -> None:
+    def test_sequence_and_parallel_can_roll_up_explicitly(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
                 raise AssertionError
 
         suite = Suite(name="rack")
-        case = suite.case("claim", self._passing_case)
+        case = suite.test("claim", self._passing_case)
         sequence = suite.sequence("sequence", [case], discrete_log_file=False)
-        group = suite.group("group", [case], discrete_log_file=False)
+        group = suite.parallel("group", [case], discrete_log_file=False)
 
         assert case.discrete_log_file is False
         assert sequence.discrete_log_file is False
