@@ -23,7 +23,7 @@ class SeededBlade(LitmusTest):
         return {}
 
     def build_suite(self) -> LitmusTest:
-        claims = [self.case("temperature", self._temperature)]  # seed: litmus/pure-build-suite
+        claims = [self.case("temperature", lambda u: self._temperature(u))]  # two seeds
         return self.sequence(self.name, claims)
 
     async def _temperature(self, _utils: TestUtils) -> Verdict:
@@ -36,3 +36,11 @@ class SeededBlade(LitmusTest):
 
     def _annotation_seed(self, value) -> None:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]  # noqa: ANN001
         del value  # seed: litmus/unannotated-interface
+
+    async def _plain_error(self, _utils: TestUtils) -> Verdict:
+        raise ValueError("out of range")  # seed: litmus/raise-test-failure
+
+    async def cleanup(self, utils: TestUtils) -> None:
+        if self._limit_c:
+            return PASS  # pyright: ignore[reportReturnType]  # seed: litmus/no-verdict-in-cleanup
+        return None
