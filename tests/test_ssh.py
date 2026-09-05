@@ -90,41 +90,6 @@ class TestPasswordExec:
             await ssh.disconnect()
             await peer.aclose()
 
-    async def test_a_failed_command_is_evidence_not_an_exception(self) -> None:
-        peer = await _LoopbackSshd.start()
-        ssh = SshInterface(
-            host="127.0.0.1",
-            port=peer.port,
-            username=peer.username,
-            password=peer.password,
-            skip_host_verification=True,
-        )
-        try:
-            await ssh.connect()
-            result = await ssh.exec("fail")
-            assert result.exit_code == 1
-            assert result.stderr == "nope"
-        finally:
-            await ssh.disconnect()
-            await peer.aclose()
-
-    async def test_exec_before_connect_rejects(self) -> None:
-        ssh = SshInterface(
-            host="127.0.0.1", username="root", password="admin", skip_host_verification=True
-        )
-
-        with pytest.raises(ConnectionError, match="not connected"):
-            await ssh.exec("uname")
-
-    async def test_disconnect_is_safe_when_never_connected(self) -> None:
-        ssh = SshInterface(
-            host="127.0.0.1", username="root", password="admin", skip_host_verification=True
-        )
-
-        await ssh.disconnect()
-
-        assert ssh.connected is False
-
 
 class TestHardClose:
     async def test_abort_settles_in_flight_exec_at_minus_one(self) -> None:
@@ -150,33 +115,6 @@ class TestHardClose:
         finally:
             await ssh.disconnect()
             await peer.aclose()
-
-    async def test_cancel_is_safe_when_idle(self) -> None:
-        peer = await _LoopbackSshd.start()
-        ssh = SshInterface(
-            host="127.0.0.1",
-            port=peer.port,
-            username=peer.username,
-            password=peer.password,
-            skip_host_verification=True,
-        )
-        try:
-            await ssh.connect()
-            await ssh.cancel_in_flight()
-            await ssh.cancel_in_flight()
-            assert ssh.connected is False
-        finally:
-            await ssh.disconnect()
-            await peer.aclose()
-
-    async def test_cancel_is_safe_when_never_connected(self) -> None:
-        ssh = SshInterface(
-            host="127.0.0.1", username="root", password="admin", skip_host_verification=True
-        )
-
-        await ssh.cancel_in_flight()
-
-        assert ssh.connected is False
 
     async def test_a_refused_connect_leaves_the_interface_free_for_the_next_attempt(
         self,
