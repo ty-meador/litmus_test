@@ -685,6 +685,16 @@ class TestUtils:
             return None
         return self._timeline_paths.json_lines
 
+    def _owned_log_reference(self) -> str | None:
+        """Return the summary-tree link to this node's timeline when it owns one.
+
+        The link is the POSIX path of ``timeline.jsonl`` relative to the run directory,
+        which is the form the Inspector resolves against the directory it opened.
+        """
+        if not self._owns_timeline or self._timeline is None or self._timeline_paths is None:
+            return None
+        return self._timeline_paths.json_lines.relative_to(self._timeline.root).as_posix()
+
     def _close_timeline(self) -> None:
         """Close this node's files at its terminal boundary."""
         if self._owns_timeline and self._timeline is not None and self._timeline_paths is not None:

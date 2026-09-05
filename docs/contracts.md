@@ -135,6 +135,10 @@ is self-contained and cannot overwrite a neighboring run.
   into the same roll-up with `discrete_log_file=False`; a root still owns the run log.
 - `LitmusTest.log_path` exposes the owning node's absolute `timeline.jsonl` path after
   execution. It remains `None` for pending nodes and nodes whose records roll up.
+- Every `summary_tree` node carries the same link as `log_path`, rendered as a POSIX
+  path relative to the run directory, so the structural record reaches the temporal
+  record without the live objects. It is `null` for pending nodes and nodes whose
+  records roll up; the nearest ancestor with a link holds their chronology.
 
 The persisted chronology is framework-owned. Developer code continues to use only
 `utils.logger` and `utils.capture_artifact()`; it never opens or edits timeline files.
