@@ -34,6 +34,7 @@ from litmus.errors import (
     ExternalIntegrationFailure,
     Failure,
     FrameworkContractViolation,
+    HaltReason,
     HookName,
     MissingVerdict,
     TestFailure,
@@ -303,13 +304,14 @@ class Outcome:
 class RunAbort:
     """The run-level halt signal.
 
-    The child boundary writes the first reason. Composite execution observes the state
+    The child boundary writes the first reason from an integration hook; the operator
+    signal guard writes it from SIGINT/SIGTERM. Composite execution observes the state
     to cancel sibling work, while every node reads the same reason when it seals its
     Aborted evidence. Transport ownership remains outside this signal.
     """
 
     def __init__(self) -> None:
-        self._reason: ExternalIntegrationFailure | None = None
+        self._reason: HaltReason | None = None
 
     @property
     def fired(self) -> bool:
@@ -317,15 +319,15 @@ class RunAbort:
         return self._reason is not None
 
     @property
-    def reason(self) -> ExternalIntegrationFailure | None:
+    def reason(self) -> HaltReason | None:
         """Why the run was halted, or `None` if it was not."""
         return self._reason
 
-    def fire(self, reason: ExternalIntegrationFailure) -> None:
+    def fire(self, reason: HaltReason) -> None:
         """Signal the halt. Idempotent: the first reason wins.
 
         The first failure is the one that explains the run; a later hook failing during
-        the resulting teardown must not overwrite it.
+        the resulting teardown, or a later operator signal, must not overwrite it.
         """
         if self._reason is None:
             self._reason = reason

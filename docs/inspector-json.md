@@ -138,7 +138,9 @@ is null never ran and has no chronology anywhere.
 
 Failures use their framework `to_json()` methods. `TestFailure` and its subclasses
 retain the failure name, message, state, comparisons, and bug metadata. An
-`ExternalIntegrationFailure` retains its hook and JSON-safe cause. Arbitrary exception
+`ExternalIntegrationFailure` retains its hook and JSON-safe cause. `OperatorInterrupt`
+retains `operator: true` and the signal name so a Ctrl-C is not mistaken for a hook
+failure. Arbitrary exception
 objects and live values degrade to descriptive JSON-safe forms rather than making
 serialization fail and masking the evidence.
 

@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import inspect
 import math
+import os
+import signal
 import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -14,6 +16,7 @@ from litmus.errors import (
     ContractViolation,
     ExternalIntegrationFailure,
     FrameworkContractViolation,
+    OperatorInterrupt,
     TestFailure,
 )
 from litmus.evidence import JsonObject, snapshot_run_data
@@ -94,6 +97,76 @@ _SEALED_METHODS = frozenset(
 )
 _LIFECYCLE_COROUTINES = frozenset({"configure", "cleanup"})
 _FINALIZATION_TIMEOUT_SECONDS = 30.0
+_OPERATOR_SIGNALS: tuple[signal.Signals, signal.Signals] = (signal.SIGINT, signal.SIGTERM)
+
+
+def _escalate_operator_interrupt(signum: int) -> None:
+    """Second operator signal during finalization: leave immediately."""
+    os._exit(128 + int(signum))
+
+
+@final
+class _OperatorSignalGuard:
+    """SIGINT/SIGTERM for one live run. First signal aborts; second exits.
+
+    Installed on the running loop only while `_execute_run` is in flight. The first
+    signal fires the shared `RunAbort` with an `OperatorInterrupt`, hard-closes
+    every registered transport, and cancels the lifecycle task. A second signal
+    inside that window calls `_escalate_operator_interrupt`.
+    """
+
+    def __init__(
+        self,
+        run_abort: RunAbort,
+        seed: TestUtils,
+        lifecycle: asyncio.Task[RunResult | None],
+    ) -> None:
+        self._run_abort = run_abort
+        self._seed = seed
+        self._lifecycle = lifecycle
+        self._signals_seen = 0
+        self._installed: tuple[signal.Signals, ...] = ()
+        self._close_task: asyncio.Task[None] | None = None
+
+    def install(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind SIGINT and SIGTERM on `loop`. Records each bind as it succeeds.
+
+        A later bind that fails still leaves the earlier handlers on `_installed`
+        so `remove` can drop a partial install.
+        """
+        for sig in _OPERATOR_SIGNALS:
+            loop.add_signal_handler(sig, self.handle, sig)
+            self._installed = (*self._installed, sig)
+
+    def remove(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Drop this run's handlers so library callers never leak them."""
+        for sig in self._installed:
+            loop.remove_signal_handler(sig)
+        self._installed = ()
+
+    def handle(self, signum: int) -> None:
+        """Route one operator signal. First aborts the run; later signals exit."""
+        self._signals_seen += 1
+        if self._signals_seen > 1:
+            _escalate_operator_interrupt(signum)
+            return
+        reason = OperatorInterrupt(signum)
+        self._run_abort.fire(reason)
+        if not self._lifecycle.done():
+            self._lifecycle.cancel()
+        loop = asyncio.get_running_loop()
+        self._close_task = loop.create_task(
+            self._seed._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+        )
+
+    async def drain_close(self) -> None:
+        """Wait for the hard-close scheduled by the first signal, if any."""
+        close = self._close_task
+        if close is not None:
+            with contextlib.suppress(Exception):
+                await close
+
+
 _DEADLINE_CANCELLATION = object()
 _DEADLINE_CANCEL_COUNTS: weakref.WeakKeyDictionary[asyncio.Task[Any], int] = (
     weakref.WeakKeyDictionary()
@@ -523,21 +596,57 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     async def _execute_run(self, seed: TestUtils, run_budget: TimeBudget | None) -> RunResult:
         """Execute one full run with an optional root declaration from ``run()``."""
         await seed._begin_run()  # pyright: ignore[reportPrivateUsage]
+        run_abort = RunAbort()
+        extra = () if run_budget is None else (run_budget,)
+        loop = asyncio.get_running_loop()
+        lifecycle: asyncio.Task[RunResult | None] | None = None
+        guard: _OperatorSignalGuard | None = None
+        escaped: BaseException | None = None
+
+        async def execute() -> RunResult | None:
+            nonlocal escaped
+            try:
+                return await self._run_lifecycle(
+                    seed,
+                    run_abort,
+                    isolate_context=False,
+                    extra_time_budgets=extra,
+                )
+            except BaseException as exc:
+                # Task.__step__ re-raises KeyboardInterrupt/SystemExit into the loop
+                # and would skip _execute_run's finally. Swallow here; re-raise after cleanup.
+                if type(exc) is KeyboardInterrupt or type(exc) is SystemExit:
+                    escaped = exc
+                    return None
+                raise
+
         try:
-            run_abort = RunAbort()
-            extra = () if run_budget is None else (run_budget,)
-            result = await self._run_lifecycle(
-                seed,
-                run_abort,
-                isolate_context=False,
-                extra_time_budgets=extra,
-            )
+            lifecycle = asyncio.create_task(execute())
+            guard = _OperatorSignalGuard(run_abort, seed, lifecycle)
+            guard.install(loop)
+            result = await lifecycle
+            await guard.drain_close()
+            if escaped is not None:
+                raise escaped
+            if result is None:
+                raise FrameworkContractViolation(
+                    self.name, detail="the live run settled without a result"
+                )
             if run_abort.fired:
                 # Sweep once more at the root so a transport that settled open while its
                 # task was being cancelled cannot outlive the returned Aborted tree.
                 await seed._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
             return result
         finally:
+            if lifecycle is not None and not lifecycle.done():
+                lifecycle.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await lifecycle
+            if guard is not None:
+                # Hard-close while the second-signal handler is still installed, then
+                # drop it. A SIGINT during drain must escalate, not become KeyboardInterrupt.
+                await guard.drain_close()
+                guard.remove(loop)
             await seed._end_run()  # pyright: ignore[reportPrivateUsage]
 
     @final
@@ -971,18 +1080,31 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         active_clocks = (*inherited_clocks, *owned_clocks)
         settled_at: list[float | None] = [None]
         lineage = object()
+        escaped: BaseException | None = None
 
         async def tracked_call() -> object:
+            nonlocal escaped
             try:
                 return await call(active_clocks, lineage)
+            except BaseException as exc:
+                if type(exc) is KeyboardInterrupt or type(exc) is SystemExit:
+                    escaped = exc
+                    return None
+                raise
             finally:
                 settled_at[0] = asyncio.get_running_loop().time()
+
+        async def result_of_core() -> object:
+            value = await core
+            if escaped is not None:
+                raise escaped
+            return value
 
         core = asyncio.create_task(tracked_call())
         watchers = [asyncio.create_task(clock.event.wait()) for clock in active_clocks]
         try:
             if not watchers:
-                return await core, None
+                return await result_of_core(), None
             await asyncio.wait([core, *watchers], return_when=asyncio.FIRST_COMPLETED)
             if run_abort.fired:
                 # A harness halt is run-wide and class-intact. If its settlement and
@@ -990,7 +1112,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 # must not consume the integration failure as a node-local cut.
                 if not core.done():
                     core.cancel()
-                return await core, None
+                return await result_of_core(), None
             fired = [
                 clock
                 for clock in active_clocks
@@ -1001,7 +1123,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 )
             ]
             if not fired:
-                return await core, None
+                return await result_of_core(), None
             clock = min(fired, key=lambda candidate: candidate.fired_at or float("inf"))
             await self._settle_deadline_cut(core, utils)
             evidence = clock.evidence()
@@ -1167,12 +1289,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         *,
         children: tuple[SummaryTreeNode, ...],
     ) -> RunResult:
-        """Seal the shared integration failure at this node without rewrapping it."""
+        """Seal the shared halt reason at this node without rewrapping it."""
         reason = run_abort.reason
         if reason is None:
             raise FrameworkContractViolation(
                 self.name,
-                detail="an integration abort reached a node without its reason",
+                detail="a run abort reached a node without its reason",
             )
         boundary_outcome = boundary.outcome
         slot = Slot.TEST_METHOD if boundary_outcome is None else boundary_outcome.slot
