@@ -258,7 +258,28 @@ class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
     def log(self, level: int, msg: object, *args: object, **kwargs: Any) -> None:
         """Persist the record before offering it to the process logging policy."""
         if self._timeline is not None and self._timeline_paths is not None:
-            message = str(msg) % args if args else str(msg)
+            formatting_warning: str | None = None
+            try:
+                raw_message = str(msg)
+                if len(args) == 1 and isinstance(args[0], Mapping) and args[0]:
+                    message = raw_message % args[0]
+                else:
+                    message = raw_message % args if args else raw_message
+            except Exception as error:
+                try:
+                    raw_message = str(msg)
+                except Exception:
+                    raw_message = f"<unprintable {type(msg).__name__}>"
+                try:
+                    rendered_args = repr(args)
+                except Exception:
+                    rendered_args = "<unprintable arguments>"
+                message = f"{raw_message} {rendered_args}"
+                formatting_warning = (
+                    "logging message formatting failed "
+                    f"({type(error).__name__}); preserved the unformatted "
+                    "message and arguments"
+                )
             supplied_extra = kwargs.get("extra")
             extra: dict[str, Any] | None = None
             if isinstance(supplied_extra, Mapping):
@@ -270,6 +291,14 @@ class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
                 message=message,
                 extra=extra,
             )
+            if formatting_warning is not None:
+                self._timeline.write(
+                    self._timeline_paths,
+                    scope=self._scope,
+                    level=logging.WARNING,
+                    message=formatting_warning,
+                    extra=None,
+                )
         super().log(level, msg, *args, **kwargs)
 
     @property
