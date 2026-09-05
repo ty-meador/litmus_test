@@ -54,6 +54,9 @@ scaffolding suite authors copy from, so the examples always demonstrate the idio
 | `litmus/immutable-self` | `self.<attr>` is assigned or deleted only in `__init__`; runtime state returns from `configure()` into `utils.ctx`. | Tier 1: the instance freezes after the most-derived `__init__`; assignment raises `AttributeError`. |
 | `litmus/constructor-hooks` | `use_survey` and `use_audit` are called only in `__init__`; hooks are identity, not runtime state. | Tier 1: both registrars raise `ContractViolation` on a frozen instance. |
 | `litmus/unannotated-interface` | Functions and methods inside suite classes annotate every explicit parameter and return; methods passed to `self.case` declare `-> Verdict`. | Tier 1 for the `-> Verdict` half: the child boundary accepts only the `PASS` identity and refuses to forge a verdict. The parameter half is authoring clarity only; an annotation guards nothing at runtime. |
+| `litmus/raise-test-failure` | A test method raises `TestFailure`, not a plain `ValueError` / `RuntimeError` / `Exception`. | Tier 1: the failure taxonomy classifies any non-`TestFailure` exception escaping a test method as a developer-bug Fail. |
+| `litmus/method-reference` | `self.case` takes a method reference, not a `lambda` or nested def. | Tier 2: method references passed to `case` are auto-bound; the wrapper is unnecessary. |
+| `litmus/no-verdict-in-cleanup` | `cleanup` does not `return PASS` or `raise TestFailure`; it restores hardware state. | Tier 1: cleanup's return is discarded and its exceptions are swallowed. |
 
 Run `litmus-check --list-rules` for the catalogue shipped in the installed version.
 Each rule's module docstring under `tools/litmus_check/rules/` states exactly what it
