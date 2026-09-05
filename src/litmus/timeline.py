@@ -97,10 +97,10 @@ class RunTimeline:
         with self._lock:
             opened = self._open.get(paths.json_lines)
             if opened is None:
-                paths.directory.mkdir(parents=True, exist_ok=False)
+                paths.directory.mkdir(parents=True, exist_ok=True)
                 opened = _OpenTimeline(
-                    human=paths.human.open("x", encoding="utf-8", newline="\n"),
-                    json_lines=paths.json_lines.open("x", encoding="utf-8", newline="\n"),
+                    human=paths.human.open("a", encoding="utf-8", newline="\n"),
+                    json_lines=paths.json_lines.open("a", encoding="utf-8", newline="\n"),
                 )
                 self._open[paths.json_lines] = opened
             opened.human.write(human_line)

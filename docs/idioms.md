@@ -322,6 +322,9 @@ the run; the halt signal is read-only from suite code.
   A logging owner streams both `timeline.log` for humans and versioned
   `timeline.jsonl` for the Inspector, flushing both on every entry. Treat
   `LitmusTest.log_path` as the authoritative path; directory names are not an API.
+- While a durable timeline is attached, `utils.logger.isEnabledFor(...)` is true at
+  every level so developer-side guards cannot suppress the authoritative chronology.
+  Process logging handlers still apply their own level policy.
 
 ### Point-in-Time Artifacts
 

@@ -143,6 +143,10 @@ The persisted chronology is framework-owned. Developer code continues to use onl
 timestamped directory name. Treat `log_path` and captured artifact paths as opaque
 evidence references.
 
+The private `_run_lifecycle()` entry point is not a full run and therefore does not
+create a timestamped run directory. Framework self-tests that invoke it directly may
+leave point-in-time artifacts at the configured base root; authored suites use `run()`.
+
 ---
 
 ## Audit Contract
