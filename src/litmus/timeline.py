@@ -49,6 +49,11 @@ class RunTimeline:
         self._lock = threading.RLock()
         self._open: dict[Path, _OpenTimeline] = {}
 
+    @property
+    def root(self) -> Path:
+        """The run directory every registered timeline lives beneath."""
+        return self._root
+
     def register(self, scope: tuple[str, ...]) -> TimelinePaths:
         """Reserve a collision-resistant directory without opening any files."""
         if not scope:
