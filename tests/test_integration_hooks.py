@@ -30,8 +30,8 @@ class HookedSuite(LitmusTest):
         return self.sequence(
             "claims",
             [
-                self.case("identity", self._identity),
-                self.case("health", self._health),
+                self.test("identity", self._identity),
+                self.test("health", self._health),
             ],
         )
 
@@ -239,17 +239,17 @@ def _summary_states(node: SummaryTreeNode) -> dict[str, State | None]:
     return states
 
 
-async def test_group_abort_cancels_siblings_and_returns_one_aborted_tree() -> None:
+async def test_parallel_abort_cancels_siblings_and_returns_one_aborted_tree() -> None:
     slow_started = asyncio.Event()
     never_release = asyncio.Event()
 
     class GroupedSuite(LitmusTest):
         def build_suite(self) -> LitmusTest:
-            return self.group(
+            return self.parallel(
                 "parallel",
                 [
-                    self.case("slow", self._slow),
-                    self.case("halt", self._halt),
+                    self.test("slow", self._slow),
+                    self.test("halt", self._halt),
                 ],
             )
 
@@ -294,11 +294,11 @@ async def test_suite_code_cannot_swallow_an_abort_and_forge_pass(
 
     class GroupedSuite(LitmusTest):
         def build_suite(self) -> LitmusTest:
-            return self.group(
+            return self.parallel(
                 "parallel",
                 [
-                    self.case("parked", self._parked),
-                    self.case("halt", self._halt),
+                    self.test("parked", self._parked),
+                    self.test("halt", self._halt),
                 ],
             )
 
@@ -386,11 +386,11 @@ async def test_hook_abort_hard_closes_a_parked_remote_before_returning(
             return {}
 
         def build_suite(self) -> LitmusTest:
-            return self.group(
+            return self.parallel(
                 "parallel",
                 [
-                    self.case("flash", self._flash),
-                    self.case("halt", self._halt),
+                    self.test("flash", self._flash),
+                    self.test("halt", self._halt),
                 ],
             )
 
@@ -431,11 +431,11 @@ async def test_cleanup_exec_after_abort_is_not_a_contract_violation(
             return {}
 
         def build_suite(self) -> LitmusTest:
-            return self.group(
+            return self.parallel(
                 "parallel",
                 [
-                    self.case("flash", self._flash),
-                    self.case("halt", self._halt),
+                    self.test("flash", self._flash),
+                    self.test("halt", self._halt),
                 ],
             )
 
@@ -489,11 +489,11 @@ async def test_abort_hard_closes_every_opened_transport(
             return {}
 
         def build_suite(self) -> LitmusTest:
-            return self.group(
+            return self.parallel(
                 "parallel",
                 [
-                    self.case("flash", self._flash),
-                    self.case("halt", self._halt),
+                    self.test("flash", self._flash),
+                    self.test("halt", self._halt),
                 ],
             )
 

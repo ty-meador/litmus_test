@@ -145,9 +145,9 @@ class TestEmittedRecordsValidate:
                 self._checks = self.sequence(
                     "checks",
                     [
-                        self.case("snapshot", self._snapshot),
-                        self.case("rail", self._rail),
-                        self.case("unreached", self._unreached),
+                        self.test("snapshot", self._snapshot),
+                        self.test("rail", self._rail),
+                        self.test("unreached", self._unreached),
                     ],
                 )
 

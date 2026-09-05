@@ -97,8 +97,8 @@ from ordinary records rather than set to null.
 | `artifact_type` | string | Captured artifact type, or `run-result` for the root result. |
 | `artifact_timestamp` | string | The evidence timestamp in UTC; for the root result, its publication time. |
 
-Authored suites, sequences, and groups own a log by default. Inline cases roll their
-records into the nearest owning ancestor. A sequence, group, or composed authored suite
+Authored suites, sequences, and parallel nodes own a log by default. Leaves roll their
+records into the nearest owning ancestor. A sequence, parallel node, or composed suite
 constructed with `discrete_log_file=False` also rolls up. Pending nodes create no files.
 
 ## Two records, two version fields
