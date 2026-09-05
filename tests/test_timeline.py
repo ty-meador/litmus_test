@@ -8,6 +8,7 @@ import pytest
 
 from litmus import PASS, Artifact, LitmusTest, TestFailure, TestUtils, Verdict
 from litmus.lifecycle import State
+from litmus.timeline import RunTimeline
 
 
 def _records(path: Path) -> list[dict[str, object]]:
@@ -174,6 +175,96 @@ class TestPersistedTimeline:
             )
             == 1
         )
+
+    @pytest.mark.parametrize(
+        ("message", "args", "expected", "warns"),
+        [
+            ("%s %s", (1,), "%s %s (1,)", True),
+            ("%(answer)s", ({"answer": 42},), "42", False),
+            ("literal 100% %s", ("x",), "literal 100% %s ('x',)", True),
+        ],
+    )
+    async def test_logging_format_errors_preserve_verdict_and_evidence(
+        self,
+        tmp_path: Path,
+        message: str,
+        args: tuple[object, ...],
+        expected: str,
+        warns: bool,
+    ) -> None:
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                utils.logger.info(message, *args)
+                if utils.logger.scope:
+                    return PASS
+                raise TestFailure("node has no scope")
+
+        suite = Suite(name="rack")
+        result = await suite.run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.PASS
+        assert suite.log_path is not None
+        records = _records(suite.log_path)
+        assert any(record["message"] == expected for record in records)
+        warnings = [
+            record
+            for record in records
+            if record["level"] == "warning"
+            and str(record["message"]).startswith("logging message formatting failed")
+        ]
+        assert bool(warnings) is warns
+
+    def test_write_after_close_appends_one_complete_entry(self, tmp_path: Path) -> None:
+        timeline = RunTimeline(tmp_path)
+        paths = timeline.register(("rack",))
+        timeline.write(paths, scope=("rack",), level=20, message="before close", extra=None)
+        timeline.close(paths)
+
+        timeline.write(paths, scope=("rack",), level=20, message="after close", extra=None)
+        timeline.close(paths)
+
+        records = _records(paths.json_lines)
+        assert [record["message"] for record in records] == ["before close", "after close"]
+        assert paths.json_lines.read_text(encoding="utf-8").endswith("\n")
+
+    async def test_sequence_roll_up_writes_into_parent_timeline(self, tmp_path: Path) -> None:
+        passing_case = self._passing_case
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self._claim = self.case("claim", passing_case)
+                self._checks = self.sequence("checks", [self._claim], discrete_log_file=False)
+
+            def build_suite(self) -> LitmusTest:
+                return self._checks
+
+        suite = Suite(name="rack")
+        result = await suite.run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.PASS
+        assert suite.log_path is not None
+        assert suite._checks.log_path is None
+        assert suite._claim.log_path is None
+        records = _records(suite.log_path)
+        assert any(record["scope"] == ["rack", "checks", "claim"] for record in records)
+
+    async def test_root_always_owns_timeline_when_opted_out(self, tmp_path: Path) -> None:
+        passing_case = self._passing_case
+
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.case("claim", passing_case)
+
+        suite = Suite(name="rack", discrete_log_file=False)
+        result = await suite.run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.PASS
+        assert suite.log_path is not None
+        assert _records(suite.log_path)
 
     def test_sequence_and_group_can_roll_up_explicitly(self) -> None:
         class Suite(LitmusTest):
