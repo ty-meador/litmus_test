@@ -146,7 +146,7 @@ def _suite(
             return {"station": "bench-65"}
 
         def build_suite(self) -> LitmusTest:
-            return self.case("claim", self._claim)
+            return self.test("claim", self._claim)
 
         async def _claim(self, utils: TestUtils) -> Verdict:
             result = await utils.exec("hello")

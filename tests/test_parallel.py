@@ -1,4 +1,4 @@
-"""Structured concurrency and verdict aggregation for internal test groups."""
+"""Structured concurrency and verdict aggregation for internal parallel nodes."""
 
 import asyncio
 from typing import cast
@@ -24,11 +24,11 @@ class TestGroupStructuredConcurrency:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "independent claims",
                     [
-                        self.case("failing claim", self._failing_claim),
-                        self.case("healthy claim", self._healthy_claim),
+                        self.test("failing claim", self._failing_claim),
+                        self.test("healthy claim", self._healthy_claim),
                     ],
                 )
 
@@ -49,14 +49,14 @@ class TestGroupStructuredConcurrency:
         assert outcome.state is State.FAIL
         assert [child.state for child in children] == [State.FAIL, State.PASS]
 
-    async def test_group_passes_when_every_child_passes(self) -> None:
+    async def test_parallel_passes_when_every_child_passes(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "independent claims",
                     [
-                        self.case("first claim", self._claim),
-                        self.case("second claim", self._claim),
+                        self.test("first claim", self._claim),
+                        self.test("second claim", self._claim),
                     ],
                 )
 
@@ -72,11 +72,11 @@ class TestGroupStructuredConcurrency:
 
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
-                return self.group(
+                return self.parallel(
                     "independent claims",
                     [
-                        self.case("missing verdict", self._missing_verdict),
-                        self.case("healthy claim", self._healthy_claim),
+                        self.test("missing verdict", self._missing_verdict),
+                        self.test("healthy claim", self._healthy_claim),
                     ],
                 )
 
@@ -97,7 +97,7 @@ class TestGroupStructuredConcurrency:
         assert isinstance(children[0].failure, MissingVerdict)
         assert children[1].failure is None
 
-    async def test_harness_abort_cancels_group_and_stays_class_intact_through_ancestors(
+    async def test_harness_abort_cancels_parallel_and_stays_class_intact_through_ancestors(
         self,
     ) -> None:
         sibling_started = asyncio.Event()
@@ -110,14 +110,14 @@ class TestGroupStructuredConcurrency:
                 return self.sequence(
                     "dependent stages",
                     [
-                        self.group(
+                        self.parallel(
                             "independent claims",
                             [
-                                self.case("long-running claim", self._long_running_claim),
-                                self.case("integration halt", self._integration_halt),
+                                self.test("long-running claim", self._long_running_claim),
+                                self.test("integration halt", self._integration_halt),
                             ],
                         ),
-                        self.case("later claim", self._later_claim),
+                        self.test("later claim", self._later_claim),
                     ],
                 )
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import functools
 import inspect
 import math
 import os
@@ -47,7 +48,7 @@ from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.utils import TestUtils
 from litmus.verdict import Verdict
 
-type _TestFunction = Callable[[TestUtils], Awaitable[Verdict]]
+type _TestFunction = Callable[..., Awaitable[Verdict]]
 type _TimedCall = Callable[[tuple[TimeBudgetClock, ...], object], Awaitable[object]]
 
 _SEALED_METHODS = frozenset(
@@ -55,9 +56,9 @@ _SEALED_METHODS = frozenset(
         "__delattr__",
         "__init_subclass__",
         "__setattr__",
-        "case",
+        "test",
         "discrete_log_file",
-        "group",
+        "parallel",
         "log_path",
         "main",
         "_execute_run",
@@ -70,7 +71,7 @@ _SEALED_METHODS = frozenset(
         "_settle_deadline_cut",
         "_deadline_outcome",
         "_deadline_failure",
-        "_run_group",
+        "_run_parallel",
         "_run_sequence",
         "_run_configure_only",
         "_run_cleanup_only",
@@ -168,6 +169,7 @@ class _OperatorSignalGuard:
 
 
 _DEADLINE_CANCELLATION = object()
+_UTILS_PLACEHOLDER = object()
 _DEADLINE_CANCEL_COUNTS: weakref.WeakKeyDictionary[asyncio.Task[Any], int] = (
     weakref.WeakKeyDictionary()
 )
@@ -271,6 +273,24 @@ async def _bounded_finalization(call: Awaitable[object], *, node: str, operation
             task.add_done_callback(_consume_finalization_exception)
 
 
+def _bind_test_arguments(
+    fn: _TestFunction, args: tuple[object, ...], kwargs: dict[str, object]
+) -> _TestFunction:
+    """Close the developer's arguments over ``fn`` so the leaf is called as ``fn(utils)``.
+
+    ``utils`` stays the first positional argument, ahead of anything the suite passed,
+    so a plain ``functools.partial`` would put it in the wrong slot.
+    """
+    if not args and not kwargs:
+        return fn
+
+    @functools.wraps(fn)
+    async def bound(utils: TestUtils) -> Verdict:
+        return await fn(utils, *args, **kwargs)
+
+    return bound
+
+
 def _function(member: object) -> object:
     """Return an instance function; class/static descriptors are not authored methods."""
     if isinstance(member, (classmethod, staticmethod)):
@@ -322,13 +342,13 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         "_configure_only_utils",
         "_ctx",
         "_discrete_log_file",
+        "_fn",
         "_frozen",
         "_has_run",
         "_log_path",
         "_name",
         "_summary_tree",
         "_surveys",
-        "_test",
         "_time_budget",
         "_via",
         "_via_lease_count",
@@ -374,7 +394,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._configure_only_utils: TestUtils | None = None
         self._surveys: list[SurveyHook] = []
         self._audits: list[AuditHook] = []
-        self._test: _TestFunction | None = None
+        self._fn: _TestFunction | None = None
         self._children: tuple[LitmusTest, ...] | None = None
         self._ctx: dict[str, Any] = {}
         self._summary_tree: SummaryTreeNode | None = None
@@ -450,41 +470,61 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """A detached JSON-safe snapshot of this node's serializable context."""
         return snapshot_run_data(self._ctx)
 
-    def case(
+    def test(
         self,
         name: str,
-        test: _TestFunction,
-        *,
+        fn: _TestFunction,
+        /,
+        *args: object,
         fail_after: float | None = None,
         abort_after: float | None = None,
+        **kwargs: object,
     ) -> LitmusTest:
-        """Create an internal leaf node from an already-bound verdict method."""
-        if not inspect.iscoroutinefunction(test):
-            method = getattr(test, "__qualname__", repr(test))
+        """Create the leaf node: a name, a verdict method, and that method's arguments.
+
+        The framework calls ``fn(utils, *args, **kwargs)``. A suite stamps out one leaf
+        per core, rail, or channel from a single method by naming each leaf and passing
+        the value that varies. ``fail_after`` and ``abort_after`` are the leaf's budget
+        and never reach ``fn``; a test method cannot take parameters of those names.
+
+        The arguments are checked against ``fn``'s signature here, at composition time,
+        so a leaf that could never be called fails ``build_suite`` before any hardware
+        is touched. Static checkers cannot see through this call (PEP 612 forbids
+        keyword parameters between ``*args`` and ``**kwargs`` of a ``ParamSpec``).
+        """
+        if not inspect.iscoroutinefunction(fn):
+            method = getattr(fn, "__qualname__", repr(fn))
             msg = f"test method {method} must be defined with async def"
             raise TypeError(msg)
-        return _Case(
+        try:
+            inspect.signature(fn).bind(_UTILS_PLACEHOLDER, *args, **kwargs)
+        except TypeError as error:
+            method = getattr(fn, "__qualname__", repr(fn))
+            raise ContractViolation(
+                name, f"arguments do not fit test method {method}: {error}"
+            ) from error
+        return _Test(
             name=name,
-            test=test,
+            fn=_bind_test_arguments(fn, args, kwargs),
             fail_after=fail_after,
             abort_after=abort_after,
         )
 
-    def group(
+    def parallel(
         self,
         name: str,
-        tests: Sequence[LitmusTest],
+        children: Sequence[LitmusTest],
         *,
         discrete_log_file: bool = True,
         fail_after: float | None = None,
         abort_after: float | None = None,
     ) -> LitmusTest:
         """Compose independent children under one structured-concurrency owner."""
-        if not tests:
-            raise ContractViolation(name, "a test group must contain at least one child")
-        return _Group(
+        if not children:
+            raise ContractViolation(name, "a parallel node must contain at least one child")
+        return _Parallel(
             name=name,
-            tests=tests,
+            children=children,
             discrete_log_file=discrete_log_file,
             fail_after=fail_after,
             abort_after=abort_after,
@@ -493,18 +533,18 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     def sequence(
         self,
         name: str,
-        tests: Sequence[LitmusTest],
+        children: Sequence[LitmusTest],
         *,
         discrete_log_file: bool = True,
         fail_after: float | None = None,
         abort_after: float | None = None,
     ) -> LitmusTest:
         """Compose dependent children that stop at the first non-pass verdict."""
-        if not tests:
-            raise ContractViolation(name, "a test sequence must contain at least one child")
+        if not children:
+            raise ContractViolation(name, "a sequence must contain at least one child")
         return _Sequence(
             name=name,
-            tests=tests,
+            children=children,
             discrete_log_file=discrete_log_file,
             fail_after=fail_after,
             abort_after=abort_after,
@@ -531,10 +571,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     def build_suite(self) -> LitmusTest:
         """Return this node's authored composition.
 
-        Subclasses provide a pure table of contents assembled with ``self.case()``,
-        ``self.sequence()``, and ``self.group()``.
+        Subclasses provide a pure table of contents assembled with ``self.test()``,
+        ``self.sequence()``, and ``self.parallel()``.
         """
-        detail = "build_suite() must return a case, sequence, or group composition"
+        detail = "build_suite() must return a test, sequence, or parallel composition"
         raise ContractViolation(self.name, detail)
 
     async def cleanup(self, utils: TestUtils) -> None:
@@ -713,8 +753,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         object.__setattr__(self, "_has_run", True)
 
         children = self._children
-        test = self._test
-        authored_instance = children is None and test is None
+        fn = self._fn
+        authored_instance = children is None and fn is None
         node_audit_signal = AuditSignal(audit_signal) if self._audits else audit_signal
         utils = utils._for_node(  # pyright: ignore[reportPrivateUsage]
             self.name,
@@ -784,7 +824,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                             audit_signal=node_audit_signal,
                             time_budget_clocks=active_clocks,
                         )
-                    return await self._run_group(
+                    return await self._run_parallel(
                         utils,
                         run_abort,
                         children,
@@ -822,7 +862,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 result = await self._run_after_each(boundary, utils, run_abort, result)
                 return await self._finish_result(result, utils)
 
-            if test is not None:
+            if fn is not None:
 
                 async def run_case(
                     active_clocks: tuple[TimeBudgetClock, ...],
@@ -837,7 +877,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                         time_budget_clocks=active_clocks,
                     )
                     async with _active_time_budgets(active_clocks, lineage):
-                        return await boundary.run(Slot.TEST_METHOD, test(utils))
+                        return await boundary.run(Slot.TEST_METHOD, fn(utils))
 
                 value, timeout = await self._run_timed_window(
                     utils,
@@ -856,7 +896,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 elif not isinstance(value, Outcome):
                     raise FrameworkContractViolation(
                         self.name,
-                        detail="a case time window settled without an Outcome",
+                        detail="a test time window settled without an Outcome",
                     )
                 else:
                     outcome = value
@@ -1329,7 +1369,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
 
     @final
-    async def _run_group(
+    async def _run_parallel(
         self,
         utils: TestUtils,
         run_abort: RunAbort,
@@ -1386,7 +1426,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 children=tuple(outcome.summary_tree for outcome in outcomes),
             )
 
-        # Aborted outranks Fail, and the first child in that state tells the group's story.
+        # Aborted outranks Fail, and the first child in that state tells the parallel node's story.
         if any(outcome.state is State.ABORTED for outcome in outcomes):
             state = State.ABORTED
             reported = next(outcome for outcome in outcomes if outcome.state is State.ABORTED)
@@ -1468,9 +1508,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     def _node_type(self) -> NodeType:
         """Name the framework-owned node shape for the Inspector contract."""
-        if isinstance(self, _Case):
+        if isinstance(self, _Test):
             return NodeType.TEST_CASE
-        if isinstance(self, _Group):
+        if isinstance(self, _Parallel):
             return NodeType.TEST_GROUP
         if isinstance(self, _Sequence):
             return NodeType.TEST_SEQUENCE
@@ -1484,7 +1524,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         children = self._children
         if children is not None:
             child_trees = tuple(child._pending_summary_tree() for child in children)
-        elif self._test is not None:
+        elif self._fn is not None:
             child_trees = ()
         else:
             # build_suite is a pure table of contents by contract. Inspecting it here
@@ -1929,8 +1969,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
 
 @final
-class _Case(LitmusTest):
-    """Internal leaf specialization created only by :meth:`LitmusTest.case`."""
+class _Test(LitmusTest):
+    """Internal leaf specialization created only by :meth:`LitmusTest.test`."""
 
     __slots__ = ()
 
@@ -1938,7 +1978,7 @@ class _Case(LitmusTest):
         self,
         *,
         name: str,
-        test: _TestFunction,
+        fn: _TestFunction,
         fail_after: float | None,
         abort_after: float | None,
     ) -> None:
@@ -1948,19 +1988,19 @@ class _Case(LitmusTest):
             fail_after=fail_after,
             abort_after=abort_after,
         )
-        self._test = test
+        self._fn = fn
 
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; leaf execution never composes a suite."""
         raise FrameworkContractViolation(
             self.name,
-            detail="an internal case has no child suite",
+            detail="an internal test has no child suite",
         )
 
 
 @final
-class _Group(LitmusTest):
-    """Internal concurrent specialization created only by :meth:`LitmusTest.group`."""
+class _Parallel(LitmusTest):
+    """Internal concurrent specialization created only by :meth:`LitmusTest.parallel`."""
 
     __slots__ = ()
 
@@ -1968,7 +2008,7 @@ class _Group(LitmusTest):
         self,
         *,
         name: str,
-        tests: Sequence[LitmusTest],
+        children: Sequence[LitmusTest],
         discrete_log_file: bool,
         fail_after: float | None,
         abort_after: float | None,
@@ -1979,13 +2019,13 @@ class _Group(LitmusTest):
             fail_after=fail_after,
             abort_after=abort_after,
         )
-        self._children = tuple(tests)
+        self._children = tuple(children)
 
     def build_suite(self) -> LitmusTest:
-        """Satisfy the structural contract; group execution owns its child tasks."""
+        """Satisfy the structural contract; parallel execution owns its child tasks."""
         raise FrameworkContractViolation(
             self.name,
-            detail="an internal group has no child suite",
+            detail="an internal parallel node has no child suite",
         )
 
 
@@ -1999,7 +2039,7 @@ class _Sequence(LitmusTest):
         self,
         *,
         name: str,
-        tests: Sequence[LitmusTest],
+        children: Sequence[LitmusTest],
         discrete_log_file: bool,
         fail_after: float | None,
         abort_after: float | None,
@@ -2010,7 +2050,7 @@ class _Sequence(LitmusTest):
             fail_after=fail_after,
             abort_after=abort_after,
         )
-        self._children = tuple(tests)
+        self._children = tuple(children)
 
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; sequence execution owns child order."""
