@@ -263,8 +263,17 @@ class LitmusCommand:
             verdict = f"{verdict} ({type(result.failure).__name__}: {result.failure})"
         self._stderr.write(f"{verdict}\n")
         if junit is not None:
-            JunitXml().write(result, Path(junit))
-            self._stderr.write(f"litmus run: junit report written to {junit}\n")
+            # The run has settled and ``result.json`` is written; a report path that
+            # cannot be written is an error line, not a traceback that exits 1 and
+            # reads as Fail. The exit status stays the verdict's.
+            try:
+                JunitXml().write(result, Path(junit))
+            except OSError as exc:
+                self._stderr.write(
+                    f"litmus run: error: junit report not written to {junit}: {exc}\n"
+                )
+            else:
+                self._stderr.write(f"litmus run: junit report written to {junit}\n")
         if json_out:
             # The same serialization as the framework's own ``result.json``.
             record = json.dumps(
