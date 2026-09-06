@@ -9,6 +9,13 @@ kept so that it exists before the promise does.
 
 ### Added
 
+- `litmus new SuiteName`: writes a gated-PASS suite and a matching self-test stub
+  (`SuiteName.py` / `test_suite_name.py` derived from the class name). The generated
+  suite has an annotated constructor, `configure` returning a narrowed ctx, a pure
+  `build_suite`, one gated test method, and `cleanup`. `--directory DIR` selects the
+  destination; `--force` overwrites. The files pass `litmus-check`, ruff, and pyright
+  strict unmodified. Teaching examples are verified against that core shape rather
+  than regenerated from it. `docs/litmus-new.md` (issue #79).
 - `litmus run <path-or-module>[::SuiteClass]`, the runner: loads a suite file or
   module, selects one `LitmusTest` subclass, runs it, and exits 0 Pass, 1 Fail,
   2 Aborted, 3 usage error. `--artifact-root DIR` overrides `LITMUS_ARTIFACT_ROOT`,
