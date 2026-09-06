@@ -9,6 +9,13 @@ kept so that it exists before the promise does.
 
 ### Added
 
+- `litmus new SuiteName`: writes a gated-PASS suite and a matching self-test stub
+  (`SuiteName.py` / `test_suite_name.py` derived from the class name). The generated
+  suite has an annotated constructor, `configure` returning a narrowed ctx, a pure
+  `build_suite`, one gated test method, and `cleanup`. `--directory DIR` selects the
+  destination; `--force` overwrites. The files pass `litmus-check`, ruff, and pyright
+  strict unmodified. Teaching examples are verified against that core shape rather
+  than regenerated from it. `docs/litmus-new.md` (issue #79).
 - `docs/floor-technician.md`, the station page: how to read `result.json` without
   reading suite source, the Fail / Aborted / bug-signal recovery protocol, and
   every Inspector JSON field explained from the Floor Technician's side. Linked

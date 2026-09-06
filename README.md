@@ -14,8 +14,10 @@ make check     # CI gate: format check, lint, pyright strict, pytest, litmus-che
 
 `litmus run` is the runner (`docs/litmus-run.md`): it loads a suite file or module,
 runs the one `LitmusTest` subclass it defines (or the one named after `::`), and exits
-0 for Pass, 1 for Fail, 2 for Aborted, 3 when the suite could not be run at all. The
-locally executable examples progress from one explicit claim, through composition, to
+0 for Pass, 1 for Fail, 2 for Aborted, 3 when the suite could not be run at all.
+`litmus new WidgetSuite` writes a gated-PASS suite and a matching self-test so a new
+author starts from that shape instead of copying an example (`docs/litmus-new.md`).
+The locally executable examples progress from one explicit claim, through composition, to
 polling, lifecycle hooks, and the evidence surface:
 
 ```sh
@@ -54,6 +56,7 @@ patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
 under `docs/schema/`), `junit-xml.md` (the
 JUnit projection of that result for CI), translated from the legacy docs and updated
 to the port's semantics, `litmus-run.md` (the runner and its exit status contract),
+`litmus-new.md` (the gated-PASS suite generator),
 `litmus-check.md` (the skippable tier-3 linter over authored suites),
 `floor-technician.md` (the station page: how to read a result without reading
 source), and
