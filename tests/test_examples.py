@@ -291,6 +291,27 @@ class TestRemoteDeviceSshExample:
             "exec routing: via 127.0.0.1 (inherited from parent)",
         ]
 
+    async def test_missing_host_from_env_fails_in_configure(self, tmp_path: Path) -> None:
+        result = await SshDevice(name="ssh device").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "SSH_HOST" in result.failure.fail_message
+
+    async def test_garbage_port_from_env_fails_in_configure(self, tmp_path: Path) -> None:
+        result = await SshDevice(name="ssh device").run(
+            env={
+                "LITMUS_ARTIFACT_ROOT": str(tmp_path),
+                "SSH_HOST": "127.0.0.1",
+                "SSH_USER": "root",
+                "SSH_PORT": "nope",
+            }
+        )
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "SSH_PORT" in result.failure.fail_message
+
 
 class TestSshTunnelingExample:
     """`get_shell(..., via=jump)` records the chain and leaves `utils.exec` local."""
@@ -626,6 +647,56 @@ class TestNetworkedDeviceExample:
         assert result.summary_tree.children[0].children[0].name == "reachability"
         assert result.summary_tree.children[0].children[1].name == "firmware-version"
 
+    async def test_mac_from_env_resolves_locally(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(LocalExec, "run", _scripted_local_exec)
+        result = await DutDevice(name="networked device").run(
+            env={"LITMUS_ARTIFACT_ROOT": str(tmp_path), "DUT_MAC": "aa:bb:cc:dd:ee:ff"}
+        )
+
+        assert result.state is State.PASS
+        assert result.run_data["ip"] == "10.0.0.50"
+
+    async def test_missing_mac_from_env_fails_in_configure(self, tmp_path: Path) -> None:
+        result = await DutDevice(name="networked device").run(
+            env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)}
+        )
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "DUT_MAC" in result.failure.fail_message
+
+    async def test_half_set_gateway_env_fails_naming_the_missing_var(self, tmp_path: Path) -> None:
+        result = await DutDevice(name="networked device").run(
+            env={
+                "LITMUS_ARTIFACT_ROOT": str(tmp_path),
+                "DUT_MAC": "aa:bb:cc:dd:ee:ff",
+                "GATEWAY_HOST": "10.0.0.1",
+            }
+        )
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "GATEWAY_USER" in result.failure.fail_message
+
+    async def test_garbage_gateway_port_from_env_fails_in_configure(self, tmp_path: Path) -> None:
+        result = await DutDevice(name="networked device").run(
+            env={
+                "LITMUS_ARTIFACT_ROOT": str(tmp_path),
+                "DUT_MAC": "aa:bb:cc:dd:ee:ff",
+                "GATEWAY_HOST": "10.0.0.1",
+                "GATEWAY_USER": "ops",
+                "GATEWAY_PORT": "nope",
+            }
+        )
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "GATEWAY_PORT" in result.failure.fail_message
+
     async def test_missing_mac_in_configure_is_fail_not_a_bug(
         self,
         tmp_path: Path,
@@ -669,6 +740,29 @@ class TestNetworkedDeviceExample:
             mac="aa:bb:cc:dd:ee:ff",
             via=gateway,
         ).run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.PASS
+        assert result.run_data["ip"] == "10.0.0.50"
+        assert "cat /proc/net/arp" in transport.commands
+        assert "ping -c 1 10.0.0.50" in transport.commands
+        assert transport.connected is False
+
+    async def test_gateway_env_routes_arp_through_the_hop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transport = MockTransport()
+        _script_arp_dut(transport)
+        _patch_ssh_connector(monkeypatch, transport)
+        result = await DutDevice(name="networked device").run(
+            env={
+                "LITMUS_ARTIFACT_ROOT": str(tmp_path),
+                "DUT_MAC": "aa:bb:cc:dd:ee:ff",
+                "GATEWAY_HOST": "10.0.0.1",
+                "GATEWAY_USER": "ops",
+            }
+        )
 
         assert result.state is State.PASS
         assert result.run_data["ip"] == "10.0.0.50"

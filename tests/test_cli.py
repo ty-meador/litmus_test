@@ -428,8 +428,44 @@ class TestRecords:
         assert list(environment_root.rglob("result.json"))
 
 
+_SSH_TARGET_VARS = (
+    "SSH_HOST",
+    "SSH_USER",
+    "SSH_PASSWORD",
+    "SSH_PORT",
+    "JUMP_HOST",
+    "JUMP_USER",
+    "JUMP_PASSWORD",
+    "JUMP_PORT",
+    "TARGET_HOST",
+    "TARGET_USER",
+    "TARGET_PASSWORD",
+    "TARGET_PORT",
+    "TARGET_ADDRESS",
+    "DUT_MAC",
+    "GATEWAY_HOST",
+    "GATEWAY_USER",
+    "GATEWAY_PASSWORD",
+    "GATEWAY_PORT",
+)
+
+_README_LITMUS_RUN_TARGETS = (
+    "examples/hello_world.py",
+    "examples/test_composition.py::SequencedDevice",
+    "examples/test_composition.py::ParallelDevice",
+    "examples/wait_for_patterns.py::ConfigureGatedDevice",
+    "examples/wait_for_patterns.py::MainAssertionDevice",
+    "examples/hardware_device_lifecycle.py",
+    "examples/run_data_evidence.py",
+    "examples/remote_device_ssh.py",
+    "examples/ssh_tunneling.py",
+    "examples/networked_device.py::DutDevice",
+    "examples/pi_hole_server.py",
+)
+
+
 class TestExamples:
-    """Every locally executable example runs under ``litmus run`` as the README says."""
+    """Every example runs under ``litmus run`` as the README says."""
 
     @pytest.mark.parametrize(
         ("target", "expected"),
@@ -453,16 +489,38 @@ class TestExamples:
 
         assert status == expected
 
+    @pytest.mark.parametrize(
+        ("target", "missing"),
+        [
+            ("remote_device_ssh.py", "SSH_HOST"),
+            ("ssh_tunneling.py", "JUMP_HOST"),
+            ("networked_device.py::DutDevice", "DUT_MAC"),
+            ("pi_hole_server.py", "TARGET_ADDRESS"),
+        ],
+    )
+    def test_ssh_example_without_target_fails_in_configure(
+        self,
+        target: str,
+        missing: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        for name in _SSH_TARGET_VARS:
+            monkeypatch.delenv(name, raising=False)
+        file_name, _, suite_class = target.partition("::")
+        spec = str(EXAMPLES / file_name)
+        if suite_class:
+            spec = f"{spec}::{suite_class}"
+
+        status, _, err = _run("run", spec, "--artifact-root", str(tmp_path))
+
+        assert status == EXIT_FAIL
+        assert "TestFailure" in err
+        assert missing in err
+        assert "cannot be constructed from its name alone" not in err
+
     def test_readme_runs_every_local_example_through_litmus_run(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        for target in (
-            "examples/hello_world.py",
-            "examples/test_composition.py::SequencedDevice",
-            "examples/test_composition.py::ParallelDevice",
-            "examples/wait_for_patterns.py::ConfigureGatedDevice",
-            "examples/wait_for_patterns.py::MainAssertionDevice",
-            "examples/hardware_device_lifecycle.py",
-            "examples/run_data_evidence.py",
-        ):
+        for target in _README_LITMUS_RUN_TARGETS:
             assert f"uv run litmus run {target}" in readme, target
-        assert "uv run python examples/hello_world.py" not in readme
+        assert "uv run python examples/" not in readme
