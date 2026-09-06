@@ -22,6 +22,7 @@ dev = [
 ]
 
 [project.scripts]
+litmus = "litmus.cli:main"
 litmus-check = "litmus_check.cli:main"
 
 [build-system]

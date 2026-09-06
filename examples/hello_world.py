@@ -2,9 +2,9 @@
 
 Even the smallest claim names its pass condition. `return PASS` is syntax; the `if`
 that gates it is the modeling, and it is what the next reader looks for first.
-"""
 
-import asyncio
+Run it: `litmus run examples/hello_world.py`.
+"""
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 
@@ -26,16 +26,3 @@ class HelloWorld(LitmusTest):
             utils.logger.info(self._greeting)
             return PASS
         raise TestFailure("nothing to say", "a greeting", "(empty)")
-
-
-class HelloWorldExample:
-    """Run the hello-world suite as a standalone program."""
-
-    @staticmethod
-    async def run() -> None:
-        """Execute the example through the framework-owned lifecycle."""
-        await HelloWorld(name="hello world").run()
-
-
-if __name__ == "__main__":
-    asyncio.run(HelloWorldExample.run())
