@@ -20,12 +20,16 @@ def _empty_env() -> Mapping[str, str]:
 
 
 class NodeType(StrEnum):
-    """Stable Inspector discriminator for each framework-owned node shape."""
+    """Inspector discriminator for each framework-owned node shape.
 
-    TEST_SUITE = "test-suite"
-    TEST_CASE = "test-case"
-    TEST_GROUP = "test-group"
-    TEST_SEQUENCE = "test-sequence"
+    The wire values are the composition vocabulary: the word the developer wrote in
+    ``build_suite`` is the word the Floor Technician reads in the tree (issue #111).
+    """
+
+    SUITE = "suite"
+    TEST = "test"
+    PARALLEL = "parallel"
+    SEQUENCE = "sequence"
 
 
 def _failure_json(failure: Failure | None) -> JsonObject | None:
