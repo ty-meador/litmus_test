@@ -1047,19 +1047,26 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             result = await self._run_after_each(boundary, utils, run_abort, result)
             return await self._finish_result(result, utils)
         except ExternalIntegrationFailure:
-            await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
-            result = self._aborted_result(
-                boundary,
-                utils,
-                run_abort,
-                children=summary_children or self._pending_children(),
+            settled = asyncio.create_task(
+                self._settle_integration_abort(
+                    boundary,
+                    utils,
+                    run_abort,
+                    children=summary_children or self._pending_children(),
+                    after_each_started=after_each_started,
+                )
             )
-            if after_each_started:
-                return await self._finish_result(result, utils)
-            return await self._finish_result(
-                await self._run_after_each(boundary, utils, run_abort, result),
-                utils,
-            )
+            try:
+                await asyncio.shield(settled)
+            except asyncio.CancelledError:
+                # The boundary fired the run abort before raising, so this cancellation
+                # is that same halt arriving from a parallel parent, not a caller's.
+                # Section 4.2: repeated cancellations must not abandon the wait — the
+                # started row this node opened is owed its finished row.
+                while not settled.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.shield(settled)
+            return settled.result()
         except asyncio.CancelledError as error:
             if run_abort.fired:
                 result = self._aborted_result(
@@ -1359,6 +1366,23 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                     children=result.summary_tree.children,
                 )
         return result
+
+    @final
+    async def _settle_integration_abort(
+        self,
+        boundary: ChildBoundary,
+        utils: TestUtils,
+        run_abort: RunAbort,
+        *,
+        children: tuple[SummaryTreeNode, ...],
+        after_each_started: bool,
+    ) -> RunResult:
+        """Hard-close this node and pay the completion it already owes the integrator."""
+        await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+        result = self._aborted_result(boundary, utils, run_abort, children=children)
+        if not after_each_started:
+            result = await self._run_after_each(boundary, utils, run_abort, result)
+        return await self._finish_result(result, utils)
 
     @final
     def _aborted_result(
