@@ -40,7 +40,7 @@ def _env_text(utils: TestUtils, name: str) -> str | None:
 def _require_env(utils: TestUtils, name: str) -> str:
     value = _env_text(utils, name)
     if value is None:
-        raise TestFailure(f"{name} env var not set")
+        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
     return value
 
 
@@ -51,9 +51,15 @@ def _env_port(utils: TestUtils, name: str) -> int:
     try:
         port = int(raw)
     except ValueError:
-        raise TestFailure(f"{name} env var is not a valid port") from None
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        ) from None
     if not 1 <= port <= 65535:
-        raise TestFailure(f"{name} env var is not a valid port")
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        )
     return port
 
 
@@ -158,9 +164,15 @@ class DutDevice(LitmusTest):
             gateway_user = _env_text(utils, "GATEWAY_USER")
             if gateway_host is not None or gateway_user is not None:
                 if gateway_host is None:
-                    raise TestFailure("GATEWAY_HOST env var not set")
+                    raise TestFailure(
+                        "did not reach a testable state: GATEWAY_HOST env var not set; "
+                        "set GATEWAY_HOST"
+                    )
                 if gateway_user is None:
-                    raise TestFailure("GATEWAY_USER env var not set")
+                    raise TestFailure(
+                        "did not reach a testable state: GATEWAY_USER env var not set; "
+                        "set GATEWAY_USER"
+                    )
                 await utils.use_shell(
                     host=gateway_host,
                     username=gateway_user,
