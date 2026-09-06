@@ -232,6 +232,10 @@ leave point-in-time artifacts at the configured base root; authored suites use `
   audit failure cancels its own in-flight work and produces Fail without cancelling an
   independent parallel sibling. If an audit verdict and suite completion occur in the same
   event-loop turn, the audit verdict wins; evidence is not discarded by timing luck.
+- Every started descendant cancelled by an audit still seals its result and dispatches
+  its paired `after_each`. An unsettled descendant carries the audit's `TestFailure`
+  class-intact; a descendant already dispatching `after_each` retains the verdict that
+  hook received. Audit cancellation never becomes a run-wide integration halt.
 - `utils.exec` threads cancellation to the underlying child process. When a cancellation fires, in-flight shell commands are killed (SIGTERM) immediately — no zombie processes outlive the test.
 
 **Developer obligation:**
