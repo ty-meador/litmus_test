@@ -41,7 +41,9 @@ Two-level service contract:
 
 #### "Floor technicians simultaneously have the biggest impact on the success of our business, and the least control over how it operates"
 
-Typically early-career technology enthusiast. Passionate, capable, but many are operating at the edge of their knowledge. They are the first person to see failures and to make failure category judgment calls. They are the experts on how to handle any given failure mode. The inspector is their primary tool — and also a containment layer preventing them from going places they shouldn't. The station page is `docs/floor-technician.md`: how to read `result.json` and what to do next, without opening the suite source.
+Typically early-career technology enthusiast. Passionate, capable, but many are operating at the edge of their knowledge. They are the first person to see failures and to make failure category judgment calls. They are the experts on how to handle any given failure mode. The inspector is their primary tool — and also a containment layer preventing them from going places they shouldn't. The station page is `docs/floor-technician.md`
+([Floor Technician guide](floor-technician.md)): how to read `result.json` and
+what to do next, without opening the suite source.
 
 ## The Atom
 
@@ -188,6 +190,8 @@ Pass-by-default tests make all three questions harder. The tech is left guessing
 Litmus is built so that the evidence a tech needs is produced automatically and presented clearly — without requiring them to read your source code or understand your design intent.
 
 #### What Litmus Demands
+
+#### The three-tier enforcement stack
 
 Litmus does not merely prefer explicit passes — it **rejects** implicit ones at every tier of the enforcement stack:
 
