@@ -729,6 +729,17 @@ class TestRunDataEvidenceExample:
         assert result.run_data["within_spec"] is True
         assert result.run_data["measurements"] == []
         assert suite.run_data["within_spec"] is True
+        # The limits configure provided sit beside the readings the test methods took.
+        assert result.run_data["voltage_low_v"] == 11.5
+        assert result.run_data["voltage_high_v"] == 12.5
+        assert result.run_data["temp_limit_c"] == 70.0
+
+    async def test_configure_provides_limits_and_seeds_no_reading(self) -> None:
+        suite = PowerSupply(name="power supply", output_voltage_v=12.1, temperature_c=48.0)
+
+        provided = await suite.configure(TestUtils())
+
+        assert set(provided) == {"voltage_low_v", "voltage_high_v", "temp_limit_c"}
 
     async def test_out_of_spec_voltage_fails_and_within_spec_is_false(self) -> None:
         result = await PowerSupply(
