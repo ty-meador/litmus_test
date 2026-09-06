@@ -490,6 +490,10 @@ class TestPiHoleServerExample:
             "pihole": "(empty)",
             "gravity": "(empty)",
         }
+        # The hop served the post-cleanup survey: five boundaries after configure,
+        # three tails each, and the transport closed only after the last one (#115).
+        assert transport.commands.count(_TAIL_COMMANDS[0]) == 5
+        assert set(transport.commands[-len(_TAIL_COMMANDS) :]) == set(_TAIL_COMMANDS)
         for secret_line in caplog.records:
             assert _PIHOLE_SECRET not in secret_line.getMessage()
         hop_commands = set(transport.commands)
