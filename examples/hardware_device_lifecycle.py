@@ -8,6 +8,8 @@ cancels the in-flight claim. `cleanup` drops the rail.
 The observations are scripted so the example runs on any development machine.
 Replace the constructor values with `utils.exec()` reads in a real suite; the
 hook registration, the ctx flow, and the evidence shape stay the same.
+
+Run it: `litmus run examples/hardware_device_lifecycle.py`.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, TypedDict, cast
 
-from litmus import PASS, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 
 
 class _DeviceContext(TypedDict):
@@ -35,9 +37,9 @@ class PoweredDevice(LitmusTest):
         self,
         *,
         name: str,
-        rail_states: tuple[str, ...],
-        temperatures: tuple[float, ...],
-        enumerated: bool,
+        rail_states: tuple[str, ...] = ("off", "ramping", "on"),
+        temperatures: tuple[float, ...] = (41.0, 42.5, 43.0),
+        enumerated: bool = True,
         limit_c: float = 85.0,
         interval: float = 0.01,
         timeout_seconds: float = 1.0,
@@ -45,6 +47,8 @@ class PoweredDevice(LitmusTest):
         claim_seconds: float = 0.05,
     ) -> None:
         """Capture the scripted rail, thermal, and enumeration observations.
+
+        The defaults are a healthy device, so `litmus run` needs no arguments.
 
         Args:
             name: Node name used by logs, artifacts, and failures.
@@ -142,21 +146,3 @@ class PoweredDevice(LitmusTest):
             utils.logger.info("device enumerated")
             return PASS
         raise TestFailure("device did not enumerate", True, False)
-
-
-class HardwareDeviceLifecycleExample:
-    """Run the powered-device lifecycle as a standalone program."""
-
-    @staticmethod
-    async def run() -> RunResult:
-        """Execute through the framework-owned lifecycle."""
-        return await PoweredDevice(
-            name="powered device",
-            rail_states=("off", "ramping", "on"),
-            temperatures=(41.0, 42.5, 43.0),
-            enumerated=True,
-        ).run()
-
-
-if __name__ == "__main__":
-    asyncio.run(HardwareDeviceLifecycleExample.run())

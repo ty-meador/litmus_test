@@ -2,9 +2,11 @@
 
 The values are deterministic stand-ins for device readings. This keeps the example
 dependent claims belong in a sequence; independent claims belong in a parallel node.
-"""
 
-import asyncio
+Run them: `litmus run examples/test_composition.py::SequencedDevice` settles Pass;
+`litmus run examples/test_composition.py::ParallelDevice` settles Fail with two of
+its three claims recorded, and exits 1.
+"""
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 
@@ -16,11 +18,14 @@ class SequencedDevice(LitmusTest):
         self,
         *,
         name: str,
-        service_active: bool,
-        firmware_version: str,
-        application_pid: int | None,
+        service_active: bool = True,
+        firmware_version: str = "2.4.1",
+        application_pid: int | None = 412,
     ) -> None:
-        """Capture the simulated observations that the sequence will evaluate."""
+        """Capture the simulated observations that the sequence will evaluate.
+
+        The defaults are the healthy readings, so `litmus run` needs no arguments.
+        """
         super().__init__(name=name)
         self._service_active = service_active
         self._firmware_version = firmware_version
@@ -60,11 +65,15 @@ class ParallelDevice(LitmusTest):
         self,
         *,
         name: str,
-        temperature_c: float,
-        voltage_v: float,
-        fan_rpm: int,
+        temperature_c: float = 92.0,
+        voltage_v: float = 3.3,
+        fan_rpm: int = 800,
     ) -> None:
-        """Capture the simulated readings that the parallel node will evaluate."""
+        """Capture the simulated readings that the parallel node will evaluate.
+
+        The defaults put temperature and fan speed out of spec on purpose: the
+        parallel node collects both failures instead of stopping at the first.
+        """
         super().__init__(name=name)
         self._temperature_c = temperature_c
         self._voltage_v = voltage_v
@@ -95,27 +104,3 @@ class ParallelDevice(LitmusTest):
         if self._fan_rpm >= 1000:
             return PASS
         raise TestFailure("fan speed below minimum", ">= 1000 RPM", f"{self._fan_rpm} RPM")
-
-
-class CompositionExample:
-    """Run passing and failing compositions as a standalone program."""
-
-    @staticmethod
-    async def run() -> None:
-        """Execute both composition strategies through the Litmus lifecycle."""
-        await SequencedDevice(
-            name="startup checks",
-            service_active=True,
-            firmware_version="2.4.1",
-            application_pid=412,
-        ).run()
-        await ParallelDevice(
-            name="sensor checks",
-            temperature_c=92,
-            voltage_v=3.3,
-            fan_rpm=800,
-        ).run()
-
-
-if __name__ == "__main__":
-    asyncio.run(CompositionExample.run())
