@@ -201,7 +201,7 @@ class TestUsageErrors:
         status, _, err = _run()
 
         assert status == EXIT_USAGE
-        assert "litmus run: error:" in err
+        assert "litmus: error:" in err
         assert "command" in err
 
     def test_argparse_never_exits_with_two(self) -> None:
