@@ -6,13 +6,17 @@ the terminal state onto the exit status. One command the developer documents and
 Floor Technician types; an exit code the station script branches on without parsing
 output.
 
+``litmus new SuiteName`` writes a gated-PASS suite and a matching self-test stub so
+the author starts from a shape that already clears ``litmus-check`` and pyright
+strict. The files are the single source for that shape (``docs/litmus-new.md``).
+
 Exit status is the station contract (``docs/litmus-run.md``):
 
-- ``0`` — the root settled ``Pass``.
+- ``0`` — the root settled ``Pass``, or ``litmus new`` wrote the files.
 - ``1`` — the root settled ``Fail``.
 - ``2`` — the root settled ``Aborted``.
-- ``3`` — usage error: the invocation was wrong, or the suite could not be loaded,
-  selected, or constructed. No run took place.
+- ``3`` — usage error: the invocation was wrong, the suite could not be loaded,
+  selected, or constructed, or ``litmus new`` could not write. No run took place.
 
 The exit contract and the ``--json`` record are public; this module's path and its
 classes are not (``docs/api-stability.md``).
@@ -38,6 +42,7 @@ from litmus.errors import LitmusError
 from litmus.junit import JunitXml
 from litmus.lifecycle import State
 from litmus.results import RunResult
+from litmus.scaffold import ScaffoldError, SuiteScaffolder
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -169,12 +174,13 @@ class SuiteLoader:
 
 @final
 class LitmusCommand:
-    """Parse arguments, run one suite, render the verdict, return the exit status.
+    """Parse arguments, dispatch ``run`` or ``new``, return the exit status.
 
     The command holds no state between runs; construct it with the streams to write
     to and call :meth:`run` with the argument vector. Tests drive it exactly the way
-    the console script does. The verdict line and the run log go to ``stderr``; only
-    the ``--json`` record goes to ``stdout``, so a station can capture it alone.
+    the console script does. For ``run``, the verdict line and the run log go to
+    ``stderr``; only the ``--json`` record goes to ``stdout``, so a station can
+    capture it alone. For ``new``, the written paths go to ``stdout``.
     """
 
     def __init__(self, stdout: TextIO | None = None, stderr: TextIO | None = None) -> None:
@@ -184,24 +190,44 @@ class LitmusCommand:
     def run(self, argv: Sequence[str]) -> int:
         """Execute one invocation and return its exit status."""
         parser = self._parser()
+        prefix = "litmus"
         try:
             args = parser.parse_args(argv)
-            suite = self._construct(SuiteLoader().load(args.target))
-            self._attach_console_log()
-            result = asyncio.run(suite.run(env=self._run_env(args.artifact_root)))
+            prefix = f"litmus {args.command}"
+            if args.command == "new":
+                return self._new(args)
+            return self._run_suite(args)
         except UsageError as exc:
-            self._stderr.write(f"litmus run: error: {exc}\n")
+            self._stderr.write(f"{prefix}: error: {exc}\n")
             return EXIT_USAGE
+
+    def _run_suite(self, args: argparse.Namespace) -> int:
+        """Load, construct, and run the suite ``args.target`` selects."""
+        suite = self._construct(SuiteLoader().load(args.target))
+        self._attach_console_log()
+        result = asyncio.run(suite.run(env=self._run_env(args.artifact_root)))
         self._render(result, json_out=args.json, junit=args.junit)
         return _EXIT_BY_STATE[result.state]
+
+    def _new(self, args: argparse.Namespace) -> int:
+        """Write a gated-PASS suite and its self-test into ``args.directory``."""
+        scaffolder = SuiteScaffolder()
+        try:
+            plan = scaffolder.plan(args.name, directory=Path(args.directory))
+            scaffolder.write(plan, force=args.force)
+        except ScaffoldError as exc:
+            raise UsageError(str(exc)) from exc
+        self._stdout.write(f"wrote {plan.suite_path}\n")
+        self._stdout.write(f"wrote {plan.test_path}\n")
+        return 0
 
     @staticmethod
     def _parser() -> argparse.ArgumentParser:
         parser = _Parser(
             prog="litmus",
             description=(
-                "Run a Litmus suite and exit with its verdict: 0 Pass, 1 Fail, "
-                "2 Aborted, 3 usage error."
+                "Run a Litmus suite, or write a gated-PASS suite. Exit 0 Pass "
+                "(or files written), 1 Fail, 2 Aborted, 3 usage error."
             ),
         )
         commands = parser.add_subparsers(dest="command", required=True, metavar="command")
@@ -229,6 +255,31 @@ class LitmusCommand:
             help="print the format_version 1 result record to stdout",
         )
         run.add_argument("--junit", metavar="PATH", help="also write the run as a JUnit XML report")
+        new = commands.add_parser(
+            "new",
+            help="write a gated-PASS suite and a matching self-test stub",
+            description=(
+                "Write SUITE.py and test_SUITE.py: annotated constructor, configure "
+                "returning a narrowed ctx, a pure build_suite, one gated test method, "
+                "and cleanup. The output passes litmus-check and pyright strict."
+            ),
+        )
+        new.add_argument(
+            "name",
+            metavar="SUITE",
+            help="class name of the suite to write, for example WidgetSuite",
+        )
+        new.add_argument(
+            "--directory",
+            metavar="DIR",
+            default=".",
+            help="directory to write into (default: the current directory)",
+        )
+        new.add_argument(
+            "--force",
+            action="store_true",
+            help="overwrite existing files instead of refusing",
+        )
         return parser
 
     @staticmethod
