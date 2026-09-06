@@ -764,6 +764,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             audit_signal=node_audit_signal,
         )
         object.__setattr__(self, "_ctx", utils.ctx)
+        utils._own_context(self.name)  # pyright: ignore[reportPrivateUsage]
         object.__setattr__(self, "_log_path", utils._owned_log_path())  # pyright: ignore[reportPrivateUsage]
 
         integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]

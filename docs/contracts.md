@@ -13,7 +13,7 @@ static analysis.
 
 ## Lifecycle Contract
 **Developer obligation:** Implement `configure()`, `build_suite()`, and `cleanup()` with the correct intent.
-- `configure()` — put the test in a known state. Readiness gates and polling live here. Its framework return annotation is `Mapping[str, Any]`, wide enough that a suite may narrow it to a local `TypedDict` under pyright strict; returning a plain `dict[str, Any]` is the default. The returned value is always an ordinary dict whose entries are copied into `utils.ctx` for test methods, cleanup, and all descendant tests.
+- `configure()` — put the test in a known state. Readiness gates and polling live here. Its framework return annotation is `Mapping[str, Any]`, wide enough that a suite may narrow it to a local `TypedDict` under pyright strict; returning a plain `dict[str, Any]` is the default. The returned value is always an ordinary dict whose entries are copied into `utils.ctx` for test methods, cleanup, and all descendant tests. It provides every key a test method, hook, or `cleanup()` reads with `[]`; a reading a test method has not taken is absent from ctx and `run_data`, never seeded as a placeholder. A `[]` read of a key `configure()` did not provide is a `ContractViolation` naming the test and the key, not a hardware Fail; `.get()` and `in` are how a suite reads an optional key (issue #112).
 - `build_suite()` — pure table-of-contents composition. Return a `LitmusTest` built from `self.test()` / `self.sequence()` / `self.parallel()`. Test methods (private class methods passed to `self.test()`) carry the actual verdict logic — return the `PASS` sentinel to pass, raise `TestFailure` to fail intentionally.
 - `cleanup()` — restore state. Must not throw (errors are swallowed and logged).
 
