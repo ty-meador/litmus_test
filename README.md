@@ -54,10 +54,16 @@ patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
 under `docs/schema/`), `junit-xml.md` (the
 JUnit projection of that result for CI), translated from the legacy docs and updated
 to the port's semantics, `litmus-run.md` (the runner and its exit status contract),
-`litmus-check.md` (the skippable tier-3 linter over authored suites), and
+`litmus-check.md` (the skippable tier-3 linter over authored suites),
+`floor-technician.md` (the station page: how to read a result without reading
+source), and
 `api-stability.md` (the public surface, semantic versioning from 1.0.0, and the
 deprecation procedure). `CHANGELOG.md` at the root records every change
 to that surface.
+
+The Floor Technician guide is `docs/floor-technician.md`. Until the docs site
+(issue #82) publishes `docs/`, that path is the URL that belongs on a station
+label.
 
 ## Deployment requirement
 

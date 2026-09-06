@@ -1,5 +1,8 @@
 # Inspector JSON Contract
 
+Floor Technicians reading a run should start at `docs/floor-technician.md`. This
+page is the consumer contract those fields live in.
+
 The Inspector TUI is outside the Python port's current scope. Its input contract is
 not. Every completed node produces a `RunResult`, and `RunResult.to_json()` returns a
 plain Python object that `json.dumps()` accepts without an encoder. The root result is
