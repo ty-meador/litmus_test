@@ -173,12 +173,16 @@ class TestCompositionFactories:
 
         suite = LitmusTest(name="rack")
         leaf = suite.test("leaf", passes)
+        escalate = "report it to the framework maintainers with the full log and reproduction steps"
         nodes = (
-            (leaf, "an internal test has no child suite"),
-            (suite.parallel("parallel", [leaf]), "an internal parallel node has no child suite"),
+            (leaf, f"an internal test has no child suite; {escalate}"),
+            (
+                suite.parallel("parallel", [leaf]),
+                f"an internal parallel node has no child suite; {escalate}",
+            ),
             (
                 suite.sequence("sequence", [leaf]),
-                "an internal sequence has no child suite",
+                f"an internal sequence has no child suite; {escalate}",
             ),
         )
 
@@ -196,7 +200,10 @@ class TestCompositionFactories:
             await sequence._run_sequence(TestUtils(), RunAbort(), (child,))
 
         assert raised.value.node == sequence.name
-        assert raised.value.detail == "a sequence child settled without a terminal state"
+        assert raised.value.detail == (
+            "a sequence child settled without a terminal state; "
+            "report it to the framework maintainers with the full log and reproduction steps"
+        )
 
     async def test_sequence_reports_an_incomplete_pass_check_as_a_framework_bug(
         self,
@@ -208,7 +215,10 @@ class TestCompositionFactories:
             await sequence._run_sequence(TestUtils(), RunAbort(), children)
 
         assert raised.value.node == sequence.name
-        assert raised.value.detail == "a sequence reached no explicit terminal verdict"
+        assert raised.value.detail == (
+            "a sequence reached no explicit terminal verdict; "
+            "report it to the framework maintainers with the full log and reproduction steps"
+        )
 
 
 class TestSequenceExecution:

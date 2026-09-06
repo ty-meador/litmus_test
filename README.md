@@ -14,8 +14,10 @@ make check     # CI gate: format check, lint, pyright strict, pytest, litmus-che
 
 `litmus run` is the runner (`docs/litmus-run.md`): it loads a suite file or module,
 runs the one `LitmusTest` subclass it defines (or the one named after `::`), and exits
-0 for Pass, 1 for Fail, 2 for Aborted, 3 when the suite could not be run at all. The
-locally executable examples progress from one explicit claim, through composition, to
+0 for Pass, 1 for Fail, 2 for Aborted, 3 when the suite could not be run at all.
+`litmus new WidgetSuite` writes a gated-PASS suite and a matching self-test so a new
+author starts from that shape instead of copying an example (`docs/litmus-new.md`).
+The locally executable examples progress from one explicit claim, through composition, to
 polling, lifecycle hooks, and the evidence surface:
 
 ```sh
@@ -32,20 +34,26 @@ uv run litmus run examples/run_data_evidence.py
 `format_version` 1 result record to stdout, and `--junit PATH` writes the JUnit XML
 projection beside it.
 
-The pi-hole dogfood suite is the end-to-end proof against a real hop. It needs
-`TARGET_ADDRESS` and `TARGET_USER`; `TARGET_PASSWORD` and `TARGET_PORT` are optional:
+The SSH-backed examples take their target from `utils.env` in `configure()`. A missing
+variable Fails the suite (exit 1): the device did not reach a testable state, and the
+message names the variable to set. Optional password and
+port variables (`SSH_PASSWORD` / `SSH_PORT`, `JUMP_*` / `TARGET_*`, `GATEWAY_*`) default
+the port to 22 when unset. `networked_device.py` defines `Gateway` and `DutDevice`; pick
+the station suite with `::DutDevice`. `GATEWAY_HOST` and `GATEWAY_USER` (both required
+together) resolve ARP through a hop instead of the test host's table:
 
 ```sh
-uv run python examples/pi_hole_server.py
+SSH_HOST=dut.lab SSH_USER=root uv run litmus run examples/remote_device_ssh.py
+JUMP_HOST=jump.lab JUMP_USER=ops TARGET_HOST=dut.lab TARGET_USER=root uv run litmus run examples/ssh_tunneling.py
+DUT_MAC=aa:bb:cc:dd:ee:ff uv run litmus run examples/networked_device.py::DutDevice
+TARGET_ADDRESS=pihole.lab TARGET_USER=root uv run litmus run examples/pi_hole_server.py
 ```
 
 `wait_for_patterns.py` demonstrates both readiness polling in `configure()` and verdict
 polling in a test method. `hardware_device_lifecycle.py` registers survey and audit
 hooks around a rail that comes up, is watched, and is dropped in cleanup.
 `run_data_evidence.py` shows ctx flowing into `run_data` and a computed `within_spec`
-override. `networked_device.py` is the MAC-to-IP lesson (`utils.get_arp_resolver` in
-`configure`, locally or through a `via` hop) and needs `DUT_MAC` on the ARP table;
-`GATEWAY_HOST` and `GATEWAY_USER` resolve through a hop instead.
+override.
 
 Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
 `overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
@@ -54,10 +62,17 @@ patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
 under `docs/schema/`), `junit-xml.md` (the
 JUnit projection of that result for CI), translated from the legacy docs and updated
 to the port's semantics, `litmus-run.md` (the runner and its exit status contract),
-`litmus-check.md` (the skippable tier-3 linter over authored suites), and
+`litmus-new.md` (the gated-PASS suite generator),
+`litmus-check.md` (the skippable tier-3 linter over authored suites),
+`floor-technician.md` (the station page: how to read a result without reading
+source), and
 `api-stability.md` (the public surface, semantic versioning from 1.0.0, and the
 deprecation procedure). `CHANGELOG.md` at the root records every change
 to that surface.
+
+The Floor Technician guide is `docs/floor-technician.md`. Until the docs site
+(issue #82) publishes `docs/`, that path is the URL that belongs on a station
+label.
 
 ## Deployment requirement
 

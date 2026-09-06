@@ -269,9 +269,10 @@ class TestCleanupGuarantee:
         assert "cleanup failed (verdict unaffected)" in caplog.records[0].getMessage()
         assert "CONTRACT VIOLATION IN rack" in caplog.records[0].getMessage()
         assert (
-            "cleanup exceeded its 0.01-second finalization timeout"
-            in caplog.records[0].getMessage()
+            "cleanup exceeded its 0.01-second finalization timeout; "
+            "return from cleanup within the evidence budget" in caplog.records[0].getMessage()
         )
+        assert "{operation}" not in caplog.records[0].getMessage()
 
 
 class TestBuildSuiteClassification:
