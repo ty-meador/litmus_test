@@ -2,13 +2,52 @@
 
 The device is then eligible as a `via` target — the framework owns disconnect.
 No `cleanup()` override is needed, and the shell does not belong in ctx.
+
+A constructor argument wins when given (self-tests pass the loopback sshd). A
+`None` is resolved from `utils.env`: `SSH_HOST` / `SSH_USER`, optional
+`SSH_PASSWORD` / `SSH_PORT` (default 22). A target still missing is a
+`TestFailure` from `configure()` naming the variable to set.
+
+Run it: `SSH_HOST=dut SSH_USER=root litmus run examples/remote_device_ssh.py`.
 """
 
-import asyncio
-import os
 from typing import Any
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
+
+
+def _env_text(utils: TestUtils, name: str) -> str | None:
+    value = utils.env.get(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _require_env(utils: TestUtils, name: str) -> str:
+    value = _env_text(utils, name)
+    if value is None:
+        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
+    return value
+
+
+def _env_port(utils: TestUtils, name: str) -> int:
+    raw = _env_text(utils, name)
+    if raw is None:
+        return 22
+    try:
+        port = int(raw)
+    except ValueError:
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        ) from None
+    if not 1 <= port <= 65535:
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        )
+    return port
 
 
 class SshDevice(LitmusTest):
@@ -18,21 +57,22 @@ class SshDevice(LitmusTest):
         self,
         *,
         name: str,
-        host: str,
-        username: str,
+        host: str | None = None,
+        username: str | None = None,
         password: str | None = None,
-        port: int = 22,
+        port: int | None = None,
         skip_host_verification: bool = False,
     ) -> None:
-        """Capture the hop this device will own for the rest of the run.
+        """Capture the hop this device will own, or leave it for `configure()` to resolve.
 
         Args:
             name: Node name used by logs, artifacts, and failures.
-            host: SSH peer hostname or address.
-            username: Login name on that peer.
-            password: Password auth, when used. `None` falls through to the
-                transport's remaining credential paths (key, agent).
-            port: SSH port. Defaults to 22.
+            host: SSH peer hostname or address. `None` reads `SSH_HOST`.
+            username: Login name on that peer. `None` reads `SSH_USER`.
+            password: Password auth, when used. `None` falls through to
+                `SSH_PASSWORD`, then the transport's remaining credential paths
+                (key, agent).
+            port: SSH port. `None` reads `SSH_PORT`, then 22.
             skip_host_verification: Lab-only `known_hosts=None`. Default verifies.
         """
         super().__init__(name=name)
@@ -44,17 +84,23 @@ class SshDevice(LitmusTest):
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Open the class-owned hop. A refused dial is Fail, not a contract banner."""
+        host = self._host or _require_env(utils, "SSH_HOST")
+        username = self._username or _require_env(utils, "SSH_USER")
+        password = (
+            self._password if self._password is not None else _env_text(utils, "SSH_PASSWORD")
+        )
+        port = self._port if self._port is not None else _env_port(utils, "SSH_PORT")
         try:
             await utils.use_shell(
-                host=self._host,
-                username=self._username,
-                port=self._port,
-                password=self._password,
+                host=host,
+                username=username,
+                port=port,
+                password=password,
                 skip_host_verification=self._skip_host_verification,
             )
         except Exception as error:
             raise TestFailure(f"SSH connect failed: {error}") from error
-        utils.logger.info("SSH connected: %s", self._host)
+        utils.logger.info("SSH connected: %s", host)
         return {}
 
     def build_suite(self) -> LitmusTest:
@@ -84,30 +130,3 @@ class SshDevice(LitmusTest):
         if "100%" in usage:
             raise TestFailure("root filesystem full", "< 100%", "100%")
         raise TestFailure("df returned empty", "disk usage table", "(empty)")
-
-
-class RemoteDeviceSshExample:
-    """Run the class-owned SSH suite as a standalone program."""
-
-    @staticmethod
-    async def run() -> None:
-        """Execute through the framework-owned lifecycle.
-
-        Requires ``SSH_HOST`` and ``SSH_USER``. Optional ``SSH_PASSWORD`` and
-        ``SSH_PORT`` (default 22).
-        """
-        host = os.environ.get("SSH_HOST")
-        username = os.environ.get("SSH_USER")
-        if host is None or username is None:
-            raise LookupError("SSH_HOST and SSH_USER must be set to run this example")
-        await SshDevice(
-            name="ssh device",
-            host=host,
-            username=username,
-            password=os.environ.get("SSH_PASSWORD"),
-            port=int(os.environ.get("SSH_PORT", "22")),
-        ).run()
-
-
-if __name__ == "__main__":
-    asyncio.run(RemoteDeviceSshExample.run())
