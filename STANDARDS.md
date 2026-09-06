@@ -118,6 +118,12 @@ rules and pyright strict — an unannotated def fails `make check`.
 - Design reviews apply the [Golden Rule](docs/idioms.md#the-golden-rule): when authoring
   feels awkward, identify the idiom or problem-domain boundary being fought before proposing
   a new framework feature.
+- A change that adds, removes, renames, or re-types a name in `litmus.__all__`, weakens
+  a contract in `docs/contracts.md`, or bumps a record `format_version` is a change to a
+  promise. It is raised as a `needs-sign-off` issue for Ty before its MR opens, and the MR
+  updates `__all__`, the reference table in `docs/api-stability.md`, the documenting
+  section, and `CHANGELOG.md` together; from 1.0.0 a removal takes the deprecation path
+  first. `tests/test_public_surface.py` refuses an MR that updates one without the others.
 - Commits: imperative subject line, ≤72 chars, body explains *why* when non-obvious.
   Run `make check` before pushing — it is the gate, and an MR that fails it is not merged.
 - Never commit: `.venv/`, caches, artifacts, secrets, real hostnames/credentials from
