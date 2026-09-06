@@ -1,13 +1,19 @@
 """The evidence surface as the subject: ctx flows into `run_data` automatically.
 
-`configure` returns measurements; they merge into `utils.ctx` and appear on
-`RunResult.run_data` with no extra work. Class instances, functions, and live
-handles are stripped — only JSON-safe values survive. Override `run_data` only
-when a computed field (here `within_spec`) is needed on top of that snapshot.
+`configure` returns the context the test methods rely on — here the spec limits.
+Those entries merge into `utils.ctx`; each test method reads its limit from ctx,
+records the reading it took beside it, and both appear on `RunResult.run_data`
+with no extra work. Class instances, functions, and live handles are stripped —
+only JSON-safe values survive. Override `run_data` only when a computed field
+(here `within_spec`) is needed on top of that snapshot.
+
+`configure` does not seed placeholder readings. A reading a test method never
+took is absent from the evidence rather than reported as `0.0`, and `within_spec`
+treats a missing reading as out of spec.
 
 The readings are constructor-injected so the example runs on any development
-machine. A real suite would fill ctx from `utils.exec()`; the snapshot and the
-override stay the same.
+machine. A real suite would take them with `utils.exec()` inside the test
+method; the ctx write, the snapshot, and the override stay the same.
 """
 
 from __future__ import annotations
@@ -50,8 +56,12 @@ class PowerSupply(LitmusTest):
         self._temp_limit_c = temp_limit_c
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        """Seed ctx. The claims fill the real readings; both appear in run_data."""
-        return {"output_voltage_v": 0.0, "temperature_c": 0.0}
+        """Provide the limits the test methods judge against; readings are theirs to add."""
+        return {
+            "voltage_low_v": self._voltage_low_v,
+            "voltage_high_v": self._voltage_high_v,
+            "temp_limit_c": self._temp_limit_c,
+        }
 
     def build_suite(self) -> LitmusTest:
         """Independent claims: voltage and temperature do not depend on each other."""
@@ -64,26 +74,25 @@ class PowerSupply(LitmusTest):
         )
 
     async def _check_voltage(self, utils: TestUtils) -> Verdict:
+        low: float = utils.ctx["voltage_low_v"]
+        high: float = utils.ctx["voltage_high_v"]
         voltage = self._output_voltage_v
         utils.ctx["output_voltage_v"] = voltage
-        utils.logger.info("PSU voltage: %s V", voltage)
-        if self._voltage_low_v <= voltage <= self._voltage_high_v:
+        utils.logger.info("PSU voltage: %s V (spec: %s-%s V)", voltage, low, high)
+        if low <= voltage <= high:
             return PASS
-        raise TestFailure(
-            "PSU voltage out of spec",
-            f"{self._voltage_low_v:g}-{self._voltage_high_v:g} V",
-            f"{voltage:g} V",
-        )
+        raise TestFailure("PSU voltage out of spec", f"{low:g}-{high:g} V", f"{voltage:g} V")
 
     async def _check_temperature(self, utils: TestUtils) -> Verdict:
+        limit: float = utils.ctx["temp_limit_c"]
         temperature = self._temperature_c
         utils.ctx["temperature_c"] = temperature
-        utils.logger.info("PSU temperature: %s degC (limit: %s)", temperature, self._temp_limit_c)
-        if temperature <= self._temp_limit_c:
+        utils.logger.info("PSU temperature: %s degC (limit: %s degC)", temperature, limit)
+        if temperature <= limit:
             return PASS
         raise TestFailure(
             "PSU temperature over limit",
-            f"<= {self._temp_limit_c:g} degC",
+            f"<= {limit:g} degC",
             f"{temperature:g} degC",
         )
 
