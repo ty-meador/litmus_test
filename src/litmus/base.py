@@ -370,8 +370,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             name: Stable node name used by logs, artifacts, and failures.
             via: Optional gateway Testable. The framework brings it up before this
                 node's pre-configure survey, routes exec through its SSH hop, and
-                tears it down after this node's post-cleanup survey. Authors never
-                call configure/cleanup on it.
+                tears it down after this node's post-cleanup survey and after the
+                shells this node opened have closed. Authors never call
+                configure/cleanup on it.
             discrete_log_file: Own a per-node timeline. Set false only when this
                 composed node should roll its records into its parent.
             fail_after: Positive finite seconds before this subtree renders Fail.
@@ -1025,7 +1026,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                             try:
                                 await self._run_surveys(boundary, utils, "post-cleanup")
                             finally:
-                                await self._tear_down_via()
+                                # Owned shells outlive the post-cleanup survey and close
+                                # before the hop they may tunnel through (#115).
+                                try:
+                                    await utils._disconnect_opened()  # pyright: ignore[reportPrivateUsage]
+                                finally:
+                                    await self._tear_down_via()
             result = self._to_result(outcome, utils, children=summary_children)
             settled_result = result
             after_each_started = True
@@ -1792,7 +1798,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
     @final
     async def _run_cleanup(self, boundary: ChildBoundary, utils: TestUtils) -> None:
-        """Finish cleanup before allowing cancellation to leave this node."""
+        """Finish cleanup before allowing cancellation to leave this node.
+
+        Shells this node opened stay connected here: the post-cleanup survey still
+        execs through them. The caller disconnects them after that survey and
+        before the via lease is released.
+        """
         cleanup = asyncio.create_task(
             boundary.run(
                 Slot.CLEANUP,
@@ -1808,8 +1819,6 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.shield(cleanup)
             raise
-        finally:
-            await utils._disconnect_opened()  # pyright: ignore[reportPrivateUsage]
 
     @final
     async def _run_configure_only(self, seed: TestUtils, run_abort: RunAbort) -> Outcome:
@@ -1909,9 +1918,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             await self._run_cleanup(boundary, utils)
         finally:
             try:
-                await self._tear_down_via()
+                await utils._disconnect_opened()  # pyright: ignore[reportPrivateUsage]
             finally:
-                utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
+                try:
+                    await self._tear_down_via()
+                finally:
+                    utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
 
     @final
     async def _bring_up_via(self, utils: TestUtils, run_abort: RunAbort) -> Outcome | None:
