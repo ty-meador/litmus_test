@@ -19,6 +19,7 @@ dev = [
     "pytest-cov>=7",
     "pip-audit>=2.10",
     "jsonschema>=4.23",
+    "hypothesis>=6.151",
 ]
 
 [project.scripts]
@@ -110,6 +111,7 @@ output = ".coverage/cobertura.xml"
 "src/litmus/timeline.py" = 97.8
 
 [tool.pytest.ini_options]
+addopts = "--hypothesis-seed=64"
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"

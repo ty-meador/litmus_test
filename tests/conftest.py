@@ -2,9 +2,11 @@
 
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
+from tempfile import gettempdir
 from typing import cast
 
 import pytest
+from hypothesis.configuration import set_hypothesis_home_dir
 from tests.mock_connector import ConnectorInstaller, MockConnector
 
 from litmus import TestUtils
@@ -13,6 +15,10 @@ from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouting
 
 CHECKOUT_ARTIFACTS = Path(__file__).resolve().parents[1] / "artifacts"
+
+# Hypothesis caches constants during collection even with its example database
+# disabled. Keep that storage outside the checkout as well as each run's evidence.
+set_hypothesis_home_dir(Path(gettempdir()) / "litmus-hypothesis")
 
 
 def _checkout_evidence() -> frozenset[Path]:
