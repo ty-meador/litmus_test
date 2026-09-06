@@ -42,6 +42,11 @@ kept so that it exists before the promise does.
 
 ### Changed
 
+- A node halted by an integration hook now finishes its abort — hard close, paired
+  `after_each`, sealed Aborted result — even when a parallel sibling's cancellation lands
+  mid-close. The started row an integrator wrote in `before_each` was being left open when
+  the throwing node had a live sibling; the sequence shapes under test never raced one
+  (issue #117).
 - The Inspector `type` discriminator speaks the composition vocabulary: `suite`, `test`,
   `parallel`, `sequence` replace `test-suite`, `test-case`, `test-group`,
   `test-sequence`, and the `NodeType` members are `SUITE`, `TEST`, `PARALLEL`,
