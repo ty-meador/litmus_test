@@ -119,7 +119,10 @@ class SshConnector:
             msg = "SshConnector via must be an SshInterface; pass an SshInterface hop"
             raise TypeError(msg)
         if via is not None and not via.connected:
-            msg = "routed via hop must be live at open time; the router never brings hops up"
+            msg = (
+                "routed via hop must be live at open time; "
+                "bring the hop up before passing it as via"
+            )
             raise ConnectionError(msg)
         ssh = SshInterface(
             host=request.host,

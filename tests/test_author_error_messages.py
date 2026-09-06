@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable
 from datetime import datetime
@@ -24,6 +25,7 @@ from litmus import (
     TestUtils,
     Verdict,
 )
+from litmus.base import _bounded_finalization  # pyright: ignore[reportPrivateUsage]
 from litmus.cli import SuiteLoader, UsageError
 from litmus.errors import ContextInsufficient
 from litmus.executor import ExecResult, LocalExec
@@ -287,6 +289,24 @@ class TestAuthorContractViolations:
             "a root time budget is already declared; declare exactly one "
             "fail_after or abort_after across construction and run"
         )
+        _assert_names_rule_and_fix(raised.value.detail)
+
+    async def test_finalization_timeout_names_the_operation_and_the_fix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("litmus.base._FINALIZATION_TIMEOUT_SECONDS", 0.01)
+
+        async def hang() -> object:
+            await asyncio.Event().wait()
+            return None
+
+        with pytest.raises(ContractViolation) as raised:
+            await _bounded_finalization(hang(), node="rack", operation="cleanup")
+        assert raised.value.detail == (
+            "cleanup exceeded its 0.01-second finalization timeout; "
+            "return from cleanup within the evidence budget"
+        )
+        assert "{operation}" not in raised.value.detail
         _assert_names_rule_and_fix(raised.value.detail)
 
     async def test_a_second_run_names_the_fix(self) -> None:
@@ -633,6 +653,21 @@ class TestRoutingAndTransportTypeErrors:
             await SshConnector().open(request)
         assert str(raised.value) == (
             "SshConnector via must be an SshInterface; pass an SshInterface hop"
+        )
+        _assert_names_rule_and_fix(str(raised.value))
+
+    async def test_ssh_connector_rejects_a_dead_via_hop(self) -> None:
+        hop = SshInterface(
+            host="127.0.0.1",
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        request = ShellOpenRequest(host="10.0.0.2", username="root", via=hop)
+        with pytest.raises(ConnectionError) as raised:
+            await SshConnector().open(request)
+        assert str(raised.value) == (
+            "routed via hop must be live at open time; bring the hop up before passing it as via"
         )
         _assert_names_rule_and_fix(str(raised.value))
 
