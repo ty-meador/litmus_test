@@ -36,7 +36,7 @@ class TestSurveyHooks:
                 return self.test("claim", self._claim)
 
             async def cleanup(self, utils: TestUtils) -> None:
-                utils.ctx["cleaned"] = True
+                utils.logger.info("cleaned")
 
             async def _survey(self, utils: TestUtils) -> object:
                 return {}
@@ -106,14 +106,15 @@ class TestSurveyHooks:
         class Suite(LitmusTest):
             def __init__(self, *, name: str) -> None:
                 super().__init__(name=name)
+                self._dispatches: list[int] = []
                 self.use_survey(self._null_reading)
 
             def build_suite(self) -> LitmusTest:
                 return self.test("claim", self._claim)
 
             async def _null_reading(self, utils: TestUtils) -> object:
-                dispatch = int(utils.ctx.get("null_dispatch", 0)) + 1
-                utils.ctx["null_dispatch"] = dispatch
+                dispatch = len(self._dispatches) + 1
+                self._dispatches.append(dispatch)
                 await utils.capture_artifact(
                     Artifact(name=f"null-reading-{dispatch}", type="survey", data=None)
                 )

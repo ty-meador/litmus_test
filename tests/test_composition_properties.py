@@ -1,9 +1,9 @@
 """Generated composition trees checked against a pure terminal-state model (#64)."""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
@@ -214,7 +214,9 @@ def _assert_evidence(tree: _Tree, result: RunResult, execution: _Execution) -> N
 
 
 class _LocalContextSuite(LitmusTest):
-    def __init__(self, tree: _Tree, path: _Path, contexts: dict[_Path, dict[str, Any]]) -> None:
+    cleanup_owners: ClassVar[dict[tuple[str, ...], str]] = {}
+
+    def __init__(self, tree: _Tree, path: _Path, contexts: dict[_Path, Mapping[str, Any]]) -> None:
         super().__init__(name=path[-1], discrete_log_file=False)
         self.tree = tree
         self.path = path
@@ -246,7 +248,7 @@ class _LocalContextSuite(LitmusTest):
     async def cleanup(self, utils: TestUtils) -> None:
         # Cleanup exceptions are swallowed by contract; inspect these values outside
         # the lifecycle so a failed assertion cannot be mistaken for a passing test.
-        utils.ctx["cleanup_owner"] = "/".join(self.path)
+        self.cleanup_owners[self.path] = str(utils.ctx["owner"])
 
 
 class TestCompositionProperties:
@@ -331,7 +333,8 @@ class TestCompositionProperties:
     @_PROPERTY
     @given(tree=_trees(outcomes=("pass",)))
     async def test_context_stays_with_each_authored_instance(self, tree: _Tree) -> None:
-        contexts: dict[_Path, dict[str, Any]] = {}
+        contexts: dict[_Path, Mapping[str, Any]] = {}
+        _LocalContextSuite.cleanup_owners.clear()
         result = await _LocalContextSuite(tree, ("root",), contexts).run()
 
         assert result.state is State.PASS
@@ -341,8 +344,8 @@ class TestCompositionProperties:
             assert contexts[path] == {
                 "owner": "/".join(path),
                 "visited": ["claim"] if spec.kind == "test" else [],
-                "cleanup_owner": "/".join(path),
             }
+            assert _LocalContextSuite.cleanup_owners[path] == "/".join(path)
         # Inline nodes share their authored owner's dict; siblings and descendants
         # must not share even a nested mutable value across that instance boundary.
         contexts[("root",)]["visited"].append("after run")

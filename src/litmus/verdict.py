@@ -1,58 +1,94 @@
-"""The non-forgeable PASS sentinel and the `Verdict` type every test method returns.
+"""The non-forgeable PASS sentinel, the `Verdict` every test method returns, and the
+evidence a verdict carries.
 
-The verdict contract is enforced at runtime by identity, not by equality: the child
-boundary asks `result is PASS`. Nothing a suite can construct — a string, a truthy
-value, a parsed config — satisfies that check. `PASS` can only be obtained by
-importing it.
+A test method has exactly two exits: `return PASS(...)` and `raise TestFailure(...)`.
+Evidence leaves with the verdict. The bare `PASS` is a verdict with no evidence;
+`PASS(evidence)` is a verdict carrying a mapping of readings. The child boundary
+accepts a `Verdict` instance and nothing else: a string, a truthy value, a parsed
+config all fail the type check, and a `Verdict` can only be obtained by importing
+`PASS` or calling it. The payload is validated at the boundary, not here, so the
+violation can name the leaf as well as the key (issue #118).
 """
 
-from typing import ClassVar, final
+from __future__ import annotations
+
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import ClassVar, Never, cast, final
 
 
 @final
-class _Pass:
-    """The single value that means "this node passed".
+class Verdict[E: Mapping[str, object] = Mapping[str, object]]:
+    """The value that means "this node passed", with or without evidence.
 
     Contract:
-      - Exactly one instance exists per interpreter. `_Pass()` returns it; copying,
-        deep-copying, and unpickling all return it. There is no second object that
-        `is PASS`, so the sentinel cannot be forged by any route the framework does
-        not control.
-      - `repr()` is the bare word `PASS`, so logs and artifacts read as the FT
-        expects rather than showing an object address.
+      - Exactly one bare instance exists per interpreter. `Verdict()` returns it;
+        copying, deep-copying, and unpickling all return it. It is the value bound to
+        `PASS`.
+      - `PASS(evidence)` mints a verdict that carries a detached copy of `evidence`.
+        It is a distinct object, so identity with `PASS` is never the check: the
+        child boundary asks `isinstance(result, Verdict)`.
+      - `evidence` is read-only. The boundary copies it into `run_data` after checking
+        every entry; a carrying verdict cannot be edited after it is returned.
+      - `repr()` is the bare word `PASS`, or `PASS({...})` for a carrying verdict, so
+        logs and artifacts read as the FT expects rather than showing an address.
 
-    Instantiate nothing here; import `PASS`.
+    The type parameter is the evidence shape. A method annotated
+    `-> Verdict[MyEvidence]` with a `TypedDict` has its `PASS({...})` payload checked
+    against that shape by pyright; the bare `-> Verdict` accepts any mapping.
     """
 
-    __slots__ = ()
+    __slots__ = ("_evidence",)
 
-    _instance: ClassVar[_Pass | None] = None
+    _evidence: Mapping[str, object] | None
+    _bare: ClassVar[Verdict[Never] | None] = None
 
-    def __new__(cls) -> _Pass:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    def __new__(cls) -> Verdict[Never]:
+        if cls._bare is None:
+            bare = cast("Verdict[Never]", super().__new__(cls))
+            object.__setattr__(bare, "_evidence", None)
+            cls._bare = bare
+        return cls._bare
+
+    def __call__[P: Mapping[str, object]](self, evidence: P) -> Verdict[P]:
+        """Mint a verdict carrying a detached copy of ``evidence``."""
+        carrying = cast("Verdict[P]", object.__new__(Verdict))
+        object.__setattr__(carrying, "_evidence", MappingProxyType(dict(evidence)))
+        return carrying
+
+    @property
+    def evidence(self) -> Mapping[str, object] | None:
+        """The readings this verdict carries, or ``None`` for the bare ``PASS``."""
+        return self._evidence
+
+    def __setattr__(self, name: str, value: object) -> Never:
+        msg = "a Verdict is immutable; mint a new one with PASS(evidence)"
+        raise AttributeError(msg)
 
     def __repr__(self) -> str:
-        return "PASS"
+        if self._evidence is None:
+            return "PASS"
+        return f"PASS({dict(self._evidence)!r})"
 
-    def __copy__(self) -> _Pass:
+    def __copy__(self) -> Verdict[E]:
         return self
 
-    def __deepcopy__(self, memo: dict[int, object]) -> _Pass:
+    def __deepcopy__(self, memo: dict[int, object]) -> Verdict[E]:
         return self
 
-    def __reduce__(self) -> tuple[type[_Pass], tuple[()]]:
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         # Unpickling must route back through __new__ so a round-trip cannot mint a
-        # second instance that would fail the identity check while looking correct.
-        return (_Pass, ())
+        # second bare instance that would fail the type check while looking correct.
+        # A carrying verdict rebuilds through PASS so its payload stays a copy.
+        if self._evidence is None:
+            return (Verdict, ())
+        return (_carrying, (dict[str, object](self._evidence),))
 
 
-PASS = _Pass()
+def _carrying(evidence: Mapping[str, object]) -> Verdict[Mapping[str, object]]:
+    return PASS(evidence)
 
-type Verdict = _Pass
-"""Return annotation for every test method: `async def _check(...) -> Verdict`.
 
-Static counterpart to the runtime check. A method annotated `-> Verdict` that falls
-off its end is a pyright error at write time; the runtime check remains the guarantee.
-"""
+PASS: Verdict[Never] = Verdict()
+"""The verdict. `return PASS` passes with no evidence; `return PASS({...})` passes
+and carries the readings that prove it."""

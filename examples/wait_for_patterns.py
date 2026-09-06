@@ -5,6 +5,10 @@ Where ``wait_for()`` is called determines what its timeout means. A timeout in
 method is the hardware verdict itself. In both places, ``looking_for`` is the primary
 diagnostic shown to the Floor Technician.
 
+Readiness evidence from ``configure()`` is returned into ctx; the reading a test
+method takes travels with its verdict, ``PASS({...})`` or ``TestFailure(...,
+evidence={...})``, and ``@evidence`` names what a pass must carry.
+
 The observations below are scripted so the example runs on any development machine.
 Replace them with ``utils.exec()`` or another asynchronous hardware read in a real
 suite; the lifecycle and evidence shape remain the same.
@@ -14,18 +18,9 @@ Run them: `litmus run examples/wait_for_patterns.py::ConfigureGatedDevice` and
 """
 
 import asyncio
-from typing import Any, TypedDict, cast
+from typing import Any
 
-from litmus import PASS, Artifact, LitmusTest, TestFailure, TestUtils, Verdict
-
-
-class _ServiceContext(TypedDict):
-    """Serializable evidence accumulated by the configure-gated example."""
-
-    service_state: str
-    service_poll_attempts: int
-    health_response: str
-    cleanup_complete: bool
+from litmus import PASS, Artifact, LitmusTest, TestFailure, TestUtils, Verdict, evidence
 
 
 class ConfigureGatedDevice(LitmusTest):
@@ -53,7 +48,7 @@ class ConfigureGatedDevice(LitmusTest):
         self.use_survey(self._service_snapshot)
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        """Block until the service is active and record the readiness evidence."""
+        """Block until the service is active and return the readiness evidence."""
         states = iter(self._service_states)
         service_state = "not-observed"
         attempts = 0
@@ -80,53 +75,39 @@ class ConfigureGatedDevice(LitmusTest):
                     data={"attempts": attempts, "state": service_state},
                 )
             )
-        return {
-            "service_state": service_state,
-            "service_poll_attempts": attempts,
-            "health_response": "not-checked",
-            "cleanup_complete": False,
-        }
+        return {"service_state": service_state, "service_poll_attempts": attempts}
 
     def build_suite(self) -> LitmusTest:
         """Run the health claim only after the configure gate succeeds."""
         return self.test("service-health", self._check_health)
 
     async def cleanup(self, utils: TestUtils) -> None:
-        """Leave cleanup completion in the final structured evidence snapshot."""
-        ctx = cast("_ServiceContext", utils.ctx)
-        ctx["cleanup_complete"] = True
+        """Leave the service as it was found."""
         utils.logger.info("service cleanup complete")
 
     async def _service_snapshot(self, utils: TestUtils) -> dict[str, object]:
-        """Capture the state visible at each lifecycle phase boundary."""
+        """Capture the readiness state visible at each lifecycle phase boundary."""
         return {
             "service_state": str(utils.ctx.get("service_state", "not-configured")),
             "service_poll_attempts": int(utils.ctx.get("service_poll_attempts", 0)),
-            "health_response": str(utils.ctx.get("health_response", "not-checked")),
-            "cleanup_complete": bool(utils.ctx.get("cleanup_complete", False)),
         }
 
+    @evidence("health_response")
     async def _check_health(self, utils: TestUtils) -> Verdict:
-        ctx = cast("_ServiceContext", utils.ctx)
-        ctx["health_response"] = self._health_response
-        utils.logger.info("service health response: %s", self._health_response)
+        response = self._health_response
+        utils.logger.info("service health response: %s", response)
         await utils.capture_artifact(
             Artifact(
                 name="service-health",
                 type="polling-observation",
-                data={"response": self._health_response},
+                data={"response": response},
             )
         )
-        if "ok" in self._health_response:
-            return PASS
-        raise TestFailure("health check failed", "ok", self._health_response)
-
-
-class _StressContext(TypedDict):
-    """Serializable evidence accumulated by the verdict-polling example."""
-
-    stress_complete: bool
-    stress_poll_attempts: int
+        if "ok" in response:
+            return PASS({"health_response": response})
+        raise TestFailure(
+            "health check failed", "ok", response, evidence={"health_response": response}
+        )
 
 
 class MainAssertionDevice(LitmusTest):
@@ -149,51 +130,43 @@ class MainAssertionDevice(LitmusTest):
         self._stress_states = stress_states
         self._interval = interval
         self._timeout_seconds = timeout_seconds
-        self.use_survey(self._stress_snapshot)
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        """Initialize the serializable polling evidence."""
-        return {"stress_complete": False, "stress_poll_attempts": 0}
+        """Provide the polling budget the claim reads."""
+        return {"poll_interval_s": self._interval, "poll_timeout_s": self._timeout_seconds}
 
     def build_suite(self) -> LitmusTest:
         """Declare the stress-completion claim."""
         return self.test("stress-test-completes", self._wait_for_stress)
 
-    async def _stress_snapshot(self, utils: TestUtils) -> dict[str, object]:
-        """Capture progress at each reachable lifecycle boundary."""
-        return {
-            "stress_complete": bool(utils.ctx.get("stress_complete", False)),
-            "stress_poll_attempts": int(utils.ctx.get("stress_poll_attempts", 0)),
-        }
-
+    @evidence("stress_complete", "stress_poll_attempts")
     async def _wait_for_stress(self, utils: TestUtils) -> Verdict:
         states = iter(self._stress_states)
-        ctx = cast("_StressContext", utils.ctx)
+        attempts = 0
+        complete = False
 
         async def stress_is_complete() -> bool:
+            nonlocal attempts, complete
             await asyncio.sleep(0)
-            ctx["stress_poll_attempts"] += 1
-            ctx["stress_complete"] = next(states, ctx["stress_complete"])
-            utils.logger.info(
-                "stress completion poll %d: %s",
-                ctx["stress_poll_attempts"],
-                ctx["stress_complete"],
-            )
-            return ctx["stress_complete"]
+            attempts += 1
+            complete = next(states, complete)
+            utils.logger.info("stress completion poll %d: %s", attempts, complete)
+            return complete
 
-        complete = await utils.wait_for(
+        observed = await utils.wait_for(
             stress_is_complete,
             looking_for="stress completion marker",
-            interval=self._interval,
-            timeout_seconds=self._timeout_seconds,
+            interval=utils.ctx["poll_interval_s"],
+            timeout_seconds=utils.ctx["poll_timeout_s"],
         )
-        if complete and ctx["stress_complete"]:
+        reading = {"stress_complete": complete, "stress_poll_attempts": attempts}
+        if observed and complete:
             await utils.capture_artifact(
                 Artifact(
                     name="stress-complete",
                     type="polling-observation",
-                    data={"attempts": ctx["stress_poll_attempts"]},
+                    data={"attempts": attempts},
                 )
             )
-            return PASS
-        raise TestFailure("stress completion marker was not observed")
+            return PASS(reading)
+        raise TestFailure("stress completion marker was not observed", evidence=reading)

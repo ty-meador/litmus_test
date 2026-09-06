@@ -91,8 +91,11 @@ class ArpResolver:
 
     `resolve()` returns a plain dict suitable for spreading into `configure()`'s
     return value. `ping(utils)` is a gated reachability claim. `reacquire(utils)`
-    forces a fresh table read after a reboot, flash, or DHCP churn and mutates
-    `utils.ctx` in place.
+    forces a fresh table read after a reboot, flash, or DHCP churn and returns the
+    new IP; the resolver remembers it, so a later `ping(utils)` dials the address it
+    last resolved. Ctx is read-only after `configure()`, so the address that moves
+    lives in the resolver, and a test that wants it on the record carries it as
+    evidence: `PASS({"ip": ip})`.
 
     Raises:
         ArpResolutionFailure: The MAC is missing from the table, or `/proc/net/arp`
@@ -163,11 +166,14 @@ class ArpResolver:
         return {"ip": ip}
 
     async def reacquire(self, utils: TestUtils) -> str:
-        """Force a fresh ARP read and write the new IP into `utils.ctx`.
+        """Force a fresh ARP read and return the new IP.
 
         Call from a test method after anything that may have changed the IP.
         The cache key stays the resolver's — that is the host whose table holds
-        this MAC — while the command runs through the child's `utils.exec`.
+        this MAC — while the command runs through the child's `utils.exec`. The
+        resolver's shared table now holds the new address, so `ping(utils)` on any
+        resolver for this MAC dials it; carry it as evidence on the verdict if the
+        Floor Technician should see it.
         """
         cache_key = self._cache_key if self._cache_key is not None else "local"
         await self._refresh(utils.exec, cache_key, force=True)
@@ -180,18 +186,20 @@ class ArpResolver:
                 host=cache_key,
             )
         utils.logger.info("reacquired %s -> %s", self._mac, ip)
-        utils.ctx["ip"] = ip
         return ip
 
     async def ping(self, utils: TestUtils) -> Verdict:
-        """Reachability claim against the IP currently in `utils.ctx`.
+        """Reachability claim against this MAC's last resolved IP.
 
-        Uses the child's exec and logger. Packet loss and a missing stats line
-        are `TestFailure`. Duplicate replies (`received > transmitted`) still
-        count as success — the host answered. A missing IP (resolve never ran)
-        is `ArpResolutionFailure`.
+        The address is read from the resolver's table for this MAC, which
+        `resolve()` and `reacquire()` both refresh, and falls back to `utils.ctx["ip"]`
+        for a context that was seeded without a resolve. Uses the child's exec and
+        logger. Packet loss and a missing stats line are `TestFailure`. Duplicate
+        replies (`received > transmitted`) still count as success — the host
+        answered. A missing IP (resolve never ran) is `ArpResolutionFailure`.
         """
-        ip = utils.ctx.get("ip")
+        cache_key = self._cache_key if self._cache_key is not None else "local"
+        ip = self._ip_from_cache(cache_key) or utils.ctx.get("ip")
         if not isinstance(ip, str) or not ip:
             raise ArpResolutionFailure(
                 "No IP address resolved — was resolve() called?",
