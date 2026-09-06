@@ -154,7 +154,10 @@ async def test_sync_hook_is_rejected_before_lifecycle_execution() -> None:
     assert result.state is State.ABORTED
     assert isinstance(result.failure, ExternalIntegrationFailure)
     assert isinstance(result.failure.cause, TypeError)
-    assert str(result.failure.cause) == "before_each hook must return an awaitable"
+    assert str(result.failure.cause) == (
+        "before_each hook must return an awaitable; "
+        "define it with async def so the call returns a coroutine"
+    )
 
 
 async def test_lambda_may_return_an_async_integration_call() -> None:

@@ -103,13 +103,22 @@ class RunResult:
         """Defensively snapshot containers and enforce the navigation invariants."""
         names = list(self.ancestor_names)
         if not names or names[-1] != self.node:
-            msg = "ancestor_names must be a non-empty root-to-node path"
+            msg = (
+                "ancestor_names must be a non-empty root-to-node path; "
+                "pass the lineage ending in this node's name"
+            )
             raise ValueError(msg)
         if self.bread_crumbs != "/".join(names):
-            msg = "bread_crumbs must equal '/'.join(ancestor_names)"
+            msg = (
+                "bread_crumbs must equal '/'.join(ancestor_names); "
+                "set bread_crumbs to the joined ancestor_names"
+            )
             raise ValueError(msg)
         if self.summary_tree.name != self.node or self.summary_tree.state is not self.state:
-            msg = "summary_tree root must describe the RunResult node and state"
+            msg = (
+                "summary_tree root must describe the RunResult node and state; "
+                "pass a tree whose name and state match this result"
+            )
             raise ValueError(msg)
         object.__setattr__(self, "ancestor_names", names)
         object.__setattr__(self, "env", MappingProxyType(dict(self.env)))

@@ -50,7 +50,7 @@ class TestMissingKeyIsAContractViolation:
         assert failure.owner == "psu"
         assert failure.fail_message == (
             "CONTRACT VIOLATION IN rail: context insufficient: configure() did not provide "
-            "'absent' (context owned by 'psu')"
+            "'absent' (context owned by 'psu'); return 'absent' from configure()"
         )
         assert failure.to_json()["key"] == "absent"
         assert cleaned == ["cleanup"]
@@ -113,7 +113,8 @@ class TestMissingKeyIsAContractViolation:
         assert result.failure.node == "psu"
         assert result.failure.key == "rail"
         assert result.failure.fail_message == (
-            "CONTRACT VIOLATION IN psu: context insufficient: configure() did not provide 'rail'"
+            "CONTRACT VIOLATION IN psu: context insufficient: configure() did not provide "
+            "'rail'; return 'rail' from configure()"
         )
         assert calls == ["cleanup"]
 

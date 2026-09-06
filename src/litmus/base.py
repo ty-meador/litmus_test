@@ -193,18 +193,18 @@ def _time_budget(
         return None
     name = "fail_after" if fail_after is not None else "abort_after"
     value = cast("object", raw)
+    duration = (
+        f"{name} must be a positive finite number of seconds; "
+        "pass a number of seconds greater than zero"
+    )
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ContractViolation(node, f"{name} must be a positive finite number of seconds")
+        raise ContractViolation(node, duration)
     try:
         seconds = float(value)
     except Exception as error:
-        raise ContractViolation(
-            node,
-            f"{name} must be a positive finite number of seconds",
-            cause=error,
-        ) from error
+        raise ContractViolation(node, duration, cause=error) from error
     if not math.isfinite(seconds) or seconds <= 0:
-        raise ContractViolation(node, f"{name} must be a positive finite number of seconds")
+        raise ContractViolation(node, duration)
     if fail_after is not None:
         return TimeBudget(name="fail_after", seconds=seconds)
     return TimeBudget(name="abort_after", seconds=seconds)
@@ -265,7 +265,7 @@ async def _bounded_finalization(call: Awaitable[object], *, node: str, operation
     except TimeoutError as error:
         detail = (
             f"{operation} exceeded its {_FINALIZATION_TIMEOUT_SECONDS:g}-second "
-            "finalization timeout"
+            "finalization timeout; return from {operation} within the evidence budget"
         )
         raise ContractViolation(node, detail=detail, cause=error) from error
     finally:
@@ -407,13 +407,19 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
         for name in cls.__dict__:
             if name in _SEALED_METHODS or name.startswith("_safe_"):
-                msg = f"LitmusTest.{name} is framework-owned and cannot be overridden"
+                msg = (
+                    f"LitmusTest.{name} is framework-owned and cannot be overridden; "
+                    "rename the method or call the public API instead of replacing it"
+                )
                 raise TypeError(msg)
 
         for name in _LIFECYCLE_COROUTINES:
             member = cls.__dict__.get(name)
             if member is not None and not inspect.iscoroutinefunction(_function(member)):
-                msg = f"{cls.__name__}.{name} must be defined with async def"
+                msg = (
+                    f"{cls.__name__}.{name} must be defined with async def; "
+                    f"write it as async def {name}(self, utils)"
+                )
                 raise TypeError(msg)
 
         for name, member in cls.__dict__.items():
@@ -423,19 +429,31 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 and _is_declared_test_method(cls, name, function)
                 and not inspect.iscoroutinefunction(function)
             ):
-                msg = f"{cls.__name__}.{name} must be defined with async def"
+                msg = (
+                    f"{cls.__name__}.{name} must be defined with async def; "
+                    f"write it as async def {name}(self, utils)"
+                )
                 raise TypeError(msg)
 
         build_suite = inspect.getattr_static(cls, "build_suite")
         if build_suite is LitmusTest.build_suite:
-            msg = f"{cls.__name__}.build_suite must be overridden"
+            msg = (
+                f"{cls.__name__}.build_suite must be overridden; "
+                "define def build_suite(self) -> LitmusTest on the subclass"
+            )
             raise TypeError(msg)
         build_suite_function = _function(build_suite)
         if not inspect.isfunction(build_suite_function):
-            msg = f"{cls.__name__}.build_suite must be defined with def"
+            msg = (
+                f"{cls.__name__}.build_suite must be defined with def; "
+                "assign a method, not a data attribute"
+            )
             raise TypeError(msg)
         if inspect.iscoroutinefunction(build_suite_function):
-            msg = f"{cls.__name__}.build_suite must be defined with def, not async def"
+            msg = (
+                f"{cls.__name__}.build_suite must be defined with def, not async def; "
+                "build_suite is a pure table of contents and must not await"
+            )
             raise TypeError(msg)
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -496,14 +514,19 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """
         if not inspect.iscoroutinefunction(fn):
             method = getattr(fn, "__qualname__", repr(fn))
-            msg = f"test method {method} must be defined with async def"
+            msg = (
+                f"test method {method} must be defined with async def; "
+                "write it as async def and return PASS or raise TestFailure"
+            )
             raise TypeError(msg)
         try:
             inspect.signature(fn).bind(_UTILS_PLACEHOLDER, *args, **kwargs)
         except TypeError as error:
             method = getattr(fn, "__qualname__", repr(fn))
             raise ContractViolation(
-                name, f"arguments do not fit test method {method}: {error}"
+                name,
+                f"arguments do not fit test method {method} ({error}); "
+                "pass arguments that match the method (utils is supplied by the framework)",
             ) from error
         return _Test(
             name=name,
@@ -523,7 +546,11 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     ) -> LitmusTest:
         """Compose independent children under one structured-concurrency owner."""
         if not children:
-            raise ContractViolation(name, "a parallel node must contain at least one child")
+            raise ContractViolation(
+                name,
+                "a parallel node must contain at least one child; "
+                "pass one or more LitmusTest instances",
+            )
         return _Parallel(
             name=name,
             children=children,
@@ -543,7 +570,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     ) -> LitmusTest:
         """Compose dependent children that stop at the first non-pass verdict."""
         if not children:
-            raise ContractViolation(name, "a sequence must contain at least one child")
+            raise ContractViolation(
+                name,
+                "a sequence must contain at least one child; pass one or more LitmusTest instances",
+            )
         return _Sequence(
             name=name,
             children=children,
@@ -563,15 +593,36 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         without a device route still is (see ``Phase``).
         """
         if self._frozen:
-            raise ContractViolation(self.name, "hooks may be registered only during construction")
-        selected = frozenset(Phase) if phases is None else frozenset(Phase(p) for p in phases)
+            raise ContractViolation(
+                self.name,
+                "hooks may be registered only during construction; "
+                "call use_survey or use_audit from __init__ after super().__init__",
+            )
+        if phases is None:
+            selected = frozenset(Phase)
+        else:
+            selected_phases: set[Phase] = set()
+            for phase in phases:
+                try:
+                    selected_phases.add(Phase(phase))
+                except ValueError:
+                    names = ", ".join(member.value for member in Phase)
+                    raise ValueError(
+                        f"{phase!r} is not a survey phase; pass one of {names}, "
+                        "or omit phases to observe every boundary"
+                    ) from None
+            selected = frozenset(selected_phases)
         self._surveys.append(SurveyHook(fn=fn, phases=selected))
 
     @final
     def use_audit(self, *, interval: float, fn: HookFunction) -> None:
         """Register an interval audit as immutable test identity during construction."""
         if self._frozen:
-            raise ContractViolation(self.name, "hooks may be registered only during construction")
+            raise ContractViolation(
+                self.name,
+                "hooks may be registered only during construction; "
+                "call use_survey or use_audit from __init__ after super().__init__",
+            )
         self._audits.append(AuditHook(interval=interval, fn=fn))
 
     async def configure(self, utils: TestUtils) -> Mapping[str, Any]:
@@ -584,7 +635,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         Subclasses provide a pure table of contents assembled with ``self.test()``,
         ``self.sequence()``, and ``self.parallel()``.
         """
-        detail = "build_suite() must return a test, sequence, or parallel composition"
+        detail = (
+            "build_suite() must return a test, sequence, or parallel composition; "
+            "return self.test(...), self.sequence(...), or self.parallel(...)"
+        )
         raise ContractViolation(self.name, detail)
 
     async def cleanup(self, utils: TestUtils) -> None:
@@ -757,9 +811,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     ) -> RunResult:
         """Execute one node while preserving the tree's shared halt signal."""
         if self._has_run:
-            raise ContractViolation(self.name, "a LitmusTest instance may run only once")
+            raise ContractViolation(
+                self.name,
+                "a LitmusTest instance may run only once; construct a new instance for each run",
+            )
         if self._configure_only_utils is not None:
-            raise ContractViolation(self.name, "this instance is already up as a via target")
+            raise ContractViolation(
+                self.name,
+                "this instance is already up as a via target; "
+                "construct a separate instance to run, or tear the hop down first",
+            )
         object.__setattr__(self, "_has_run", True)
 
         children = self._children
