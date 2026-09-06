@@ -20,7 +20,7 @@ from examples.test_composition import ParallelDevice, SequencedDevice
 from examples.wait_for_patterns import ConfigureGatedDevice, MainAssertionDevice
 from tests.loopback_sshd import LoopbackSshd
 
-from litmus import ExecResult, RunResult, TestFailure, TestUtils
+from litmus import AfterEachContext, ExecResult, RunResult, TestFailure, TestUtils
 from litmus.executor import LocalExec
 from litmus.lifecycle import Outcome, State
 from litmus.mock import MockTransport
@@ -183,12 +183,12 @@ class TestWaitForPatternsExample:
             )
 
         assert result.state is State.PASS
+        # The authored node's record is the ctx view; the reading travels with the
+        # leaf's verdict (issue #118).
         assert result.run_data == {
             "measurements": [],
             "service_state": "active",
             "service_poll_attempts": 3,
-            "health_response": "ok: service healthy",
-            "cleanup_complete": True,
         }
 
         payload = json.loads(json.dumps(result.to_json()))
@@ -202,12 +202,16 @@ class TestWaitForPatternsExample:
             "type": "suite",
             "state": "Pass",
             "failure": None,
+            "evidence": None,
+            "evidence_declared": None,
             "children": [
                 {
                     "name": "service-health",
                     "type": "test",
                     "state": "Pass",
                     "failure": None,
+                    "evidence": {"health_response": "ok: service healthy"},
+                    "evidence_declared": ["health_response"],
                     "children": [],
                 }
             ],
@@ -227,7 +231,10 @@ class TestWaitForPatternsExample:
         assert artifacts["service-ready"]["data"] == {"attempts": 3, "state": "active"}
         assert artifacts["service-health"]["data"] == {"response": "ok: service healthy"}
         assert artifacts["pre-configure-1"]["data"]["service_state"] == "not-configured"
-        assert artifacts["post-cleanup-1"]["data"]["cleanup_complete"] is True
+        assert artifacts["post-cleanup-1"]["data"] == {
+            "service_state": "active",
+            "service_poll_attempts": 3,
+        }
 
         poll_records = [
             record for record in caplog.records if "service readiness poll" in record.getMessage()
@@ -255,8 +262,14 @@ class TestWaitForPatternsExample:
         ).run()
 
         assert result.state is State.PASS
-        assert result.run_data["stress_complete"] is True
-        assert result.run_data["stress_poll_attempts"] == 3
+        leaf = result.summary_tree.children[0]
+        assert leaf.evidence == {"stress_complete": True, "stress_poll_attempts": 3}
+        assert leaf.evidence_declared == ("stress_complete", "stress_poll_attempts")
+        assert result.run_data == {
+            "measurements": [],
+            "poll_interval_s": 0.001,
+            "poll_timeout_s": 0.1,
+        }
 
 
 class TestRemoteDeviceSshExample:
@@ -452,18 +465,24 @@ class TestPiHoleServerExample:
             "type": "suite",
             "state": "Pass",
             "failure": None,
+            "evidence": None,
+            "evidence_declared": None,
             "children": [
                 {
                     "name": "PiHoleServer-main-sequence",
                     "type": "sequence",
                     "state": "Pass",
                     "failure": None,
+                    "evidence": None,
+                    "evidence_declared": None,
                     "children": [
                         {
                             "name": "sanity-check",
                             "type": "test",
                             "state": "Pass",
                             "failure": None,
+                            "evidence": None,
+                            "evidence_declared": None,
                             "children": [],
                         },
                         {
@@ -471,6 +490,8 @@ class TestPiHoleServerExample:
                             "type": "test",
                             "state": "Pass",
                             "failure": None,
+                            "evidence": None,
+                            "evidence_declared": None,
                             "children": [],
                         },
                         {
@@ -478,12 +499,16 @@ class TestPiHoleServerExample:
                             "type": "parallel",
                             "state": "Pass",
                             "failure": None,
+                            "evidence": None,
+                            "evidence_declared": None,
                             "children": [
                                 {
                                     "name": "dmesg-clean",
                                     "type": "test",
                                     "state": "Pass",
                                     "failure": None,
+                                    "evidence": None,
+                                    "evidence_declared": None,
                                     "children": [],
                                 },
                                 {
@@ -491,6 +516,8 @@ class TestPiHoleServerExample:
                                     "type": "test",
                                     "state": "Pass",
                                     "failure": None,
+                                    "evidence": None,
+                                    "evidence_declared": None,
                                     "children": [],
                                 },
                             ],
@@ -792,14 +819,17 @@ class TestHardwareDeviceLifecycleExample:
         ).run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
 
         assert result.state is State.PASS
-        assert result.run_data["rail"] == "off"
-        assert result.run_data["enumerated"] is True
-        assert result.run_data["cleanup_complete"] is True
+        # Handles are not JSON, so the ctx view carries only the limit; the claim's
+        # reading rides on its verdict and the rail state on the survey artifacts.
+        assert result.run_data == {"measurements": [], "limit_c": 85.0}
+        leaf = result.summary_tree.children[0]
+        assert leaf.evidence == {"enumerated": True}
+        assert leaf.evidence_declared == ("enumerated",)
         artifacts = _artifact_payloads(tmp_path)
         assert artifacts["pre-configure-1"]["data"]["rail"] == "unknown"
         assert artifacts["post-configure-1"]["data"]["rail"] == "on"
+        assert artifacts["post-test-1"]["data"]["rail"] == "on"
         assert artifacts["post-cleanup-1"]["data"]["rail"] == "off"
-        assert artifacts["post-cleanup-1"]["data"]["cleanup_complete"] is True
 
     async def test_over_temperature_audit_fails_the_suite(self, tmp_path: Path) -> None:
         result = await PoweredDevice(
@@ -820,22 +850,37 @@ class TestHardwareDeviceLifecycleExample:
 
 
 class TestRunDataEvidenceExample:
-    """ctx readings appear in run_data; within_spec is the computed extra."""
+    """Limits come from configure; each reading travels with its leaf's verdict."""
 
-    async def test_in_spec_run_publishes_within_spec_true(self) -> None:
+    async def test_in_spec_run_carries_each_reading_on_its_leaf(self) -> None:
+        leaves: dict[str, RunResult] = {}
+
+        async def after_each(hook: AfterEachContext) -> None:
+            leaves[hook.name] = hook.result
+
         suite = PowerSupply(name="power supply", output_voltage_v=12.1, temperature_c=48.0)
-        result = await suite.run()
+        result = await suite.run(after_each=after_each, allow_unpaired_hooks=True)
 
         assert result.state is State.PASS
-        assert result.run_data["output_voltage_v"] == 12.1
-        assert result.run_data["temperature_c"] == 48.0
-        assert result.run_data["within_spec"] is True
-        assert result.run_data["measurements"] == []
-        assert suite.run_data["within_spec"] is True
-        # The limits configure provided sit beside the readings the test methods took.
-        assert result.run_data["voltage_low_v"] == 11.5
-        assert result.run_data["voltage_high_v"] == 12.5
-        assert result.run_data["temp_limit_c"] == 70.0
+        limits = {"voltage_low_v": 11.5, "voltage_high_v": 12.5, "temp_limit_c": 70.0}
+        assert result.run_data == {"measurements": [], **limits}
+        assert suite.run_data == {"measurements": [], **limits}
+        # The leaf's record is the ctx view plus its reading: the limit sits beside it.
+        assert leaves["output-voltage"].run_data == {
+            "measurements": [],
+            **limits,
+            "output_voltage_v": 12.1,
+        }
+        assert leaves["temperature"].run_data == {
+            "measurements": [],
+            **limits,
+            "temperature_c": 48.0,
+        }
+        voltage, temperature = result.summary_tree.children[0].children
+        assert voltage.evidence == {"output_voltage_v": 12.1}
+        assert voltage.evidence_declared == ("output_voltage_v",)
+        assert temperature.evidence == {"temperature_c": 48.0}
+        assert temperature.evidence_declared == ("temperature_c",)
 
     async def test_configure_provides_limits_and_seeds_no_reading(self) -> None:
         suite = PowerSupply(name="power supply", output_voltage_v=12.1, temperature_c=48.0)
@@ -844,7 +889,7 @@ class TestRunDataEvidenceExample:
 
         assert set(provided) == {"voltage_low_v", "voltage_high_v", "temp_limit_c"}
 
-    async def test_out_of_spec_voltage_fails_and_within_spec_is_false(self) -> None:
+    async def test_out_of_spec_voltage_fails_and_carries_the_reading(self) -> None:
         result = await PowerSupply(
             name="power supply",
             output_voltage_v=10.0,
@@ -852,5 +897,9 @@ class TestRunDataEvidenceExample:
         ).run()
 
         assert result.state is State.FAIL
-        assert result.run_data["output_voltage_v"] == 10.0
-        assert result.run_data["within_spec"] is False
+        voltage = result.summary_tree.children[0].children[0]
+        assert voltage.state is State.FAIL
+        assert isinstance(voltage.failure, TestFailure)
+        assert voltage.failure.evidence == {"output_voltage_v": 10.0}
+        assert voltage.evidence == {"output_voltage_v": 10.0}
+        assert "output_voltage_v" not in result.run_data

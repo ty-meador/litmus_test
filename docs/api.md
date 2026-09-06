@@ -13,6 +13,7 @@ the module a name is defined in is an implementation detail. The policy is
 ::: litmus.BeforeEachContext
 ::: litmus.BeforeEachHook
 ::: litmus.ContractViolation
+::: litmus.EvidenceViolation
 ::: litmus.ExecResult
 ::: litmus.ExternalIntegrationFailure
 ::: litmus.Failure
@@ -35,3 +36,4 @@ the module a name is defined in is an implementation detail. The policy is
 ::: litmus.TestUtils
 ::: litmus.TimeoutEvidence
 ::: litmus.Verdict
+::: litmus.evidence

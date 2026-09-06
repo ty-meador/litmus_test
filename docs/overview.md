@@ -72,7 +72,7 @@ A rack-level L11 test is not a different kind of thing — it is more atoms comp
 
 Every run of a `LitmusTest` resolves to one of three peer states — no silent exits, no hidden fourth category:
 
-1. **Pass** — the test method returned the `PASS` sentinel explicitly. Cannot accidentally pass: the framework checks `result is PASS` (identity, not equality), so a string, a truthy value, or a parsed config cannot forge it. It can only come from `from litmus import PASS`.
+1. **Pass** — the test method returned `PASS` explicitly, bare or as `PASS(evidence)` carrying its readings. Cannot accidentally pass: the framework checks `isinstance(result, Verdict)`, and a `Verdict` is only obtained by importing `PASS` or calling it, so a string, a truthy value, or a parsed config cannot forge it. A method that declares its evidence with `@evidence(...)` cannot pass without carrying it.
 2. **Fail** — the test method raised a `TestFailure`. Structured articulation of what the hardware did wrong, or (for a plain exception) a loud BUG signal that the developer didn't model this failure mode.
 3. **Aborted** — no verdict was produced. Two causes:
    - **Harness-level:** an external integration hook (`before_each`/`after_each` on the run params) threw, halting the run before a verdict could be reached.
@@ -138,8 +138,8 @@ Litmus is deliberately designed so that the _right_ way to write a test is also 
 
 Here are some of the ways Litmus implements this:
 
-- **No pass by default** — test methods must explicitly return the `PASS` sentinel. Reaching the end of the method without doing so is a missing verdict (node-local Aborted); raising a plain exception is a developer contract violation. Even internal implementations like `TestSequence` explicitly model the passing condition as (all tests ran AND all tests passed) — it does not silently pass if nothing threw.
-- **Setup is constrained to `configure()`** — All infrastructure wiring, readiness checks, and context creation must happen in `configure()`. The framework merges the return value into `utils.ctx` for the rest of the lifecycle and all descendants. This prevents hidden state coupling and makes the data flow explicit.
+- **No pass by default** — test methods must explicitly return `PASS`, or `PASS(evidence)` with the readings that prove it. Reaching the end of the method without doing so is a missing verdict (node-local Aborted); raising a plain exception is a developer contract violation. A method that declares its evidence with `@evidence(...)` cannot pass without carrying it. Even internal implementations like `TestSequence` explicitly model the passing condition as (all tests ran AND all tests passed) — it does not silently pass if nothing threw.
+- **Setup is constrained to `configure()`** — All infrastructure wiring, readiness checks, and context creation must happen in `configure()`. The framework merges the return value into `utils.ctx` for the rest of the lifecycle and all descendants, and ctx is read-only from then on: inputs come in through configure, readings go out with the verdict. This prevents hidden state coupling and makes the data flow explicit.
 - **Unmodeled failure modes are loud** — Raising anything other than a `TestFailure` (or subclass) from a test method produces a clear "CONTRACT VIOLATION" message with a BUG signal. The framework refuses to let an unhandled error silently become a pass.
 - **`use_shell()` auto-wires execution routing** — Calling `utils.use_shell()` in `configure()` automatically rebinds `utils.exec` to route through the SSH connection. Child tests and descendants inherit the routing with zero extra code. The SE never has to manually thread SSH interfaces.
 - **Composition takes bound methods directly** — `self.test("name", self._my_method)` works with a plain bound method reference. No wrapping, no binding ceremony.
@@ -162,7 +162,7 @@ When a test passes by default, it has only proven one thing:
 
 > It did not encounter any of the failure modes the author happened to think of and write explicit checks for.
 
-That is not evidence that the system works. It is a quiet lie — one that accumulates silently until it causes a line stoppage. Litmus provides the guardrails that make it difficult to accidentally ship a test that only _appears_ complete.
+That is not evidence that the system works. It is a quiet lie — one that accumulates silently until it causes a line stoppage. Litmus provides the guardrails that make it difficult to accidentally ship a test that only _appears_ complete. The same conviction governs what a pass carries: a pass without its declared evidence is not a pass.
 
 ### Cases Where Explicit Pass Modeling Feels Awkward
 

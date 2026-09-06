@@ -260,6 +260,8 @@ class TestSchemasRefuseTheBreaksThePolicyNames:
             (("type",), "test-suite"),
             (("summary_tree", "log_path"), 7),
             (("summary_tree", "children"), None),
+            (("summary_tree", "evidence"), ["not", "an", "object"]),
+            (("summary_tree", "evidence_declared"), "reading"),
             (("env", "LOT"), 42),
             (("run_data", "measurements"), {}),
         ],

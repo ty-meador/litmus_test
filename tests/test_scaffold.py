@@ -315,6 +315,9 @@ def _contains(root: ast.AST, target: ast.AST) -> bool:
 
 def _returns_pass(node: ast.Return) -> bool:
     value = node.value
+    if isinstance(value, ast.Call):
+        # ``return PASS({...})`` carries evidence and is still a gated PASS.
+        value = value.func
     if isinstance(value, ast.Name):
         return value.id == "PASS"
     return isinstance(value, ast.Attribute) and value.attr == "PASS"
