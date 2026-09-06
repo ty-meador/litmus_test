@@ -12,8 +12,8 @@ will follow a name back to its meaning (`ExternalIntegrationFailure`,
 `OperatorInterrupt`, `ArpResolutionFailure`). The record types (`RunResult`,
 `SummaryTreeNode`, `State`, `NodeType`, `Slot`, `TimeoutEvidence`, `RunSignal`,
 `ScopedLogger`) are exported because a public object has no attribute of a private
-type. Harness integrators import the narrow `BeforeEachContext` and `AfterEachContext`
-surfaces.
+type. `Phase` names the survey dispatch points for `use_survey(phases=)`. Harness
+integrators import the narrow `BeforeEachContext` and `AfterEachContext` surfaces.
 
 The lifecycle machinery (`litmus.lifecycle`) is deliberately absent. The child
 boundary, its slot policies, and the run-abort signal are the framework's internal
@@ -45,7 +45,7 @@ from litmus.errors import (
 from litmus.evidence import JsonObject
 from litmus.executor import ExecResult
 from litmus.hooks import AfterEachContext, AfterEachHook, BeforeEachContext, BeforeEachHook
-from litmus.lifecycle import Slot, State, TimeoutEvidence
+from litmus.lifecycle import Phase, Slot, State, TimeoutEvidence
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.routing import Shell
 from litmus.utils import RunSignal, ScopedLogger, TestUtils
@@ -76,6 +76,7 @@ __all__ = [
     "MissingVerdict",
     "NodeType",
     "OperatorInterrupt",
+    "Phase",
     "RunResult",
     "RunSignal",
     "ScopedLogger",
