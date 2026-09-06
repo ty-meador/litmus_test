@@ -13,9 +13,9 @@ static analysis.
 
 ## Lifecycle Contract
 **Developer obligation:** Implement `configure()`, `build_suite()`, and `cleanup()` with the correct intent.
-- `configure()` — put the test in a known state. Readiness gates and polling live here. Its framework return annotation is `Mapping[str, Any]`, wide enough that a suite may narrow it to a local `TypedDict` under pyright strict; returning a plain `dict[str, Any]` is the default. The returned value is always an ordinary dict whose entries are copied into `utils.ctx` for test methods, cleanup, and all descendant tests. It provides every key a test method, hook, or `cleanup()` reads with `[]`; a reading a test method has not taken is absent from ctx and `run_data`, never seeded as a placeholder. A `[]` read of a key `configure()` did not provide is a `ContractViolation` naming the test and the key, not a hardware Fail; `.get()` and `in` are how a suite reads an optional key (issue #112).
-- `build_suite()` — pure table-of-contents composition. Return a `LitmusTest` built from `self.test()` / `self.sequence()` / `self.parallel()`. Test methods (private class methods passed to `self.test()`) carry the actual verdict logic — return the `PASS` sentinel to pass, raise `TestFailure` to fail intentionally.
-- `cleanup()` — restore state. Must not throw (errors are swallowed and logged).
+- `configure()` — put the test in a known state and return what the tests will read. Readiness gates and polling live here. The return is a plain dict (or a local `TypedDict` under pyright strict; the framework annotation is `Mapping[str, Any]`) whose entries become `utils.ctx` for test methods, hooks, `cleanup()`, and all descendant tests. Ctx does not change after that: a `[]` read of a key `configure()` did not provide, and any write once it has returned, is a `ContractViolation` naming the test and the key, not a hardware Fail. `.get()` and `in` read an optional key (issues #112, #118).
+- `build_suite()` — pure table-of-contents composition. Return a `LitmusTest` built from `self.test()` / `self.sequence()` / `self.parallel()`. Test methods (private class methods passed to `self.test()`) carry the actual verdict logic — return `PASS`, or `PASS(evidence)` with the readings, to pass; raise `TestFailure` (optionally with `evidence=`) to fail intentionally.
+- `cleanup()` — restore state. Must not throw (errors are swallowed and logged). It reads ctx and does not write it; a value it must restore was captured in `configure()`.
 
 **Framework obligation:** Execute configure → build_suite → cleanup in order, guaranteed.
 - If `configure()` raises a `TestFailure`: cleanup runs, test methods never run, the test lands in `Fail`. The verdict means "the device did not reach a testable state" — whether the underlying cause is hardware or infrastructure is **not knowable from code** and is the human triager's call.
@@ -34,7 +34,7 @@ static analysis.
 ## Terminal State Contract
 **Framework obligation:** Every run of a `LitmusTest` resolves to exactly one of three peer terminal states. The states are distinct categories with distinct recovery protocols — the framework does not collapse them. There is no hidden fourth: a call that settles without producing a terminal state (a successful `configure`, a completed `cleanup`) reports no state at all rather than inventing one.
 
-1. **Pass** — a test method returned the `PASS` sentinel. The check is `result is PASS` — identity, not equality. Nothing else can forge it.
+1. **Pass** — a test method returned a `Verdict`: the bare `PASS`, or `PASS(evidence)` carrying its readings. The check is `isinstance(result, Verdict)`; a `Verdict` is obtained only by importing `PASS` or calling it, so nothing a suite constructs can forge one. A pass without its declared evidence is not a pass: when the method carries `@evidence(...)`, a `PASS` that does not carry every declared key is a `ContractViolation` (developer-bug Fail), never a green run (issue #118).
 2. **Fail** — a test method raised a `TestFailure` (or subclass): the DUT produced a verdict and the verdict was negative. OR the developer didn't model a failure mode: a plain exception → BUG-signaled Fail.
 3. **Aborted** — no verdict was produced. Peer to Pass/Fail, **NOT** a flavor of failure. Three causes:
    - **Harness-level (integration):** a `before_each`/`after_each` integration hook threw; the error is wrapped as `ExternalIntegrationFailure` and the run halts before a verdict could be produced.
@@ -149,15 +149,18 @@ the record identifies the exact clock and budget without requiring the suite sou
     never returned. A survey that reads the device therefore guards on
     `utils.exec_route`, not on the phase; the phase says when, the route says where.
 - Log artifacts are co-located with their node.
-- All serializable values (primitives, plain dicts, lists) added to `ctx` are automatically added to `run_data`.
-  - Functions, class instances, and live handles (e.g. SSH connections) are stripped.
+- **Evidence travels with the verdict** (issue #118). A leaf's readings leave its test method as `PASS(evidence)` or `TestFailure(..., evidence=...)`. The child boundary validates the payload entry by entry before it is recorded: a value that is not JSON, a key that shadows a ctx entry or the reserved `measurements` slot, or a key `@evidence` declared that `PASS` did not carry is a `ContractViolation` naming the leaf and the key. Nothing is stripped silently. A failure is not held to the declaration; it records what it was handed.
+- A leaf's `RunResult.run_data` is the JSON-safe view of its ctx plus the evidence its verdict carried, flat. A non-leaf node's `run_data` is the ctx view alone. Every `summary_tree` node carries `evidence` (what the leaf's verdict carried, or null) and `evidence_declared` (the `@evidence` declaration, or null); a declared key absent from `evidence` is a reading that was not taken, shown by name.
+- All serializable values (primitives, plain dicts, lists) `configure()` returned appear in `run_data`.
+  - Functions, class instances, and live handles (e.g. SSH connections) are stripped from the ctx view; they are the objects a run works through, not evidence.
   - Context annotations do not bypass this filter. A `TypedDict` is an ordinary dict at runtime, and each value still has to satisfy the same serialization rules.
   - Filtering is all-or-nothing for each top-level ctx entry. A nested instance, handle,
     function, cycle, non-string mapping key, or non-finite float strips that complete
     entry; the framework never emits partial evidence or silently coerces it.
-  - `run_data` is a detached snapshot taken after cleanup. Later ctx mutation cannot
-    rewrite evidence already captured in a `RunResult`; serializable cleanup evidence
-    is included.
+  - `run_data` is a detached snapshot taken when the node settles. An aborted leaf
+    contributes no evidence; readings in hand when a time budget fires are lost by
+    design, and the scoped log and point-in-time artifacts remain for in-flight
+    observation.
   - `run_data["measurements"]` is a framework-owned empty list reserved for future
     parametric measurements. An authored ctx entry with that name cannot populate or
     replace the slot. Limit evaluation, aggregation, SPC, and Cpk are deliberately out
@@ -178,7 +181,7 @@ the record identifies the exact clock and budget without requiring the suite sou
   write-free value on the public surface: the utility method is the only framework API
   that persists it, and it always emits the chronological pointer after publication.
 - Return structured data from `use_survey` / `use_audit` hooks to capture it as an artifact.
-- Populate `ctx` with structured evidence during lifecycle methods so that values appear in `run_data` automatically.
+- Hand readings back with the verdict: `PASS({...})` or `TestFailure(..., evidence={...})`. Declare with `@evidence(...)` what a pass must carry, beside the method that keeps the promise.
 
 ---
 

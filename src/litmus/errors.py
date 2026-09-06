@@ -22,6 +22,7 @@ a log can tell instantly whose code is wrong.
 
 import signal
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, ClassVar, Literal, cast, final
 
 
@@ -117,6 +118,8 @@ class TestFailure(LitmusError):
         fail_message: str,
         expected: object = MISSING,
         received: object = MISSING,
+        *,
+        evidence: Mapping[str, object] | None = None,
     ) -> None:
         """Record what failed and, when given, the comparison that proves it.
 
@@ -124,11 +127,17 @@ class TestFailure(LitmusError):
             fail_message: What failed, in the FT's language.
             expected: The spec-defined value, when there is one.
             received: The value actually observed — unknown, which is why we test.
+            evidence: Readings taken before the failure, carried into the leaf's
+                ``run_data`` beside the verdict. A failure is not held to the method's
+                ``@evidence`` declaration; it records whatever it is handed.
         """
         super().__init__(fail_message)
         self.fail_message = fail_message
         self.expected = expected
         self.received = received
+        self.evidence: Mapping[str, object] | None = (
+            None if evidence is None else MappingProxyType(dict(evidence))
+        )
 
     @property
     def has_comparison(self) -> bool:
@@ -155,6 +164,8 @@ class TestFailure(LitmusError):
             payload["expected"] = _json_safe(self.expected)
         if self.received is not MISSING:
             payload["received"] = _json_safe(self.received)
+        if self.evidence is not None:
+            payload["evidence"] = _json_safe(dict(self.evidence))
         return payload
 
 
@@ -326,6 +337,105 @@ class ContextInsufficient(ContractViolation):
         payload["key"] = self.key
         if self.owner is not None:
             payload["owner"] = self.owner
+        return payload
+
+
+@final
+class ContextImmutable(ContractViolation):
+    """A write to ``utils.ctx`` after ``configure()`` returned.
+
+    Ctx is what ``configure()`` provides and nothing more: it is read-only for the
+    rest of the lifecycle. A reading belongs on the verdict, ``PASS({...})`` or
+    ``TestFailure(..., evidence=...)``; a value cleanup must restore is captured in
+    ``configure()``. Raised by the framework's context object, never by suite code, and
+    re-attributed by the child boundary to the node whose body performed the write
+    (issue #118).
+    """
+
+    def __init__(self, node: str, *, key: str, owner: str | None = None) -> None:
+        """Name the key that was written and, when it differs from ``node``, the owner.
+
+        Args:
+            node: Name of the node whose body performed the write.
+            key: The ctx key that was written, or a description of the operation
+                when no single key names it.
+            owner: Name of the authored instance whose ``configure()`` owns the
+                context, when known.
+        """
+        detail = f"ctx is read-only after configure(): cannot write {key!r}"
+        if owner is not None and owner != node:
+            detail = f"{detail} (context owned by {owner!r})"
+        detail = f"{detail}; return it from configure(), or carry it as evidence on PASS"
+        super().__init__(node, detail)
+        self.key = key
+        self.owner = owner
+
+    def attributed_to(self, node: str) -> ContextImmutable:
+        """Return the same violation bannered with the node that performed the write."""
+        return ContextImmutable(node, key=self.key, owner=self.owner)
+
+    def to_json(self) -> dict[str, Any]:
+        payload = super().to_json()
+        payload["key"] = self.key
+        if self.owner is not None:
+            payload["owner"] = self.owner
+        return payload
+
+
+@final
+class EvidenceViolation(ContractViolation):
+    """The evidence a verdict carried broke the evidence contract.
+
+    Three reasons, one class, so the Floor Technician reads one banner and the message
+    names the key: the value cannot be carried as JSON, the key shadows a ctx entry or
+    the reserved ``measurements`` slot, or ``@evidence`` declared the key and ``PASS``
+    did not carry it. A pass without its declared evidence is not a pass: the node
+    lands in Fail under the contract-violation banner and no hardware verdict is
+    forged (issue #118).
+    """
+
+    def __init__(self, node: str, *, key: str, reason: str) -> None:
+        """Name the offending key and why it offends.
+
+        Args:
+            node: Name of the leaf whose verdict carried the evidence.
+            key: The evidence key at fault.
+            reason: One of the three sentences above, in the FT's language.
+        """
+        super().__init__(node, f"{reason} {key!r}")
+        self.key = key
+        self.reason = reason
+
+    @classmethod
+    def not_carried(cls, node: str, key: str) -> EvidenceViolation:
+        """``@evidence`` declared ``key`` and ``PASS`` did not carry it."""
+        return cls(
+            node,
+            key=key,
+            reason="evidence incomplete: PASS did not carry declared key",
+        )
+
+    @classmethod
+    def not_serializable(cls, node: str, key: str) -> EvidenceViolation:
+        """The value under ``key`` cannot be carried as JSON."""
+        return cls(
+            node,
+            key=key,
+            reason="evidence is not JSON-serializable at key",
+        )
+
+    @classmethod
+    def shadows_context(cls, node: str, key: str) -> EvidenceViolation:
+        """``key`` is already a ctx entry or the reserved measurements slot."""
+        return cls(
+            node,
+            key=key,
+            reason="evidence shadows a ctx key or reserved slot:",
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        payload = super().to_json()
+        payload["key"] = self.key
         return payload
 
 

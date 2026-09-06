@@ -155,7 +155,6 @@ class _Target(LitmusTest):
     async def cleanup(self, utils: TestUtils) -> None:
         await self._controls.checkpoint(_Phase.CLEANUP)
         self._controls.completed.append("cleanup")
-        utils.ctx["cleaned"] = True
 
     async def _survey(self, utils: TestUtils) -> object:
         observation = len(self._controls.observations) + 1

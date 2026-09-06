@@ -20,7 +20,7 @@ from litmus.errors import (
     OperatorInterrupt,
     TestFailure,
 )
-from litmus.evidence import JsonObject, snapshot_run_data
+from litmus.evidence import declared_evidence
 from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET
 from litmus.hooks import (
     AfterEachContext,
@@ -36,6 +36,7 @@ from litmus.hooks import (
 from litmus.lifecycle import (
     AuditSignal,
     ChildBoundary,
+    EvidenceContract,
     Outcome,
     Phase,
     RunAbort,
@@ -46,6 +47,7 @@ from litmus.lifecycle import (
     TimeoutEvidence,
 )
 from litmus.results import NodeType, RunResult, SummaryTreeNode
+from litmus.run_data import JsonObject, snapshot_run_data
 from litmus.utils import TestUtils
 from litmus.verdict import Verdict
 
@@ -308,7 +310,10 @@ def _returns_verdict(member: object) -> bool:
     return (
         annotation is Verdict
         or getattr(annotation, "__name__", None) == "Verdict"
-        or (isinstance(annotation, str) and annotation.rsplit(".", maxsplit=1)[-1] == "Verdict")
+        or (
+            isinstance(annotation, str)
+            and annotation.split("[", 1)[0].rsplit(".", maxsplit=1)[-1] == "Verdict"
+        )
     )
 
 
@@ -343,6 +348,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         "_configure_only_utils",
         "_ctx",
         "_discrete_log_file",
+        "_evidence_declared",
         "_fn",
         "_frozen",
         "_has_run",
@@ -397,8 +403,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._surveys: list[SurveyHook] = []
         self._audits: list[AuditHook] = []
         self._fn: _TestFunction | None = None
+        self._evidence_declared: tuple[str, ...] | None = None
         self._children: tuple[LitmusTest, ...] | None = None
-        self._ctx: dict[str, Any] = {}
+        self._ctx: Mapping[str, Any] = {}
         self._summary_tree: SummaryTreeNode | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -487,7 +494,13 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
     @property
     def run_data(self) -> JsonObject:
-        """A detached JSON-safe snapshot of this node's serializable context."""
+        """A detached JSON-safe snapshot of this node's serializable context.
+
+        This is the ctx view: what ``configure()`` provided, minus anything that is
+        not JSON. A leaf's ``RunResult.run_data`` is this view plus the evidence its
+        verdict carried; the merge happens when the leaf settles, so an override here
+        sees only the context (issue #118).
+        """
         return snapshot_run_data(self._ctx)
 
     def test(
@@ -533,6 +546,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             fn=_bind_test_arguments(fn, args, kwargs),
             fail_after=fail_after,
             abort_after=abort_after,
+            evidence_declared=declared_evidence(fn),
         )
 
     def parallel(
@@ -947,6 +961,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                         utils.logger,
                         node_audit_signal,
                         time_budget_clocks=active_clocks,
+                        evidence_contract=EvidenceContract(
+                            declared=self._evidence_declared,
+                            reserved=frozenset(utils.ctx),
+                        ),
                     )
                     async with _active_time_budgets(active_clocks, lineage):
                         return await boundary.run(Slot.TEST_METHOD, fn(utils))
@@ -1636,6 +1654,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             type=self._node_type(),
             state=None,
             children=child_trees,
+            evidence_declared=self._evidence_declared,
         )
 
     @final
@@ -1658,6 +1677,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 detail="a completed test node settled without a terminal state",
             )
         node_type = self._node_type()
+        run_data = self.run_data
+        if outcome.evidence is not None:
+            run_data.update(outcome.evidence)
         summary_tree = SummaryTreeNode(
             name=self.name,
             type=node_type,
@@ -1666,6 +1688,8 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             timeout=outcome.timeout,
             log_path=utils._owned_log_reference(),  # pyright: ignore[reportPrivateUsage]
             children=children,
+            evidence=outcome.evidence,
+            evidence_declared=self._evidence_declared,
         )
         object.__setattr__(self, "_summary_tree", summary_tree)
         return RunResult(
@@ -1681,7 +1705,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             summary_tree=summary_tree,
             type=node_type,
             env=utils.env,
-            run_data=self.run_data,
+            run_data=run_data,
         )
 
     @final
@@ -1712,9 +1736,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
     @final
     async def _configure_and_merge_context(self, utils: TestUtils) -> Mapping[str, Any]:
-        """Keep configure and its required ctx merge inside one child boundary."""
-        configured = await self.configure(utils)
-        utils.ctx.update(configured)
+        """Keep configure and its required ctx merge inside one child boundary.
+
+        The context closes when configure settles, whether it returned or raised:
+        cleanup after a failed configure reads the context and may not write it either.
+        """
+        try:
+            configured = await self.configure(utils)
+            utils._merge_context(configured)  # pyright: ignore[reportPrivateUsage]
+        finally:
+            utils._freeze_context()  # pyright: ignore[reportPrivateUsage]
         return configured
 
     @final
@@ -2091,6 +2122,7 @@ class _Test(LitmusTest):
         fn: _TestFunction,
         fail_after: float | None,
         abort_after: float | None,
+        evidence_declared: tuple[str, ...] | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -2099,6 +2131,7 @@ class _Test(LitmusTest):
             abort_after=abort_after,
         )
         self._fn = fn
+        self._evidence_declared = evidence_declared
 
     def build_suite(self) -> LitmusTest:
         """Satisfy the structural contract; leaf execution never composes a suite."""

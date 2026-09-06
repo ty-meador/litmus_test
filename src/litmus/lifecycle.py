@@ -5,7 +5,9 @@ single most important function in the codebase and, by design, the most tested. 
 three things at once:
 
 1. **Verdict enforcer.** For a test method the return path splits exactly two ways:
-   `result is PASS`, or everything else. There is no third bucket.
+   a `Verdict` (`PASS` or `PASS(evidence)`), or everything else. There is no third
+   bucket. A verdict's evidence is checked here, entry by entry, against the
+   `EvidenceContract` the node declared; a pass without its evidence is not a pass.
 2. **Fail / Bug / Abort classifier.** `TestFailure` becomes Fail (data); a non-PASS
    return becomes node-local Aborted (no verdict exists, so the framework forges none);
    any other exception becomes a BUG-signaled Fail; `ExternalIntegrationFailure` and an
@@ -24,14 +26,16 @@ declared once, in `SLOT_POLICIES`, and read nowhere else.
 
 import asyncio
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, final
+from typing import Literal, cast, final
 
 from litmus.errors import (
+    ContextImmutable,
     ContextInsufficient,
     ContractViolation,
+    EvidenceViolation,
     ExternalIntegrationFailure,
     Failure,
     FrameworkContractViolation,
@@ -40,8 +44,8 @@ from litmus.errors import (
     MissingVerdict,
     TestFailure,
 )
-from litmus.evidence import JsonObject
-from litmus.verdict import PASS
+from litmus.run_data import MEASUREMENTS_KEY, JsonObject, invalid_evidence_key, json_evidence
+from litmus.verdict import Verdict
 
 LOGGER = logging.getLogger("litmus")
 
@@ -341,10 +345,50 @@ class Outcome:
     timeout: TimeoutEvidence | None = None
     """Structured time-budget evidence when a clock settled this node."""
 
+    evidence: JsonObject | None = None
+    """The detached, validated readings the verdict carried: `PASS(evidence)` or
+    `TestFailure(..., evidence=...)`. `None` when the verdict carried none or the node
+    settled without one."""
+
     @property
     def is_bug(self) -> bool:
         """True if this outcome was caused by broken code rather than broken hardware."""
         return self.failure is not None and self.failure.is_bug
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class EvidenceContract:
+    """What one leaf's verdict may and must carry (issue #118).
+
+    `declared` is the `@evidence` declaration, `None` for an undecorated method.
+    `reserved` is every key the payload may not use: the node's ctx keys, so evidence
+    never shadows what `configure()` provided, plus the framework-owned
+    `measurements` slot.
+    """
+
+    declared: tuple[str, ...] | None = None
+    reserved: frozenset[str] = frozenset()
+
+    def violation(
+        self, node: str, payload: Mapping[str, object], *, held: bool
+    ) -> EvidenceViolation | None:
+        """The first way `payload` breaks this contract, or `None`.
+
+        `held` is whether the declaration applies: a `PASS` is held to it, a
+        `TestFailure` is not.
+        """
+        invalid = invalid_evidence_key(payload)
+        if invalid is not None:
+            return EvidenceViolation.not_serializable(node, invalid)
+        for key in payload:
+            if key in self.reserved or key == MEASUREMENTS_KEY:
+                return EvidenceViolation.shadows_context(node, key)
+        if held and self.declared is not None:
+            for key in self.declared:
+                if key not in payload:
+                    return EvidenceViolation.not_carried(node, key)
+        return None
 
 
 @final
@@ -441,6 +485,7 @@ class ChildBoundary:
         logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
+        evidence_contract: EvidenceContract | None = None,
     ) -> None:
         """Bind the boundary to the one node it guards.
 
@@ -450,12 +495,17 @@ class ChildBoundary:
                 which is what a standalone bench run of a single node wants.
             logger: Where swallowed errors and bug banners go. A scoped adapter keeps
                 framework signals in the node's evidence trail. Defaults to `litmus`.
+            evidence_contract: What this node's verdict may and must carry. Defaults
+                to no declaration and no reserved keys.
         """
         self._node = node
         self._run_abort = run_abort if run_abort is not None else RunAbort()
         self._logger = logger if logger is not None else LOGGER
         self._audit_signal = audit_signal
         self._time_budget_clocks = time_budget_clocks
+        self._evidence_contract = (
+            evidence_contract if evidence_contract is not None else EvidenceContract()
+        )
         self._outcome: Outcome | None = None
 
     @property
@@ -503,9 +553,9 @@ class ChildBoundary:
             raise
         except TestFailure as failure:
             self._raise_if_cancellation_pending(slot)
-            if isinstance(failure, ContextInsufficient):
-                # The context object cannot know whose body read it; the boundary can.
-                # Banner the violation with the test the Floor Technician sees.
+            if isinstance(failure, ContextInsufficient | ContextImmutable):
+                # The context object cannot know whose body touched it; the boundary
+                # can. Banner the violation with the test the Floor Technician sees.
                 failure = failure.attributed_to(self._node)
                 if not policy.swallows_errors:
                     self._logger.error("%s", failure.fail_message)
@@ -560,9 +610,20 @@ class ChildBoundary:
     def _classify_return(self, slot: Slot, policy: SlotPolicy, result: object) -> Outcome:
         if not policy.demands_verdict:
             return Outcome(slot, self._node, None, value=result)
-        if result is PASS:
-            return Outcome(slot, self._node, State.PASS)
-        # The split is exactly `is PASS` versus everything else. A `None` fall-through
+        if isinstance(result, Verdict):
+            verdict = cast("Verdict[Mapping[str, object]]", result)
+            payload = verdict.evidence
+            violation = self._evidence_contract.violation(
+                self._node, {} if payload is None else payload, held=True
+            )
+            if violation is None:
+                evidence = None if payload is None else json_evidence(payload)
+                return Outcome(slot, self._node, State.PASS, value=verdict, evidence=evidence)
+            # A pass without its evidence is not a pass. The verdict is kept as the
+            # value for the record; the state is a developer-bug Fail.
+            self._logger.error("%s", violation.fail_message)
+            return Outcome(slot, self._node, State.FAIL, failure=violation, value=verdict)
+        # The split is exactly `Verdict` versus everything else. A `None` fall-through
         # and a forged `"PASS"` string land here together, and neither becomes a Fail:
         # no verdict was produced, so the framework reports none.
         missing = MissingVerdict(self._node, returned=result)
@@ -576,7 +637,17 @@ class ChildBoundary:
                 "%s failed (verdict unaffected): %s", slot.value, failure.fail_message
             )
             return Outcome(slot, self._node, None, swallowed=failure)
-        return Outcome(slot, self._node, State.FAIL, failure=failure)
+        payload = failure.evidence
+        if payload is None or not policy.demands_verdict:
+            return Outcome(slot, self._node, State.FAIL, failure=failure)
+        violation = self._evidence_contract.violation(self._node, payload, held=False)
+        if violation is not None:
+            violation.__cause__ = failure
+            self._logger.error("%s", violation.fail_message)
+            return Outcome(slot, self._node, State.FAIL, failure=violation)
+        return Outcome(
+            slot, self._node, State.FAIL, failure=failure, evidence=json_evidence(payload)
+        )
 
     def _classify_cancellation(self, slot: Slot) -> Outcome:
         reason = self._run_abort.reason

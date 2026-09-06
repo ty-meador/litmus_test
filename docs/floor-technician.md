@@ -93,7 +93,7 @@ The declared tree is still complete, so you can see what was skipped.
 | `summary_tree` | The whole declared tree, rooted here. This is the structural view. |
 | `physical_location` | Station / slot name from `PHYSICAL_LOCATION`, or `unknown` if that variable was not in the run environment. |
 | `env` | The run environment as the run declared it. Secrets in an unfiltered environment are in this object verbatim — that is an operator obligation, not a framework rewrite. With `environment=DEBUG` the allow/deny list is ignored and a warning is in the log. |
-| `run_data` | Suite-authored evidence snapshot. Version 1 always has a `measurements` array; it is reserved and empty until the measurements protocol lands. Do not invent SPC meaning from an empty array. Other keys are the suite's. |
+| `run_data` | Suite-authored evidence snapshot: what `configure()` provided, minus anything that is not JSON. Version 1 always has a `measurements` array; it is reserved and empty until the measurements protocol lands. Do not invent SPC meaning from an empty array. Other keys are the suite's. The readings a claim took are on that claim's node in `summary_tree`, not here. |
 
 ### A summary-tree node
 
@@ -106,6 +106,8 @@ The declared tree is still complete, so you can see what was skipped.
 | `timeout` | Time-budget evidence for **this** node, or `null`. |
 | `log_path` | POSIX path of this node's `timeline.jsonl`, relative to the run directory. `null` means the records rolled up into an ancestor, or the node never ran. Resolve it against the run directory you opened. The root always has one. |
 | `children` | Ordered children. Groups keep declaration order after settlement. |
+| `evidence` | The readings this claim handed back with its verdict, or `null`. Read it beside the failure: a Fail with `evidence` shows you what the unit measured. |
+| `evidence_declared` | The readings this claim promised to take on a pass, or `null`. A name listed here that is missing from `evidence` is a reading that was **not taken**: the claim failed, aborted, or never ran before it got there. It is not a reading of zero. |
 
 ### The failure object
 
@@ -126,7 +128,9 @@ fields are additive; read what you know.
 | `operator` | `true` on `OperatorInterrupt`. The operator stopped the rack. |
 | `signal` | `SIGINT`, `SIGTERM`, or `signal N`. |
 | `returned` | What a `MissingVerdict` node actually returned instead of PASS. |
-| `key` / `owner` | On a context-insufficient contract break: the ctx key that was never published, and which `configure()` owed it. |
+| `key` / `owner` | On a context contract break: the ctx key that was never published, or that a claim tried to write after `configure()`, and which `configure()` owns it. |
+| `key` | On an evidence contract break: the reading a `PASS` did not carry, could not be written as JSON, or that collided with a ctx key. The claim is broken software, not a bad unit. |
+| `evidence` | On a `TestFailure`: the readings the claim took before it failed, when it handed them over. |
 | `mac` / `host` | On `ArpResolutionFailure`: the MAC that was not in the table, and which host was asked. |
 
 Live handles (an open SSH session, a dict with a weird key) degrade to a
