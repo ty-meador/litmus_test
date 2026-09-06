@@ -37,6 +37,7 @@ from litmus.lifecycle import (
     AuditSignal,
     ChildBoundary,
     Outcome,
+    Phase,
     RunAbort,
     Slot,
     State,
@@ -552,11 +553,19 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
 
     @final
-    def use_survey(self, fn: HookFunction) -> None:
-        """Register a survey as immutable test identity during construction."""
+    def use_survey(self, fn: HookFunction, *, phases: Iterable[Phase] | None = None) -> None:
+        """Register a survey as immutable test identity during construction.
+
+        ``phases`` names the dispatch points the survey observes; ``None`` means all
+        six. An empty selection is a ``ValueError`` here, not a survey that never
+        fires. The selection is the schedule, not a guarantee of reach: a boundary the
+        lifecycle never arrives at is never dispatched, and a boundary it arrives at
+        without a device route still is (see ``Phase``).
+        """
         if self._frozen:
             raise ContractViolation(self.name, "hooks may be registered only during construction")
-        self._surveys.append(SurveyHook(fn=fn))
+        selected = frozenset(Phase) if phases is None else frozenset(Phase(p) for p in phases)
+        self._surveys.append(SurveyHook(fn=fn, phases=selected))
 
     @final
     def use_audit(self, *, interval: float, fn: HookFunction) -> None:
@@ -915,7 +924,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 # after the borrowed via and pre-configure survey are ready.
                 via_failed = await self._bring_up_via(utils, run_abort)
                 if via_failed is None:
-                    await self._run_surveys(boundary, utils, "pre-configure")
+                    await self._run_surveys(boundary, utils, Phase.PRE_CONFIGURE)
                 if via_failed is not None:
                     outcome = self._adopt_via_outcome(via_failed)
                 else:
@@ -939,9 +948,9 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                             if configured.state is not None:
                                 return configured
                             utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
-                            await self._run_surveys(boundary, utils, "post-configure")
+                            await self._run_surveys(boundary, utils, Phase.POST_CONFIGURE)
                             suite = self.build_suite()
-                            await self._run_surveys(boundary, utils, "pre-test")
+                            await self._run_surveys(boundary, utils, Phase.PRE_TEST)
                         if self._audits:
                             if node_audit_signal is None:
                                 raise FrameworkContractViolation(
@@ -1015,16 +1024,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             finally:
                 try:
                     if ran_test:
-                        await self._run_surveys(boundary, utils, "post-test")
+                        await self._run_surveys(boundary, utils, Phase.POST_TEST)
                 finally:
                     try:
-                        await self._run_surveys(boundary, utils, "pre-cleanup")
+                        await self._run_surveys(boundary, utils, Phase.PRE_CLEANUP)
                     finally:
                         try:
                             await self._run_cleanup(boundary, utils)
                         finally:
                             try:
-                                await self._run_surveys(boundary, utils, "post-cleanup")
+                                await self._run_surveys(boundary, utils, Phase.POST_CLEANUP)
                             finally:
                                 # Owned shells outlive the post-cleanup survey and close
                                 # before the hop they may tunnel through (#115).
@@ -1675,18 +1684,21 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self,
         boundary: ChildBoundary,
         utils: TestUtils,
-        phase: str,
+        phase: Phase,
     ) -> None:
-        """Dispatch every survey at one phase boundary without masking the verdict."""
+        """Dispatch every survey scheduled at one phase boundary without masking the verdict."""
         for index, hook in enumerate(self._surveys, start=1):
-            description = f"survey {phase} hook #{index}"
+            description = f"survey {phase.value} hook #{index}"
+            if phase not in hook.phases:
+                utils.logger.debug("%s not scheduled at this phase; skipping", description)
+                continue
             utils.logger.debug("dispatching %s", description)
             await boundary.run(
                 Slot.SURVEY,
                 self._capture_hook_result(
                     hook,
                     utils,
-                    artifact_name=f"{phase}-{index}",
+                    artifact_name=f"{phase.value}-{index}",
                     description=description,
                 ),
             )
