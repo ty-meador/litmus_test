@@ -72,7 +72,9 @@ published as evidence in the same motion (`docs/idioms.md`, TestUtils Injection)
   else goes there, so `> result.json` captures exactly the record.
 - **`--junit PATH`** also writes the run as JUnit XML through `litmus.junit.JunitXml`
   (`docs/junit-xml.md`). The runner owns the reporter; a harness that imports the
-  module directly does so off the promised surface.
+  module directly does so off the promised surface. A `PATH` that cannot be written
+  is an error line on stderr; the exit status stays the verdict's, because the run
+  settled and `result.json` under the artifact root is the record.
 - The **verdict line** and the **run log** go to **stderr**:
   `litmus run: <node>: <state>` with the failure class and message when there is one.
   The log is the scoped logger at `INFO`, the same lines the per-node `timeline.log`

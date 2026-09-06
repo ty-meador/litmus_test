@@ -385,6 +385,22 @@ class TestRecords:
         assert parsed.get("name") == "Failing"
         assert f"junit report written to {report}" in err
 
+    def test_junit_path_that_cannot_be_written_keeps_the_verdict_status(
+        self, tmp_path: Path
+    ) -> None:
+        # A traceback would exit 1, which the contract reads as Fail; the run settled
+        # Pass and the status says so, with the write failure on stderr.
+        suite = _write(tmp_path, "passing.py", _PASSING)
+        report = tmp_path / "missing-directory" / "report.xml"
+
+        status, out, err = _run("run", "--junit", str(report), str(suite))
+
+        assert status == EXIT_PASS
+        assert out == ""
+        assert not report.exists()
+        assert "litmus run: Passing: Pass" in err
+        assert f"litmus run: error: junit report not written to {report}" in err
+
     def test_artifact_root_overrides_the_environment(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
