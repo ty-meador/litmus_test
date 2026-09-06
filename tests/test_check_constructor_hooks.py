@@ -158,6 +158,7 @@ class TestConstructorHooksAtTheCommandLine:
         codes = sorted(line.split(": ")[1].split()[0] for line in lines[:-1])
         assert codes == [
             "litmus/constructor-hooks",
+            "litmus/ctx-provenance",
             "litmus/gated-pass",
             "litmus/immutable-self",
             "litmus/method-reference",
@@ -168,4 +169,4 @@ class TestConstructorHooksAtTheCommandLine:
             "litmus/unannotated-interface",
         ]
         assert all("seeded_suite.py" in line for line in lines[:-1])
-        assert lines[-1] == "Found 9 violations."
+        assert lines[-1] == "Found 10 violations."
