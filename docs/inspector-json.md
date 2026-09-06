@@ -160,8 +160,8 @@ vocabulary (ruling on issue #111, 2026-09-06). From 1.0.0 rule 2 applies as writ
 
 | Record | Schema | Draft |
 |---|---|---|
-| Result | `docs/schema/result-v1.schema.json` | JSON Schema 2020-12 |
-| Timeline | `docs/schema/timeline-v1.schema.json` | JSON Schema 2020-12 |
+| Result | [`docs/schema/result-v1.schema.json`](schema/result-v1.schema.json) | JSON Schema 2020-12 |
+| Timeline | [`docs/schema/timeline-v1.schema.json`](schema/timeline-v1.schema.json) | JSON Schema 2020-12 |
 
 The published files are the consumer contract, and they are open: framework-owned
 objects do not forbid additional properties, so a consumer validating with the file
