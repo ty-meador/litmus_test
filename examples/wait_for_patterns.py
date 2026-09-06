@@ -8,12 +8,15 @@ diagnostic shown to the Floor Technician.
 The observations below are scripted so the example runs on any development machine.
 Replace them with ``utils.exec()`` or another asynchronous hardware read in a real
 suite; the lifecycle and evidence shape remain the same.
+
+Run them: `litmus run examples/wait_for_patterns.py::ConfigureGatedDevice` and
+`litmus run examples/wait_for_patterns.py::MainAssertionDevice`.
 """
 
 import asyncio
 from typing import Any, TypedDict, cast
 
-from litmus import PASS, Artifact, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
+from litmus import PASS, Artifact, LitmusTest, TestFailure, TestUtils, Verdict
 
 
 class _ServiceContext(TypedDict):
@@ -32,12 +35,16 @@ class ConfigureGatedDevice(LitmusTest):
         self,
         *,
         name: str,
-        service_states: tuple[str, ...],
-        health_response: str,
+        service_states: tuple[str, ...] = ("activating", "active"),
+        health_response: str = "ok",
         interval: float = 0.01,
         timeout_seconds: float = 1.0,
     ) -> None:
-        """Capture deterministic stand-ins for the device observations."""
+        """Capture deterministic stand-ins for the device observations.
+
+        The defaults reach ``active`` on the second poll and report healthy, so
+        `litmus run` needs no arguments.
+        """
         super().__init__(name=name)
         self._service_states = service_states
         self._health_response = health_response
@@ -129,11 +136,15 @@ class MainAssertionDevice(LitmusTest):
         self,
         *,
         name: str,
-        stress_states: tuple[bool, ...],
+        stress_states: tuple[bool, ...] = (False, False, True),
         interval: float = 0.01,
         timeout_seconds: float = 1.0,
     ) -> None:
-        """Capture deterministic stress-marker observations."""
+        """Capture deterministic stress-marker observations.
+
+        The default marker appears on the third poll, so `litmus run` needs no
+        arguments.
+        """
         super().__init__(name=name)
         self._stress_states = stress_states
         self._interval = interval
@@ -186,25 +197,3 @@ class MainAssertionDevice(LitmusTest):
             )
             return PASS
         raise TestFailure("stress completion marker was not observed")
-
-
-class PollingExample:
-    """Run both polling classifications as a standalone program."""
-
-    @staticmethod
-    async def run() -> tuple[RunResult, RunResult]:
-        """Execute the examples and return their self-contained evidence roots."""
-        configure_gate = await ConfigureGatedDevice(
-            name="configure-gated device",
-            service_states=("activating", "active"),
-            health_response="ok",
-        ).run()
-        verdict_poll = await MainAssertionDevice(
-            name="main-assertion device",
-            stress_states=(False, False, True),
-        ).run()
-        return configure_gate, verdict_poll
-
-
-if __name__ == "__main__":
-    asyncio.run(PollingExample.run())

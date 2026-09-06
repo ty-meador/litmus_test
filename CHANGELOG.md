@@ -9,6 +9,12 @@ kept so that it exists before the promise does.
 
 ### Added
 
+- `litmus run <path-or-module>[::SuiteClass]`, the runner: loads a suite file or
+  module, selects one `LitmusTest` subclass, runs it, and exits 0 Pass, 1 Fail,
+  2 Aborted, 3 usage error. `--artifact-root DIR` overrides `LITMUS_ARTIFACT_ROOT`,
+  `--json` prints the `format_version` 1 result record, `--junit PATH` writes the
+  JUnit XML report. The exit contract and the record are public; `docs/litmus-run.md`
+  (issue #73).
 - `docs/api-stability.md`: the public surface is `litmus.__all__`, semantic versioning
   from 1.0.0, the deprecation procedure, and a reference row for every public name.
   `tests/test_public_surface.py` holds the code to the document (issue #100).
@@ -28,6 +34,10 @@ kept so that it exists before the promise does.
 
 ### Changed
 
+- The five locally executable examples run through `litmus run`: their constructor
+  parameters carry the lesson's values as defaults, and the standalone wrapper classes
+  and `__main__` blocks are gone (issue #73). The SSH-backed examples keep theirs
+  until their targets move into `configure()`.
 - A `[]` read of a `utils.ctx` key that `configure()` did not provide raises
   `ContractViolation` ("context insufficient") naming the test and the key, instead of a
   bare `KeyError`; `get`, `in`, and `setdefault` are unchanged. `TestUtils(ctx=...)` now

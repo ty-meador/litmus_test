@@ -12,16 +12,25 @@ make fix       # auto-format + auto-fix lint
 make check     # CI gate: format check, lint, pyright strict, pytest, litmus-check
 ```
 
-The locally executable examples progress from one explicit claim, through composition,
-to polling, lifecycle hooks, and the evidence surface:
+`litmus run` is the runner (`docs/litmus-run.md`): it loads a suite file or module,
+runs the one `LitmusTest` subclass it defines (or the one named after `::`), and exits
+0 for Pass, 1 for Fail, 2 for Aborted, 3 when the suite could not be run at all. The
+locally executable examples progress from one explicit claim, through composition, to
+polling, lifecycle hooks, and the evidence surface:
 
 ```sh
-uv run python examples/hello_world.py
-uv run python examples/test_composition.py
-uv run python examples/wait_for_patterns.py
-uv run python examples/hardware_device_lifecycle.py
-uv run python examples/run_data_evidence.py
+uv run litmus run examples/hello_world.py
+uv run litmus run examples/test_composition.py::SequencedDevice
+uv run litmus run examples/test_composition.py::ParallelDevice   # exits 1 by design
+uv run litmus run examples/wait_for_patterns.py::ConfigureGatedDevice
+uv run litmus run examples/wait_for_patterns.py::MainAssertionDevice
+uv run litmus run examples/hardware_device_lifecycle.py
+uv run litmus run examples/run_data_evidence.py
 ```
+
+`--artifact-root DIR` points the run's evidence somewhere specific, `--json` prints the
+`format_version` 1 result record to stdout, and `--junit PATH` writes the JUnit XML
+projection beside it.
 
 The pi-hole dogfood suite is the end-to-end proof against a real hop. It needs
 `TARGET_ADDRESS` and `TARGET_USER`; `TARGET_PASSWORD` and `TARGET_PORT` are optional:
@@ -44,9 +53,10 @@ patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
 `inspector-json.md` (the versioned downstream result contract, with its JSON Schemas
 under `docs/schema/`), `junit-xml.md` (the
 JUnit projection of that result for CI), translated from the legacy docs and updated
-to the port's semantics, `litmus-check.md` (the skippable tier-3 linter over
-authored suites), and `api-stability.md` (the public surface, semantic versioning from
-1.0.0, and the deprecation procedure). `CHANGELOG.md` at the root records every change
+to the port's semantics, `litmus-run.md` (the runner and its exit status contract),
+`litmus-check.md` (the skippable tier-3 linter over authored suites), and
+`api-stability.md` (the public surface, semantic versioning from 1.0.0, and the
+deprecation procedure). `CHANGELOG.md` at the root records every change
 to that surface.
 
 ## Deployment requirement
