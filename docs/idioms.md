@@ -89,7 +89,7 @@ async def configure(self, utils: TestUtils) -> dict[str, Any]:
 Override `run_data` only when you need computed or filtered output:
 
 ```python
-from litmus.evidence import JsonObject
+from litmus import JsonObject
 
 
 @property
@@ -548,7 +548,7 @@ surveys that tail service logs for the Floor Technician.
 
 ## SSH Tunneling
 
-Pass an existing `SshInterface` as the `via` argument to `utils.get_shell()` to tunnel the new connection through it. Both interfaces are framework-managed — no `cleanup()` override is needed.
+Pass the `Shell` an earlier `utils.get_shell()` returned as the `via` argument to the next `utils.get_shell()` to tunnel the new connection through it. Both interfaces are framework-managed — no `cleanup()` override is needed.
 
 ```python
 jump = await utils.get_shell(host=jump_host, username=jump_user)

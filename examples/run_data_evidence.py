@@ -15,8 +15,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from litmus import PASS, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
-from litmus.evidence import JsonObject
+from litmus import PASS, JsonObject, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
 
 
 class PowerSupply(LitmusTest):

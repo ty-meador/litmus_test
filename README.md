@@ -44,8 +44,10 @@ patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
 `inspector-json.md` (the versioned downstream result contract, with its JSON Schemas
 under `docs/schema/`), `junit-xml.md` (the
 JUnit projection of that result for CI), translated from the legacy docs and updated
-to the port's semantics, and `litmus-check.md` (the skippable tier-3 linter over
-authored suites).
+to the port's semantics, `litmus-check.md` (the skippable tier-3 linter over
+authored suites), and `api-stability.md` (the public surface, semantic versioning from
+1.0.0, and the deprecation procedure). `CHANGELOG.md` at the root records every change
+to that surface.
 
 ## Deployment requirement
 
