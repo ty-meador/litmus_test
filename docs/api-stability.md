@@ -44,6 +44,10 @@ and every documented code block imports only that set from the package root, and
   (`0` Pass, `1` Fail, `2` Aborted, `3` usage error) and its `--json` record, which is
   the `result.json` record under the same `format_version` policy
   (`docs/litmus-run.md`). The `litmus.cli` module behind it is not.
+- The `litmus new` command line is public in two respects: the files it writes (a
+  gated-PASS suite and a matching self-test stub) and its exit status (`0` wrote the
+  files, `3` usage error). The `litmus.scaffold` module behind it is not
+  (`docs/litmus-new.md`).
 - The `litmus-check` command line is public in two respects: its exit status contract
   and the rule codes it ships (`docs/litmus-check.md`). The Python API of the
   `litmus_check` package is not.
