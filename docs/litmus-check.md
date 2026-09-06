@@ -58,6 +58,7 @@ scaffolding suite authors copy from, so the examples always demonstrate the idio
 | `litmus/method-reference` | `self.test` takes a method reference, not a `lambda` or nested def. | Tier 2: method references passed to `test` are auto-bound; the wrapper is unnecessary. |
 | `litmus/retired-names` | `self.case` and `self.group` are gone; compose with `self.test`, `self.sequence`, and `self.parallel` (issue #110). | Tier 1: the attributes no longer exist, so `build_suite` raises `AttributeError` before any hardware is touched; the rule names the replacement instead. |
 | `litmus/no-verdict-in-cleanup` | `cleanup` does not `return PASS` or `raise TestFailure`; it restores hardware state. | Tier 1: cleanup's return is discarded and its exceptions are swallowed. |
+| `litmus/ctx-provenance` | Every `utils.ctx["k"]` read in a test method, hook, `configure`, or `cleanup` names a key that `configure()` returns (its dict literal or `TypedDict`) or that the same method wrote earlier. A sibling leaf's write does not count, and `.get()` is how an optional key is read (issue #112). | Tier 1: a `[]` read of a key `configure()` did not provide raises `ContractViolation` naming the test and the key; `get` and `in` never do. |
 
 Run `litmus-check --list-rules` for the catalogue shipped in the installed version.
 Each rule's module docstring under `tools/litmus_check/rules/` states exactly what it
