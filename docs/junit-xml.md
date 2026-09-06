@@ -5,9 +5,9 @@ tree onto that schema so a litmus run shows up beside every other suite with no
 adapter. The Floor Technician's taxonomy survives the mapping: a red build says
 hardware, harness, or bug — not just red.
 
-The runner (`litmus run --junit PATH`, issue #73) will call `JunitXml.write`. Until
-that CLI exists, harness adapters import `litmus.junit` directly, off the promised
-surface (`docs/api-stability.md`).
+The runner calls `JunitXml.write`: `litmus run --junit PATH` writes the report beside
+the run's evidence (`docs/litmus-run.md`). A harness adapter that imports
+`litmus.junit` directly does so off the promised surface (`docs/api-stability.md`).
 
 This is a *projection* of the Inspector JSON contract, not a second source of truth.
 `RunResult.to_json()` remains the evidence record. JUnit is what CI already knows

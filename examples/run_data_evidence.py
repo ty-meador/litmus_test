@@ -14,14 +14,15 @@ treats a missing reading as out of spec.
 The readings are constructor-injected so the example runs on any development
 machine. A real suite would take them with `utils.exec()` inside the test
 method; the ctx write, the snapshot, and the override stay the same.
+
+Run it: `litmus run examples/run_data_evidence.py`.
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-from litmus import PASS, JsonObject, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
+from litmus import PASS, JsonObject, LitmusTest, TestFailure, TestUtils, Verdict
 
 
 class PowerSupply(LitmusTest):
@@ -31,13 +32,16 @@ class PowerSupply(LitmusTest):
         self,
         *,
         name: str,
-        output_voltage_v: float,
-        temperature_c: float,
+        output_voltage_v: float = 12.1,
+        temperature_c: float = 48.0,
         voltage_low_v: float = 11.5,
         voltage_high_v: float = 12.5,
         temp_limit_c: float = 70.0,
     ) -> None:
         """Capture the readings this suite will publish as evidence.
+
+        The default readings sit inside the limits, so `litmus run` needs no
+        arguments.
 
         Args:
             name: Node name used by logs, artifacts, and failures.
@@ -108,20 +112,3 @@ class PowerSupply(LitmusTest):
                 and temperature <= self._temp_limit_c
             )
         return {**base, "within_spec": within_spec}
-
-
-class RunDataEvidenceExample:
-    """Run the power-supply evidence suite as a standalone program."""
-
-    @staticmethod
-    async def run() -> RunResult:
-        """Execute through the framework-owned lifecycle."""
-        return await PowerSupply(
-            name="power supply",
-            output_voltage_v=12.1,
-            temperature_c=48.0,
-        ).run()
-
-
-if __name__ == "__main__":
-    asyncio.run(RunDataEvidenceExample.run())
