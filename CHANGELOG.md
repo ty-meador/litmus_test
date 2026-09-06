@@ -34,6 +34,11 @@ kept so that it exists before the promise does.
 
 ### Changed
 
+- A shell a node opened with `use_shell` / `get_shell` now stays connected through that
+  node's post-cleanup survey and closes after it, before the via lease is released. It
+  used to close inside cleanup, so a post-cleanup survey on a self-owned hop settled
+  `remote interface is not connected` and recorded an empty artifact while the same
+  survey on an inherited via hop read the device (issue #115).
 - The five locally executable examples run through `litmus run`: their constructor
   parameters carry the lesson's values as defaults, and the standalone wrapper classes
   and `__main__` blocks are gone (issue #73). The SSH-backed examples keep theirs

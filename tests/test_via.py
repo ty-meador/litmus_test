@@ -771,6 +771,59 @@ class TestViaSurveyAndAuditRouting:
         assert calls[-1] == "gateway-cleanup"
         assert calls.count(hop_survey) == 6
 
+    async def test_an_owned_hop_outlives_post_cleanup_like_a_via_hop(self) -> None:
+        """A shell the node opened itself has the same lifetime as an inherited via hop.
+
+        Regression for #115: the owned hop used to close inside cleanup, so the
+        post-cleanup survey settled `remote interface is not connected`.
+        """
+        peer = await LoopbackSshd.start(username="ops", password="jump")
+        calls: list[str] = []
+        opened: list[RemoteInterface] = []
+
+        class Target(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_survey(self._survey)
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                calls.append("configure")
+                await _use_loopback(utils, peer)
+                opened.extend(utils._routing.opened)  # pyright: ignore[reportPrivateUsage]
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _survey(self, utils: TestUtils) -> object:
+                result = await utils.exec("survey-on-hop")
+                calls.append(f"survey:{result.stdout}:{result.exit_code}:{result.stderr}")
+                return {"stdout": result.stdout}
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                calls.append("test")
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                calls.append("cleanup")
+
+        try:
+            outcome = await Target(name="target").main()
+        finally:
+            await peer.aclose()
+
+        assert outcome.state is State.PASS
+        hop_survey = "survey:survey-on-hop:0:"
+        # pre-configure runs before the hop exists and lands on the test host.
+        assert calls[0].startswith("survey::127:")
+        assert calls[1] == "configure"
+        assert calls[-2] == "cleanup"
+        assert calls[-1] == hop_survey
+        assert calls.count(hop_survey) == 5
+        assert "remote interface is not connected" not in "".join(calls)
+        assert len(opened) == 1
+        assert opened[0].connected is False
+
     async def test_an_in_flight_audit_keeps_the_via_hop_until_it_settles(self) -> None:
         peer = await LoopbackSshd.start(username="ops", password="jump")
         calls: list[str] = []
