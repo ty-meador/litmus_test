@@ -8,9 +8,10 @@ import inspect
 import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 
+from litmus.lifecycle import Phase
 from litmus.results import RunResult
 
 type HookFunction = Callable[[Any], Awaitable[object]]
@@ -24,14 +25,21 @@ def _require_coroutine(kind: str, fn: HookFunction) -> None:
         raise TypeError(msg)
 
 
+def _every_phase() -> frozenset[Phase]:
+    return frozenset(Phase)
+
+
 @dataclass(frozen=True, slots=True)
 class SurveyHook:
-    """A structurally valid survey registration."""
+    """A structurally valid survey registration and the phases it observes."""
 
     fn: HookFunction
+    phases: frozenset[Phase] = field(default_factory=_every_phase)
 
     def __post_init__(self) -> None:
         _require_coroutine("survey", self.fn)
+        if not self.phases:
+            raise ValueError("a survey must observe at least one phase")
 
 
 @dataclass(frozen=True, slots=True)

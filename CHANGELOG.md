@@ -28,6 +28,14 @@ kept so that it exists before the promise does.
   published Inspector record schemas, with the versioning policy in
   `docs/inspector-json.md` (issue #92).
 - `litmus.junit.JunitXml`, the JUnit XML projection of a `RunResult` (issue #87).
+- `Phase`, the ordered `StrEnum` of the six survey dispatch points, and
+  `use_survey(fn, phases=...)` to schedule a survey at a subset of them; the default
+  is all six and an empty selection is a `ValueError` at registration. A skipped
+  boundary writes one debug line and no artifact. `TestUtils.exec_route` states where
+  `utils.exec` lands when it is read: `local`, or the endpoint of the hop the route
+  attaches to. The phase is the schedule and the route is the guard, because after a
+  failed `configure` the engine still fires `pre-cleanup` and `post-cleanup` with exec
+  on the test host (issue #116).
 - `litmus-check` rule `litmus/ctx-provenance`: every `utils.ctx["k"]` read in a test
   method, hook, `configure`, or `cleanup` is provided by `configure()`'s return or
   written earlier in the same method; a sibling leaf's write does not count (issue #112).
