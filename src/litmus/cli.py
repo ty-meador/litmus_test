@@ -88,7 +88,10 @@ class SuiteLoader:
         """Return the suite class ``target`` selects, or raise ``UsageError``."""
         source, _, class_name = target.partition(_SELECTOR)
         if not source:
-            raise UsageError(f"{target!r}: a suite file or module name must precede '::'")
+            raise UsageError(
+                f"{target!r}: a suite file or module name must precede '::'; "
+                "give a path or module name before the selector"
+            )
         module = self._import(source)
         defined = self._defined_suites(module)
         if class_name:
@@ -96,7 +99,10 @@ class SuiteLoader:
         if len(defined) == 1:
             return next(iter(defined.values()))
         if not defined:
-            raise UsageError(f"{source}: defines no LitmusTest subclass")
+            raise UsageError(
+                f"{source}: defines no LitmusTest subclass; "
+                f"define one in that module or name one as {source}{_SELECTOR}SuiteClass"
+            )
         names = ", ".join(defined)
         raise UsageError(
             f"{source}: defines {len(defined)} suites ({names}); "
@@ -114,23 +120,27 @@ class SuiteLoader:
                 f"{source}: {exc}; give a path to a .py file or an importable module name"
             ) from exc
         except Exception as exc:  # the module's own import-time failure is the message
-            raise UsageError(f"{source}: {type(exc).__name__}: {exc}") from exc
+            raise UsageError(
+                f"{source}: {type(exc).__name__}: {exc}; fix the import error in that module"
+            ) from exc
 
     def _import_file(self, source: str, path: Path) -> ModuleType:
         if not path.is_file():
-            raise UsageError(f"{source}: no such file")
+            raise UsageError(f"{source}: no such file; give a path to an existing .py file")
         resolved = path.resolve()
         name = self._free_module_name(resolved.stem)
         spec = importlib.util.spec_from_file_location(name, resolved)
         if spec is None or spec.loader is None:
-            raise UsageError(f"{source}: not an importable Python file")
+            raise UsageError(f"{source}: not an importable Python file; give a readable .py file")
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
         try:
             spec.loader.exec_module(module)
         except Exception as exc:  # the module's own import-time failure is the message
             del sys.modules[name]
-            raise UsageError(f"{source}: {type(exc).__name__}: {exc}") from exc
+            raise UsageError(
+                f"{source}: {type(exc).__name__}: {exc}; fix the import error in that module"
+            ) from exc
         return module
 
     @staticmethod
@@ -168,7 +178,7 @@ class SuiteLoader:
             return value
         names = ", ".join(defined) or "(none)"
         raise UsageError(
-            f"{module.__name__}: no LitmusTest subclass named {class_name!r}; defined here: {names}"
+            f"{module.__name__}: no LitmusTest subclass named {class_name!r}; name one of: {names}"
         )
 
 

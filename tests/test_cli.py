@@ -286,7 +286,7 @@ class TestUsageErrors:
         status, _, err = _run("run", f"{path}::Third")
 
         assert status == EXIT_USAGE
-        assert "no LitmusTest subclass named 'Third'; defined here: First, Second" in err
+        assert "no LitmusTest subclass named 'Third'; name one of: First, Second" in err
 
     def test_suite_needing_constructor_arguments(self, tmp_path: Path) -> None:
         path = _write(tmp_path, "needs_host.py", _REQUIRES_ARGUMENTS)
