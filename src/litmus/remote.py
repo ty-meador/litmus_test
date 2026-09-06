@@ -162,7 +162,10 @@ class RemoteInterface(ABC):
             return None
         current = self.address
         if current is None:
-            msg = f"{type(self).__name__} has no address to connect to; it takes no host or port"
+            msg = (
+                f"{type(self).__name__} has no address to connect to; "
+                "call connect() without host or port"
+            )
             raise TypeError(msg)
         return (host if host is not None else current[0], port if port is not None else current[1])
 
@@ -224,7 +227,10 @@ class RemoteInterface(ABC):
         address differs from `address`. Transports that report an address must
         override this; the default refuses.
         """
-        msg = f"{type(self).__name__} reports an address but cannot re-point it"
+        msg = (
+            f"{type(self).__name__} reports an address but cannot re-point it; "
+            "override _retarget on the transport subclass, or connect() to the existing address"
+        )
         raise TypeError(msg)
 
     @abstractmethod

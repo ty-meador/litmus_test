@@ -242,6 +242,11 @@ class ContractViolation(TestFailure):
         return payload
 
 
+_FRAMEWORK_ESCALATION = (
+    "report it to the framework maintainers with the full log and reproduction steps"
+)
+
+
 @final
 class FrameworkContractViolation(ContractViolation):
     """A framework bug — the second layer of the guard, and unreachable by design.
@@ -252,10 +257,30 @@ class FrameworkContractViolation(ContractViolation):
     """
 
     BANNER: ClassVar[str] = "FRAMEWORK CONTRACT VIOLATION"
-    DEFAULT_DETAIL: ClassVar[str] = (
-        "this should never happen; report it to the framework maintainers with the "
-        "full log and reproduction steps"
-    )
+    DEFAULT_DETAIL: ClassVar[str] = f"this should never happen; {_FRAMEWORK_ESCALATION}"
+
+    def __init__(
+        self,
+        node: str,
+        detail: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        """Banner a framework bug and name the maintainer escalation.
+
+        Args:
+            node: Name of the node whose contract was violated.
+            detail: What specifically went wrong. A rule-only detail is completed
+                with the maintainer escalation so the author-facing string names
+                the fix. Defaults to the general form.
+            cause: The original exception, preserved verbatim for the artifact.
+        """
+        if detail is None:
+            resolved = self.DEFAULT_DETAIL
+        elif _FRAMEWORK_ESCALATION in detail:
+            resolved = detail
+        else:
+            resolved = f"{detail}; {_FRAMEWORK_ESCALATION}"
+        super().__init__(node, resolved, cause)
 
 
 @final
@@ -287,6 +312,7 @@ class ContextInsufficient(ContractViolation):
         detail = f"context insufficient: configure() did not provide {key!r}"
         if owner is not None and owner != node:
             detail = f"{detail} (context owned by {owner!r})"
+        detail = f"{detail}; return {key!r} from configure()"
         super().__init__(node, detail)
         self.key = key
         self.owner = owner
@@ -325,7 +351,7 @@ class MissingVerdict(LitmusError):
         """
         fail_message = (
             f"{self.BANNER} IN {node}: returned {returned!r} instead of the PASS "
-            "sentinel; no verdict was produced, so none is reported"
+            "sentinel; return PASS or raise TestFailure"
         )
         super().__init__(fail_message)
         self.fail_message = fail_message

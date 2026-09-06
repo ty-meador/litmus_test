@@ -30,7 +30,7 @@ class _ChunkReader(Protocol):
 
 def _validate_output_budget(output_budget: int) -> int:
     if output_budget < 1:
-        raise ValueError("output_budget must be at least 1 byte")
+        raise ValueError("output_budget must be at least 1 byte; pass a positive byte ceiling")
     return output_budget
 
 
