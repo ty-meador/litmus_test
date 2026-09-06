@@ -27,7 +27,7 @@ class RuleRegistry:
         by_code: dict[str, Rule] = {}
         for rule in rules:
             if rule.code in by_code:
-                msg = f"duplicate rule code: {rule.code}"
+                msg = f"duplicate rule code: {rule.code}; give each rule a unique code"
                 raise ValueError(msg)
             by_code[rule.code] = rule
         self._rules: tuple[Rule, ...] = tuple(by_code[code] for code in sorted(by_code))

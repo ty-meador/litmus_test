@@ -57,7 +57,9 @@ class RunTimeline:
     def register(self, scope: tuple[str, ...]) -> TimelinePaths:
         """Reserve a collision-resistant directory without opening any files."""
         if not scope:
-            raise ValueError("a timeline owner must have a node scope")
+            raise ValueError(
+                "a timeline owner must have a node scope; pass a non-empty (name, ...) lineage"
+            )
         with self._lock:
             self._counter += 1
             ordinal = self._counter
