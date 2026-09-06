@@ -204,7 +204,7 @@ class TestEmittedRecordsValidate:
         state = State.FAIL if isinstance(failure, TestFailure) else State.ABORTED
         tree = SummaryTreeNode(
             name="rack",
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
             state=state,
             failure=failure,
             log_path="0001-rack-0123456789ab/timeline.jsonl",
@@ -223,18 +223,18 @@ class TestEmittedRecordsValidate:
         )
         tree = SummaryTreeNode(
             name="rack",
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
             state=State.ABORTED,
             timeout=timeout,
             log_path="0001-rack-0123456789ab/timeline.jsonl",
             children=(
                 SummaryTreeNode(
                     name="checks",
-                    type=NodeType.TEST_SEQUENCE,
+                    type=NodeType.SEQUENCE,
                     state=State.ABORTED,
                     timeout=timeout,
                     log_path="0002-checks-0123456789ab/timeline.jsonl",
-                    children=(SummaryTreeNode(name="later", type=NodeType.TEST_CASE, state=None),),
+                    children=(SummaryTreeNode(name="later", type=NodeType.TEST, state=None),),
                 ),
             ),
         )
@@ -246,7 +246,7 @@ class TestSchemasRefuseTheBreaksThePolicyNames:
     def result_payload(self) -> Json:
         tree = SummaryTreeNode(
             name="rack",
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
             state=State.PASS,
             log_path="0001-rack-0123456789ab/timeline.jsonl",
         )
@@ -257,7 +257,7 @@ class TestSchemasRefuseTheBreaksThePolicyNames:
         [
             (("format_version",), 2),
             (("state",), "Skipped"),
-            (("type",), "suite"),
+            (("type",), "test-suite"),
             (("summary_tree", "log_path"), 7),
             (("summary_tree", "children"), None),
             (("env", "LOT"), 42),
