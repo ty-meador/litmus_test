@@ -199,13 +199,13 @@ class TestWaitForPatternsExample:
         _assert_links_resolve(tmp_path, links, owners={"polling device"})
         assert payload["summary_tree"] == {
             "name": "polling device",
-            "type": "test-suite",
+            "type": "suite",
             "state": "Pass",
             "failure": None,
             "children": [
                 {
                     "name": "service-health",
-                    "type": "test-case",
+                    "type": "test",
                     "state": "Pass",
                     "failure": None,
                     "children": [],
@@ -426,46 +426,46 @@ class TestPiHoleServerExample:
         )
         assert payload["summary_tree"] == {
             "name": "PiHoleServer",
-            "type": "test-suite",
+            "type": "suite",
             "state": "Pass",
             "failure": None,
             "children": [
                 {
                     "name": "PiHoleServer-main-sequence",
-                    "type": "test-sequence",
+                    "type": "sequence",
                     "state": "Pass",
                     "failure": None,
                     "children": [
                         {
                             "name": "sanity-check",
-                            "type": "test-case",
+                            "type": "test",
                             "state": "Pass",
                             "failure": None,
                             "children": [],
                         },
                         {
                             "name": "pihole-running",
-                            "type": "test-case",
+                            "type": "test",
                             "state": "Pass",
                             "failure": None,
                             "children": [],
                         },
                         {
                             "name": "health-checks",
-                            "type": "test-group",
+                            "type": "parallel",
                             "state": "Pass",
                             "failure": None,
                             "children": [
                                 {
                                     "name": "dmesg-clean",
-                                    "type": "test-case",
+                                    "type": "test",
                                     "state": "Pass",
                                     "failure": None,
                                     "children": [],
                                 },
                                 {
                                     "name": "status-checks",
-                                    "type": "test-case",
+                                    "type": "test",
                                     "state": "Pass",
                                     "failure": None,
                                     "children": [],

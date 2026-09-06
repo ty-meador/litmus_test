@@ -315,7 +315,7 @@ class TestTimeoutProjection:
 
 class TestConstructedTrees:
     def test_aborted_without_taxonomy_or_log_is_still_an_error(self) -> None:
-        leaf = SummaryTreeNode(name="odd", type=NodeType.TEST_CASE, state=State.ABORTED)
+        leaf = SummaryTreeNode(name="odd", type=NodeType.TEST, state=State.ABORTED)
         result = RunResult(
             slot=Slot.TEST_METHOD,
             node="odd",
@@ -323,7 +323,7 @@ class TestConstructedTrees:
             ancestor_names=["odd"],
             bread_crumbs="odd",
             summary_tree=leaf,
-            type=NodeType.TEST_CASE,
+            type=NodeType.TEST,
         )
         root = _xml(result)
         case = _by_name(root, "odd")
@@ -335,10 +335,10 @@ class TestConstructedTrees:
         assert case.find("failure") is None
 
     def test_composite_that_settled_before_children_ran_is_a_testcase(self) -> None:
-        pending = SummaryTreeNode(name="never", type=NodeType.TEST_CASE, state=None)
+        pending = SummaryTreeNode(name="never", type=NodeType.TEST, state=None)
         tree = SummaryTreeNode(
             name="rack",
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
             state=State.FAIL,
             failure=TestFailure("bring-up died"),
             children=(pending,),
@@ -351,7 +351,7 @@ class TestConstructedTrees:
             ancestor_names=["rack"],
             bread_crumbs="rack",
             summary_tree=tree,
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
         )
         root = _xml(result)
         names = [case.get("name") for case in _cases(root)]
