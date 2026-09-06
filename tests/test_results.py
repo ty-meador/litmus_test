@@ -83,12 +83,12 @@ class TestRunResultNavigation:
         pending_leaf = pending_group.children[0]
 
         assert result.state is State.FAIL
-        assert sequence.type is NodeType.TEST_SEQUENCE
+        assert sequence.type is NodeType.SEQUENCE
         assert failed.state is State.FAIL
         assert pending_group.state is None
         assert pending_leaf.state is None
-        assert pending_group.type is NodeType.TEST_GROUP
-        assert pending_leaf.type is NodeType.TEST_CASE
+        assert pending_group.type is NodeType.PARALLEL
+        assert pending_leaf.type is NodeType.TEST
 
     async def test_summary_tree_links_every_owning_node_to_its_timeline(
         self, tmp_path: Path
@@ -198,7 +198,7 @@ class TestInspectorJsonContract:
         def make_result(state: State) -> RunResult:
             tree = SummaryTreeNode(
                 name="rack",
-                type=NodeType.TEST_SUITE,
+                type=NodeType.SUITE,
                 state=state,
             )
             return RunResult(
@@ -208,7 +208,7 @@ class TestInspectorJsonContract:
                 ancestor_names=["rack"],
                 bread_crumbs="rack",
                 summary_tree=tree,
-                type=NodeType.TEST_SUITE,
+                type=NodeType.SUITE,
             )
 
         store = _ArtifactStore(tmp_path)
@@ -355,7 +355,7 @@ class TestInspectorJsonContract:
         failure = ExternalIntegrationFailure("after_each", RuntimeError("MES unavailable"))
         tree = SummaryTreeNode(
             name="rack",
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
             state=State.ABORTED,
             failure=failure,
         )
@@ -367,7 +367,7 @@ class TestInspectorJsonContract:
             ancestor_names=["rack"],
             bread_crumbs="rack",
             summary_tree=tree,
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
         )
 
         payload = json.loads(json.dumps(result.to_json()))
@@ -387,7 +387,7 @@ class TestInspectorJsonContract:
         failure = OperatorInterrupt(2)
         tree = SummaryTreeNode(
             name="rack",
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
             state=State.ABORTED,
             failure=failure,
         )
@@ -399,7 +399,7 @@ class TestInspectorJsonContract:
             ancestor_names=["rack"],
             bread_crumbs="rack",
             summary_tree=tree,
-            type=NodeType.TEST_SUITE,
+            type=NodeType.SUITE,
         )
 
         payload = json.loads(json.dumps(result.to_json()))
