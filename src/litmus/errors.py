@@ -259,6 +259,51 @@ class FrameworkContractViolation(ContractViolation):
 
 
 @final
+class ContextInsufficient(ContractViolation):
+    """A ``[]`` read of ``utils.ctx`` asked for a key ``configure()`` never provided.
+
+    The contract is that ``configure()`` returns every key a test method, hook, or
+    ``cleanup()`` reads by subscript. A missing key is therefore the author's bug, not
+    the unit's failure: the node lands in Fail under the contract-violation banner and
+    the message names the key, so the fix is one line in ``configure()``. Reads through
+    ``.get()`` and ``in`` are the author declaring a key optional and never raise this.
+
+    Raised by the framework's context object, never by suite code. The child boundary
+    re-attributes it to the node whose body performed the read, so the banner names the
+    test the Floor Technician sees in the tree rather than the instance that owns the
+    context. It is deliberately not a ``KeyError``: a suite's ``except KeyError`` must
+    not be able to swallow a contract violation (issue #112).
+    """
+
+    def __init__(self, node: str, *, key: str, owner: str | None = None) -> None:
+        """Name the missing key and, when it differs from ``node``, the context's owner.
+
+        Args:
+            node: Name of the node whose body performed the read.
+            key: The ctx key that was read but never provided.
+            owner: Name of the authored instance whose ``configure()`` owed the key,
+                when known.
+        """
+        detail = f"context insufficient: configure() did not provide {key!r}"
+        if owner is not None and owner != node:
+            detail = f"{detail} (context owned by {owner!r})"
+        super().__init__(node, detail)
+        self.key = key
+        self.owner = owner
+
+    def attributed_to(self, node: str) -> ContextInsufficient:
+        """Return the same violation bannered with the node that performed the read."""
+        return ContextInsufficient(node, key=self.key, owner=self.owner)
+
+    def to_json(self) -> dict[str, Any]:
+        payload = super().to_json()
+        payload["key"] = self.key
+        if self.owner is not None:
+            payload["owner"] = self.owner
+        return payload
+
+
+@final
 class MissingVerdict(LitmusError):
     """No verdict was produced: the node returned something other than the sentinel.
 

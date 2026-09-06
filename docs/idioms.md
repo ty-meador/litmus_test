@@ -26,7 +26,7 @@ After `__init__` runs, `self` is read-only. All runtime state flows through conf
 **Rules:**
 - `__init__` sets read-only config (MAC, credentials, site, etc.)
 - `configure()` returns runtime state as a plain dict — the framework merges it into `utils.ctx`
-- test methods, `cleanup()`, and all child test bodies read state from `utils.ctx`, not from `self`
+- test methods, `cleanup()`, and all child test bodies read state from `utils.ctx`, not from `self`; every key they read with `[]` is one `configure()` returned, and a key it did not provide is read with `.get()` or not at all — a missing `[]` read is a `ContractViolation`, not a `KeyError` (issue #112)
 - No `self.field = value` after construction — if you need to update state mid-test, mutate `utils.ctx` in place (e.g. `utils.ctx.update(ip=new_ip)`)
 
 **Why:** Mutable instance state creates hidden coupling between lifecycle phases. When state flows through ctx, the data path is explicit and traceable. The Floor Technician benefits because `run_data` captures ctx automatically — structured evidence appears in `RunResult` with zero extra work.
@@ -315,6 +315,8 @@ The exception-path behavior is: throw from either hook → run halts → every e
 
 ## Configure-Returns-Context Pattern
 `configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant leaves. No instance fields are needed for configure-phase data.
+
+The return value is the contract with the test methods: it names every key they read with `[]`. Seed no placeholders — a reading a test method has not taken yet is absent, not `0.0` — and do not rely on a sibling leaf's write, which is order under `sequence` and a race under `parallel`. `litmus-check` enforces this statically as `litmus/ctx-provenance`; at run time a `[]` read of a missing key is a `ContractViolation` naming the test and the key, while `.get()` and `in` read an optional key (issue #112).
 
 The framework annotation is `Mapping[str, Any]`; a plain `dict[str, Any]` return is the
 default and satisfies it. When a suite benefits from precise key types, define a local

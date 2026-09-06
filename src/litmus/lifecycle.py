@@ -30,6 +30,7 @@ from enum import StrEnum
 from typing import Literal, final
 
 from litmus.errors import (
+    ContextInsufficient,
     ContractViolation,
     ExternalIntegrationFailure,
     Failure,
@@ -456,6 +457,12 @@ class ChildBoundary:
             raise
         except TestFailure as failure:
             self._raise_if_cancellation_pending(slot)
+            if isinstance(failure, ContextInsufficient):
+                # The context object cannot know whose body read it; the boundary can.
+                # Banner the violation with the test the Floor Technician sees.
+                failure = failure.attributed_to(self._node)
+                if not policy.swallows_errors:
+                    self._logger.error("%s", failure.fail_message)
             if policy.halts_run_on_error:
                 raise self._as_integration_failure(slot, failure) from failure
             return self._record(self._classify_thrown(slot, policy, failure))

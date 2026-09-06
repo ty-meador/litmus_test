@@ -44,3 +44,8 @@ class SeededBlade(LitmusTest):
         if self._limit_c:
             return PASS  # pyright: ignore[reportReturnType]  # seed: litmus/no-verdict-in-cleanup
         return None
+
+    async def _unprovided(self, utils: TestUtils) -> Verdict:
+        if utils.ctx["rail_v"] > 0:  # seed: litmus/ctx-provenance
+            return PASS
+        raise TestFailure("rail down", "> 0 V", "0 V")

@@ -22,9 +22,16 @@ kept so that it exists before the promise does.
   published Inspector record schemas, with the versioning policy in
   `docs/inspector-json.md` (issue #92).
 - `litmus.junit.JunitXml`, the JUnit XML projection of a `RunResult` (issue #87).
+- `litmus-check` rule `litmus/ctx-provenance`: every `utils.ctx["k"]` read in a test
+  method, hook, `configure`, or `cleanup` is provided by `configure()`'s return or
+  written earlier in the same method; a sibling leaf's write does not count (issue #112).
 
 ### Changed
 
+- A `[]` read of a `utils.ctx` key that `configure()` did not provide raises
+  `ContractViolation` ("context insufficient") naming the test and the key, instead of a
+  bare `KeyError`; `get`, `in`, and `setdefault` are unchanged. `TestUtils(ctx=...)` now
+  copies the seed into the run's context rather than adopting the dict (issue #112).
 - Composition vocabulary settled as `self.test`, `self.sequence`, `self.parallel`;
   `self.case` and `self.group` removed outright, and `litmus-check` gained
   `litmus/retired-names` to point at the replacement (issue #110).
