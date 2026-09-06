@@ -49,7 +49,7 @@ class _Phase(StrEnum):
 class _Kind(StrEnum):
     LEAF = "leaf"
     SEQUENCE = "sequence"
-    GROUP = "group"
+    PARALLEL = "parallel"
 
 
 class _Source(StrEnum):
@@ -129,11 +129,11 @@ class _Target(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         if self._controls.kind is _Kind.LEAF:
-            return self.case("claim", self._claim)
-        children = [self.case("claim", self._claim), self.case("sibling", self._sibling)]
+            return self.test("claim", self._claim)
+        children = [self.test("claim", self._claim), self.test("sibling", self._sibling)]
         if self._controls.kind is _Kind.SEQUENCE:
             return self.sequence("claims", children)
-        return self.group("claims", children)
+        return self.parallel("claims", children)
 
     async def _claim(self, utils: TestUtils) -> Verdict:
         await self._controls.checkpoint(_Phase.TEST_METHOD)
@@ -193,7 +193,7 @@ class _Harness(LitmusTest):
 
     def build_suite(self) -> LitmusTest:
         if self._controls.source in (_Source.BEFORE_HOOK, _Source.AFTER_HOOK):
-            return self.group("harness", [self._target, self.case("trigger", self._trigger)])
+            return self.parallel("harness", [self._target, self.test("trigger", self._trigger)])
         return self._target
 
     async def _trigger(self, utils: TestUtils) -> Verdict:
@@ -390,7 +390,7 @@ class TestAbortPhaseMatrix:
     async def test_completion_hook_failure_during_audit_shutdown_halts_the_run(
         self, install_mock_connector: ConnectorInstaller
     ) -> None:
-        controls = _Controls(_Phase.TEST_METHOD, _Kind.GROUP, _Source.AUDIT)
+        controls = _Controls(_Phase.TEST_METHOD, _Kind.PARALLEL, _Source.AUDIT)
         root = _Harness(controls, [], install_mock_connector)
 
         async def after_each(ctx: AfterEachContext) -> None:
