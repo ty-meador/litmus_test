@@ -40,6 +40,10 @@ and every documented code block imports only that set from the package root, and
   `SSH_AUTH_SOCK`, the SSH agent `get_shell` and `use_shell` fall back to when no
   credential is given. The run environment as a whole is published as evidence under
   `env_allow` / `env_deny`, not read as configuration.
+- The `litmus run` command line is public in two respects: its exit status contract
+  (`0` Pass, `1` Fail, `2` Aborted, `3` usage error) and its `--json` record, which is
+  the `result.json` record under the same `format_version` policy
+  (`docs/litmus-run.md`). The `litmus.cli` module behind it is not.
 - The `litmus-check` command line is public in two respects: its exit status contract
   and the rule codes it ships (`docs/litmus-check.md`). The Python API of the
   `litmus_check` package is not.
@@ -59,9 +63,9 @@ Private, with no promise attached:
   and hand back a `Shell`. Transport authors and the self-tests import
   `litmus.remote` and `litmus.ssh` directly; a transport contract for third parties is
   a design note of its own (issues #91, #93–#97).
-- `litmus.junit.JunitXml`. The runner (`litmus run --junit`, issue #73) will own the
-  reporter; until it does, a harness adapter that imports `litmus.junit` does so
-  without the promise, as `docs/junit-xml.md` says.
+- `litmus.junit.JunitXml`. The runner owns the reporter: `litmus run --junit PATH`
+  is the promised way to a JUnit report. A harness adapter that imports
+  `litmus.junit` directly does so without the promise, as `docs/junit-xml.md` says.
 - The self-test fixtures, the loopback sshd, and `MockTransport`. A transport double
   for suite authors is a feature to be designed, not a side door into the test kit.
 
@@ -120,8 +124,9 @@ Announcing a deprecation is one MR that does all of the following:
    developer's CI before it reaches a station log.
 
 The developer sees the warning in the self-tests of their own suite (pytest surfaces
-`DeprecationWarning` by default) and in `litmus-check` output; the runner (issue #73)
-records it in the run's timeline so the station's log carries the notice as well.
+`DeprecationWarning` by default) and in `litmus-check` output; `litmus run` routes
+Python warnings through the run log so the station's console carries the notice as
+well.
 
 A removal at the next MAJOR deletes the code and the rule, moves the table row to the
 changelog's *Removed* list, and stops there: a removed name is not reused for something
