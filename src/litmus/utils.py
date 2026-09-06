@@ -506,6 +506,22 @@ class TestUtils:
         """Absolute directory where this run's captured evidence is stored."""
         return self._artifact_store.root
 
+    @property
+    def exec_route(self) -> str:
+        """The host ``utils.exec`` lands on right now: ``"local"`` or the hop's endpoint.
+
+        ``"local"`` is the test host, before any ``use_shell`` and after
+        ``use_shell(inherit=False)``. Otherwise it is the endpoint of the hop this
+        node's route attaches to, the last name in the ``exec routing:`` evidence line
+        (``"10.10.10.10"`` for a route ``bastion -> 10.10.10.10``). A survey reads this
+        to know whether there is a device on the other end of ``exec`` at the phase it
+        fires, which the phase alone cannot say.
+        """
+        router = self._routing.router
+        if router is None or router.ssh is None:
+            return "local"
+        return router.ssh.endpoint
+
     async def capture_artifact(self, artifact: Artifact) -> Path:
         """Persist evidence and append its structured pointer to the scoped timeline.
 

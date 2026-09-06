@@ -20,12 +20,54 @@ import litmus
 from litmus import PASS, ExecResult, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
 from litmus.lifecycle import Outcome, State
 from litmus.mock import MockTransport
+from litmus.remote import RemoteInterface
+from litmus.routing import ExecRouter, RouterRunParams
 
 
 class _ScopedLogRecord(Protocol):
     litmus_node: str
     litmus_scope: tuple[str, ...]
     measurement: int
+
+
+class _Endpoint(RemoteInterface):
+    def __init__(self, host: str) -> None:
+        super().__init__()
+        self.host = host
+
+    async def _connect(self) -> None:
+        pass
+
+    async def _disconnect(self) -> None:
+        pass
+
+    async def _exec(self, command: str) -> ExecResult:
+        return ExecResult.settled(command, "", 0)
+
+
+class TestExecRoute:
+    """`exec_route` is derived from the router each time it is read, never stored."""
+
+    def test_a_node_that_never_declared_a_route_is_local(self) -> None:
+        assert TestUtils().exec_route == "local"
+
+    def test_a_routed_node_names_the_endpoint_of_its_hop(self) -> None:
+        utils = TestUtils()
+        edge = _Endpoint("10.10.10.10")
+        utils._routing.apply_run_params(  # pyright: ignore[reportPrivateUsage]
+            RouterRunParams(ExecRouter.for_ssh(edge))
+        )
+        assert utils.exec_route == "10.10.10.10"
+
+    def test_a_route_forced_local_answers_local(self) -> None:
+        async def on_host(command: str) -> ExecResult:
+            return ExecResult.settled(command, "", 0)
+
+        utils = TestUtils()
+        utils._routing.apply_run_params(  # pyright: ignore[reportPrivateUsage]
+            RouterRunParams(ExecRouter.local(on_host))
+        )
+        assert utils.exec_route == "local"
 
 
 class TestTestUtilsPublicSurface:

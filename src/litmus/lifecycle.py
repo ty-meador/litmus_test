@@ -230,6 +230,52 @@ class Slot(StrEnum):
     AFTER_EACH = "after_each"
 
 
+class Phase(StrEnum):
+    """The six survey dispatch points of one node lifecycle, in the order they occur.
+
+    The values are the artifact-name prefixes the Evidence Contract already publishes
+    (``pre-configure-1``), so naming a phase in code names it in the run directory.
+    Members order by declaration, not by string: ``Phase.PRE_TEST < Phase.POST_TEST``
+    holds. Order is not reach. After a failed ``configure`` the engine skips
+    post-configure, pre-test, and post-test and still fires pre-cleanup and
+    post-cleanup, so a survey scheduled "post-configure onward" guards the device
+    with ``utils.exec_route``, not with the phase.
+    """
+
+    PRE_CONFIGURE = "pre-configure"
+    POST_CONFIGURE = "post-configure"
+    PRE_TEST = "pre-test"
+    POST_TEST = "post-test"
+    PRE_CLEANUP = "pre-cleanup"
+    POST_CLEANUP = "post-cleanup"
+
+    def _ordinal(self) -> int:
+        return _PHASE_ORDER[self]
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Phase):
+            return NotImplemented
+        return self._ordinal() < other._ordinal()
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, Phase):
+            return NotImplemented
+        return self._ordinal() <= other._ordinal()
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, Phase):
+            return NotImplemented
+        return self._ordinal() > other._ordinal()
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, Phase):
+            return NotImplemented
+        return self._ordinal() >= other._ordinal()
+
+
+_PHASE_ORDER: dict[Phase, int] = {phase: index for index, phase in enumerate(Phase)}
+
+
 @final
 @dataclass(frozen=True, slots=True)
 class SlotPolicy:

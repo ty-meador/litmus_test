@@ -272,6 +272,38 @@ Survey and audit are part of the test's *identity* — stable across runs, visib
 
 Survey errors are swallowed (never affect the verdict). Audit errors are real failures — a throwing audit cancels in-flight test methods immediately and fails the test.
 
+**Scheduling a survey.** A survey fires at all six `Phase` boundaries unless the
+constructor says otherwise. A survey that reads the device through `utils.exec` has no
+device to read at `pre-configure`, before `use_shell` has run; its dispatch there execs
+on the test host and records the developer's machine as device evidence. Say which
+boundaries the survey observes, and guard the route:
+
+```python
+from litmus import LitmusTest, Phase, TestUtils
+
+
+class PiHole(LitmusTest):
+    def __init__(self, *, name: str) -> None:
+        super().__init__(name=name)
+        self.use_survey(
+            self._ftl_tail,
+            phases=[phase for phase in Phase if phase >= Phase.POST_CONFIGURE],
+        )
+
+    async def _ftl_tail(self, utils: TestUtils) -> object:
+        if utils.exec_route == "local":
+            return None  # no device on the other end of exec at this boundary
+        return (await utils.exec("tail -n 50 /var/log/pihole/FTL.log")).stdout
+```
+
+Both halves are needed. The phase list is the schedule; the route check is the guard.
+Order is not reach: when `configure` fails before `use_shell` returns, the engine
+skips `post-configure`, `pre-test`, and `post-test` and still fires `pre-cleanup` and
+`post-cleanup`, and at those two `utils.exec` is on the test host. `utils.exec_route`
+answers `"local"` there and the hop's endpoint (`"10.10.10.10"`) once the route is
+up, so a survey that compares against it never tails the wrong machine. An empty
+`phases=` is a `ValueError` at registration, not a survey that silently never fires.
+
 Survey artifacts are named for the lifecycle dispatch point and hook index. Audit
 artifacts use the same `survey` artifact type and add the audit hook and dispatch indexes
 to the name. Every non-`None` return is captured, including empty containers. Python
