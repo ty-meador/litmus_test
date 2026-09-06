@@ -3,17 +3,129 @@
 All notable changes to litmus are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version numbers follow
 the policy in `docs/api-stability.md`. Before 1.0.0 nothing is promised; the trail is
-kept so that it exists before the promise does.
+kept so that it exists before the promise does. Add a notable change in the MR that
+delivers it; at release, move the completed entries into a dated version section and
+leave a fresh Unreleased section above it. Use the
+[release MR checklist](.gitlab/merge_request_templates/Release.md) to make the cut.
 
 ## Unreleased
 
+The initial Python migration is unreleased. The six foundation phases below summarize
+merged behavior using today's API names, with links to the MRs that established it;
+they are not six published versions. Subsequent entries include the hardening and
+refinement merged through [!108](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/108)
+on 2026-09-06. The TypeScript repositories remain behavioral references, not a promise
+of feature parity: the Python Inspector and editor adapter are still separate work.
+
 ### Added
 
+- **Phase 0 — Skeleton and kernel of trust.** Python 3.14 with uv, ruff, pyright
+  strict, and pytest; the identity-checked `PASS` sentinel, structured failure taxonomy,
+  and runtime child boundary. A non-PASS return is node-local Aborted, never an implicit
+  pass. The Python overview, contracts, and idioms carry the migration's requirements
+  ([!1](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/1),
+  [!5](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/5),
+  [!9](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/9)).
+- **Phase 1 — The test atom.** `LitmusTest` owns configure → build_suite → cleanup,
+  freezes authored instance state after construction, and checks subclass structure
+  before execution. Bound methods compose as tests, sequences, and parallel nodes;
+  `asyncio.TaskGroup` preserves sibling verdict isolation. Context stays local to its
+  authored instance, and cleanup survives abort and repeated cancellation
+  ([!13](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/13),
+  [!17](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/17),
+  [!19](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/19),
+  [!21](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/21),
+  [!23](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/23),
+  [!24](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/24),
+  [!25](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/25)).
+- **Phase 2 — Utilities and evidence.** Per-node `TestUtils` and scoped logging,
+  `wait_for(looking_for=...)`, passive surveys, active audits, and point-in-time
+  artifacts with chronological pointers. Detached `run_data` and recursive
+  `summary_tree` snapshots preserve evidence without live suite objects. The polling
+  example demonstrates the complete trail
+  ([!33](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/33),
+  [!34](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/34),
+  [!37](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/37),
+  [!38](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/38),
+  [!41](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/41),
+  [!42](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/42),
+  [!65](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/65)).
+- **Phase 3 — Transports and routing.** Framework-managed local execution and
+  asyncssh connections, borrowed SSH tunnels, inherited routes, and via-device
+  lifecycles. Routing and authentication provenance identify where a command ran;
+  `utils.exec` returns command outcomes as data while cancellation propagates.
+  Remote-device and tunneling examples exercise the authoring surface
+  ([!12](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/12),
+  [!14](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/14),
+  [!20](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/20),
+  [!22](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/22),
+  [!28](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/28),
+  [!36](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/36),
+  [!39](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/39),
+  [!44](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/44),
+  [!64](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/64)).
+- **Phase 4 — Integration hooks and run abort.** Root `before_each` and `after_each`
+  dispatch around every executed node through narrow contexts. Hook failure preserves
+  the pair, propagates `ExternalIntegrationFailure` class-intact, and hard-closes
+  in-flight transports across the tree. Tests cover all main/audit/halt race orderings
+  and a transport command stopped during abort
+  ([!46](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/46),
+  [!48](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/48),
+  [!49](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/49),
+  [!63](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/63),
+  [!69](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/69)).
+- **Phase 5 — Rack validation and static analysis.** A 70-DUT mock rack checks
+  concurrency, isolation, and abort behavior. The `litmus-check` registry and CLI add
+  gated-PASS, pure-composition, immutable-self, constructor-hook, and interface
+  annotation rules as defense in depth over the runtime contracts. The pi-hole
+  dogfood suite carries the end-to-end authoring example
+  ([!55](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/55),
+  [!56](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/56),
+  [!57](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/57),
+  [!58](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/58),
+  [!59](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/59),
+  [!66](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/66),
+  [!71](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/71),
+  [!72](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/72)).
+- Durable per-run `timeline.log` and versioned `timeline.jsonl`, per-node log links
+  in the summary tree, and atomic root `result.json` publication for Pass, Fail,
+  and Aborted. The final root timeline entry points to the published result
+  ([!77](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/77),
+  [!79](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/79),
+  [!86](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/86)).
+- SIGINT/SIGTERM produce an operator-named Aborted result and hard-close transports;
+  a second signal during finalization exits immediately. Combined stdout/stderr
+  capture has a per-run byte budget and records truncation as evidence
+  ([!84](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/84),
+  [!85](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/85)).
+- Verification gates: repeated full-suite soak, ratcheting branch coverage floors,
+  locked-dependency audit and refresh tooling, and nightly soak/rack reporting.
+  Transport fault injection, shared transport contracts, the abort-phase matrix,
+  and generated composition properties strengthen the self-tests. The nightly
+  reporting implementation does not itself establish fourteen green nights
+  ([!45](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/45),
+  [!74](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/74),
+  [!75](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/75),
+  [!83](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/83),
+  [!87](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/87),
+  [!88](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/88),
+  [!93](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/93),
+  [!102](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/102)).
+- Additional language-server rule migrations: `litmus/raise-test-failure`,
+  `litmus/no-verdict-in-cleanup`, and `litmus/method-reference`; runnable network
+  resolution, hardware lifecycle, and computed run-data examples
+  ([!90](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/90),
+  [!91](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/91)).
+- GPL-2.0-only license and notice
+  ([!78](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/78)).
+- Release MR checklist with validation evidence, unresolved distribution prerequisites,
+  changelog cut, and the handoff to Zavala for merge and release review (issue #101).
 - Docs site: `make docs` builds `docs/` with mkdocs and an API reference from
   the public surface's docstrings. The gate fails on a broken cross-reference.
   A version tag publishes the site to GitLab Pages
   (`https://tyler-meador.gitlab.io/litmus_test/`); the Floor Technician guide
-  there is the URL that belongs on a station label (issue #82).
+  there is the URL that belongs on a station label (issue #82,
+  [!108](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/108)).
 - `litmus new SuiteName`: writes a gated-PASS suite and a matching self-test stub
   (`SuiteName.py` / `test_suite_name.py` derived from the class name). The generated
   suite has an annotated constructor, `configure` returning a narrowed ctx, a pure
@@ -76,8 +188,11 @@ kept so that it exists before the promise does.
   survey on an inherited via hop read the device (issue #115).
 - The five locally executable examples run through `litmus run`: their constructor
   parameters carry the lesson's values as defaults, and the standalone wrapper classes
-  and `__main__` blocks are gone (issue #73). The SSH-backed examples keep theirs
-  until their targets move into `configure()`.
+  and `__main__` blocks are gone (issue #73). The SSH-backed examples initially kept
+  theirs; those targets now resolve from `utils.env` in `configure()`, and the
+  SSH examples also use `litmus run`. Missing target configuration produces a
+  modeled Fail naming the variable to set (issue #113,
+  [!105](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/105)).
 - A `[]` read of a `utils.ctx` key that `configure()` did not provide raises
   `ContractViolation` ("context insufficient") naming the test and the key, instead of a
   bare `KeyError`; `get`, `in`, and `setdefault` are unchanged. `TestUtils(ctx=...)` now
@@ -86,7 +201,22 @@ kept so that it exists before the promise does.
   `self.case` and `self.group` removed outright, and `litmus-check` gained
   `litmus/retired-names` to point at the replacement (issue #110).
 - Per-node time budgets: `fail_after` and `abort_after` on any node, subtree-bound and
-  tighten-only (issues #59, #60).
+  tighten-only (issues #59, #60,
+  [!81](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/81)).
+- `configure()` accepts a `Mapping[str, Any]` return annotation so suite-local
+  `TypedDict` overrides type-check; runtime context remains a mutable dict
+  ([!68](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/68)).
+- Author-facing framework errors name the violated contract and the concrete fix,
+  including missing verdicts, malformed composition, and finalization timeouts
+  (issue #80, [!103](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/103)).
+
+### Security
+
+- Optional `env_allow` / `env_deny` filtering of the published environment snapshot;
+  SSH credential containment tests pin that password and private-key values do not
+  escape into logs, results, or other evidence
+  ([!51](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/51),
+  [!82](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/82)).
 
 ### Removed
 
