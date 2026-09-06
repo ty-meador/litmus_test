@@ -516,6 +516,7 @@ class TestExamples:
 
         assert status == EXIT_FAIL
         assert "TestFailure" in err
+        assert "did not reach a testable state" in err
         assert missing in err
         assert "cannot be constructed from its name alone" not in err
 

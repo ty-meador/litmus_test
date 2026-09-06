@@ -296,6 +296,7 @@ class TestRemoteDeviceSshExample:
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
+        assert "did not reach a testable state" in result.failure.fail_message
         assert "SSH_HOST" in result.failure.fail_message
 
     async def test_garbage_port_from_env_fails_in_configure(self, tmp_path: Path) -> None:
@@ -310,6 +311,7 @@ class TestRemoteDeviceSshExample:
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
+        assert "did not reach a testable state" in result.failure.fail_message
         assert "SSH_PORT" in result.failure.fail_message
 
 
@@ -667,6 +669,7 @@ class TestNetworkedDeviceExample:
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
+        assert "did not reach a testable state" in result.failure.fail_message
         assert "DUT_MAC" in result.failure.fail_message
 
     async def test_half_set_gateway_env_fails_naming_the_missing_var(self, tmp_path: Path) -> None:
@@ -680,6 +683,7 @@ class TestNetworkedDeviceExample:
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
+        assert "did not reach a testable state" in result.failure.fail_message
         assert "GATEWAY_USER" in result.failure.fail_message
 
     async def test_garbage_gateway_port_from_env_fails_in_configure(self, tmp_path: Path) -> None:
@@ -695,6 +699,7 @@ class TestNetworkedDeviceExample:
 
         assert result.state is State.FAIL
         assert isinstance(result.failure, TestFailure)
+        assert "did not reach a testable state" in result.failure.fail_message
         assert "GATEWAY_PORT" in result.failure.fail_message
 
     async def test_missing_mac_in_configure_is_fail_not_a_bug(

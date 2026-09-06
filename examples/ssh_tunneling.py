@@ -30,7 +30,7 @@ def _env_text(utils: TestUtils, name: str) -> str | None:
 def _require_env(utils: TestUtils, name: str) -> str:
     value = _env_text(utils, name)
     if value is None:
-        raise TestFailure(f"{name} env var not set")
+        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
     return value
 
 
@@ -41,9 +41,15 @@ def _env_port(utils: TestUtils, name: str) -> int:
     try:
         port = int(raw)
     except ValueError:
-        raise TestFailure(f"{name} env var is not a valid port") from None
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        ) from None
     if not 1 <= port <= 65535:
-        raise TestFailure(f"{name} env var is not a valid port")
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        )
     return port
 
 
