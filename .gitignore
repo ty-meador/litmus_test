@@ -10,6 +10,7 @@ build/
 
 # Tool caches
 .pytest_cache/
+.hypothesis/
 .ruff_cache/
 .coverage/
 .audit/
