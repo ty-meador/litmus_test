@@ -154,7 +154,10 @@ async def test_sync_hook_is_rejected_before_lifecycle_execution() -> None:
     assert result.state is State.ABORTED
     assert isinstance(result.failure, ExternalIntegrationFailure)
     assert isinstance(result.failure.cause, TypeError)
-    assert str(result.failure.cause) == "before_each hook must return an awaitable"
+    assert str(result.failure.cause) == (
+        "before_each hook must return an awaitable; "
+        "define it with async def so the call returns a coroutine"
+    )
 
 
 async def test_lambda_may_return_an_async_integration_call() -> None:
@@ -201,6 +204,92 @@ async def test_after_each_balances_every_before_each_that_throws(failing_node: s
     assert result.state is State.ABORTED
     assert isinstance(result.failure, ExternalIntegrationFailure)
     assert result.failure.hook == "before_each"
+    assert result.failure.cause is cause
+    assert set(finished) == set(started)
+    assert len(finished) == len(started)
+
+
+class ParallelHookedSuite(LitmusTest):
+    """The same visible tree under a parallel parent, where a halt races its siblings."""
+
+    def build_suite(self) -> LitmusTest:
+        return self.parallel(
+            "claims",
+            [
+                self.test("identity", self._identity),
+                self.test("health", self._health),
+            ],
+        )
+
+    async def _identity(self, utils: TestUtils) -> Verdict:
+        return PASS
+
+    async def _health(self, utils: TestUtils) -> Verdict:
+        return PASS
+
+
+@pytest.mark.parametrize(
+    "failing_node",
+    ["rack", "rack/claims", "rack/claims/identity", "rack/claims/health"],
+)
+async def test_parallel_after_each_balances_every_before_each_that_throws(
+    failing_node: str,
+) -> None:
+    """A sibling's halt must not strip the throwing node of its own finished row."""
+    started: list[str] = []
+    finished: list[str] = []
+    cause = RuntimeError(f"shop-floor start rejected {failing_node}")
+
+    async def before_each(ctx: BeforeEachContext) -> None:
+        started.append(ctx.bread_crumbs)
+        if ctx.bread_crumbs == failing_node:
+            raise cause
+
+    async def after_each(ctx: AfterEachContext) -> None:
+        finished.append(ctx.bread_crumbs)
+
+    result = await ParallelHookedSuite(name="rack").run(
+        before_each=before_each,
+        after_each=after_each,
+    )
+
+    assert result.state is State.ABORTED
+    assert isinstance(result.failure, ExternalIntegrationFailure)
+    assert result.failure.hook == "before_each"
+    assert result.failure.cause is cause
+    assert failing_node in finished
+    assert set(finished) == set(started)
+    assert len(finished) == len(started)
+
+
+@pytest.mark.parametrize(
+    "failing_node",
+    ["rack/claims/identity", "rack/claims/health"],
+)
+async def test_parallel_after_each_that_throws_still_pairs_every_started_node(
+    failing_node: str,
+) -> None:
+    """The completion hook's own failure is still a completion for that node."""
+    started: list[str] = []
+    finished: list[str] = []
+    cause = RuntimeError(f"shop-floor finish rejected {failing_node}")
+
+    async def before_each(ctx: BeforeEachContext) -> None:
+        started.append(ctx.bread_crumbs)
+
+    async def after_each(ctx: AfterEachContext) -> None:
+        finished.append(ctx.bread_crumbs)
+        if ctx.bread_crumbs == failing_node:
+            raise cause
+
+    result = await ParallelHookedSuite(name="rack").run(
+        before_each=before_each,
+        after_each=after_each,
+    )
+
+    assert result.state is State.ABORTED
+    assert isinstance(result.failure, ExternalIntegrationFailure)
+    assert result.failure.hook == "after_each"
     assert result.failure.cause is cause
     assert set(finished) == set(started)
     assert len(finished) == len(started)

@@ -116,10 +116,13 @@ class SshConnector:
         """Reject a non-SSH or dead via; open an `SshInterface` borrowing the hop."""
         via = request.via
         if via is not None and not isinstance(via, SshInterface):
-            msg = "SshConnector via must be an SshInterface"
+            msg = "SshConnector via must be an SshInterface; pass an SshInterface hop"
             raise TypeError(msg)
         if via is not None and not via.connected:
-            msg = "routed via hop must be live at open time; the router never brings hops up"
+            msg = (
+                "routed via hop must be live at open time; "
+                "bring the hop up before passing it as via"
+            )
             raise ConnectionError(msg)
         ssh = SshInterface(
             host=request.host,
@@ -347,7 +350,7 @@ class ExecRouting:
                 self._provenance = "isolated"
             return self._active_shell()
         if username is None:
-            msg = "use_shell connection form requires username"
+            msg = "use_shell connection form requires username; pass username= together with host="
             raise TypeError(msg)
         shell = await self.get_shell(
             host=host,
@@ -449,8 +452,8 @@ class ExecRouting:
     @staticmethod
     def _require_connection_pair(host: str | None, username: str | None) -> None:
         if host is not None and username is None:
-            msg = "use_shell connection form requires username"
+            msg = "use_shell connection form requires username; pass username= together with host="
             raise TypeError(msg)
         if host is None and username is not None:
-            msg = "use_shell username requires host"
+            msg = "use_shell username requires host; pass host= together with username="
             raise TypeError(msg)

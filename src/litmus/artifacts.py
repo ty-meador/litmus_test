@@ -36,9 +36,12 @@ class Artifact:
         for label, value in (("artifact name", self.name), ("artifact type", self.type)):
             if _VALID_IDENTITY.fullmatch(value) is None:
                 detail = "must use only letters, numbers, dashes, and underscores"
-                raise ValueError(f"{label} {value!r} {detail}")
+                raise ValueError(f"{label} {value!r} {detail}; rename it to match that alphabet")
         if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
-            raise ValueError("artifact timestamp must be timezone-aware")
+            raise ValueError(
+                "artifact timestamp must be timezone-aware; "
+                "pass a datetime with tzinfo, not a naive datetime"
+            )
         object.__setattr__(self, "timestamp", self.timestamp.astimezone(UTC))
 
     def to_json(self) -> dict[str, object]:
