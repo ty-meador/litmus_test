@@ -175,8 +175,7 @@ class TestPingAndReacquire:
 
         monkeypatch.setattr(LocalExec, "run", ping_run)
         resolver = _resolver(_ScriptedExec({"cat /proc/net/arp": _ok(_ARP_TABLE)}))
-        utils = TestUtils()
-        utils.ctx["ip"] = "10.0.0.50"
+        utils = TestUtils(ctx={"ip": "10.0.0.50"})
         assert await resolver.ping(utils) is PASS
 
     async def test_ping_duplicate_replies_are_success(
@@ -189,8 +188,7 @@ class TestPingAndReacquire:
 
         monkeypatch.setattr(LocalExec, "run", ping_run)
         resolver = _resolver(_ScriptedExec({"cat /proc/net/arp": _ok(_ARP_TABLE)}))
-        utils = TestUtils()
-        utils.ctx["ip"] = "10.0.0.50"
+        utils = TestUtils(ctx={"ip": "10.0.0.50"})
         assert await resolver.ping(utils) is PASS
 
     async def test_ping_no_response_is_test_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -200,8 +198,7 @@ class TestPingAndReacquire:
 
         monkeypatch.setattr(LocalExec, "run", ping_run)
         resolver = _resolver(_ScriptedExec({"cat /proc/net/arp": _ok(_ARP_TABLE)}))
-        utils = TestUtils()
-        utils.ctx["ip"] = "10.0.0.50"
+        utils = TestUtils(ctx={"ip": "10.0.0.50"})
         with pytest.raises(TestFailure, match="no ping response"):
             await resolver.ping(utils)
 
@@ -220,8 +217,7 @@ class TestPingAndReacquire:
             exec_fn=_ScriptedExec({"cat /proc/net/arp": _ok(_ARP_TABLE)}),
             cache_key="local",
         )
-        utils = TestUtils()
-        utils.ctx["ip"] = "10.0.0.50"
+        utils = TestUtils(ctx={"ip": "10.0.0.50"})
         with pytest.raises(TestFailure, match="packet loss"):
             await resolver.ping(utils)
 
@@ -235,8 +231,7 @@ class TestPingAndReacquire:
 
         monkeypatch.setattr(LocalExec, "run", ping_run)
         resolver = _resolver(_ScriptedExec({"cat /proc/net/arp": _ok(_ARP_TABLE)}))
-        utils = TestUtils()
-        utils.ctx["ip"] = "10.0.0.50"
+        utils = TestUtils(ctx={"ip": "10.0.0.50"})
         with pytest.raises(TestFailure, match="expected results line"):
             await resolver.ping(utils)
 
@@ -245,7 +240,7 @@ class TestPingAndReacquire:
         with pytest.raises(ArpResolutionFailure, match="resolve"):
             await resolver.ping(TestUtils())
 
-    async def test_reacquire_mutates_ctx_from_a_forced_refresh(
+    async def test_reacquire_returns_the_new_ip_and_leaves_ctx_alone(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -264,13 +259,27 @@ class TestPingAndReacquire:
             return await exec_fn(command)
 
         monkeypatch.setattr(LocalExec, "run", child_run)
-        utils = TestUtils()
-        utils.ctx["ip"] = "10.0.0.50"
+        utils = TestUtils(ctx={"ip": "10.0.0.50"})
         ip = await resolver.reacquire(utils)
 
         assert ip == "10.0.0.99"
-        assert utils.ctx["ip"] == "10.0.0.99"
+        # Ctx is read-only after configure (issue #118): the address that moved lives
+        # in the resolver's table, and ping dials it from there.
+        assert utils.ctx["ip"] == "10.0.0.50"
         assert exec_fn.commands == ["cat /proc/net/arp", "cat /proc/net/arp"]
+
+        pinged: list[str] = []
+
+        async def ping_run(self: LocalExec, command: str) -> ExecResult:
+            del self
+            pinged.append(command)
+            return _ok(_PING_OK)
+
+        monkeypatch.setattr(LocalExec, "run", ping_run)
+        # A fresh node whose ctx still says 10.0.0.50: the table wins.
+        later = TestUtils(ctx={"ip": "10.0.0.50"})
+        assert await resolver.ping(later) is PASS
+        assert pinged == ["ping -c 1 10.0.0.99"]
 
     async def test_reacquire_missing_mac_is_arp_resolution_failure(
         self,
@@ -288,8 +297,7 @@ class TestPingAndReacquire:
             return await exec_fn(command)
 
         monkeypatch.setattr(LocalExec, "run", child_run)
-        utils = TestUtils()
-        utils.ctx["ip"] = "10.0.0.50"
+        utils = TestUtils(ctx={"ip": "10.0.0.50"})
         with pytest.raises(ArpResolutionFailure, match="reacquire failed"):
             await resolver.reacquire(utils)
 

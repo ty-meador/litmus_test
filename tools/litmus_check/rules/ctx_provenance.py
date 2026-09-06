@@ -1,27 +1,31 @@
-"""``litmus/ctx-provenance`` — every ``utils.ctx["k"]`` read is provided by ``configure()``.
+"""``litmus/ctx-provenance`` — every ``utils.ctx["k"]`` read is provided by ``configure()``,
+and ctx is never written.
 
 A test method that reads ``utils.ctx["k"]`` relies on ``configure()`` having returned
-``k``. Nothing else may be relied on: a sibling leaf's write is an accident of
-``sequence`` order and a race under ``parallel``, and a placeholder seeded so the key
-exists fabricates evidence. The rule is strict on purpose (issue #112): a read is
-provided by ``configure()`` or by a write earlier in the same method, and by nothing
-else in the class.
+``k``. Nothing else may be relied on: ctx is what ``configure()`` provided and it is
+read-only from the moment configure returns (issue #118). A reading belongs on the
+verdict, ``PASS({...})`` or ``TestFailure(..., evidence=...)``; a value cleanup must
+restore is captured in ``configure()``. A placeholder seeded so a key exists fabricates
+evidence (issue #112).
 
-Flagged: a subscript **read** ``utils.ctx["k"]`` with a string-literal key — directly or
-through a local alias such as ``ctx = cast(_Ctx, utils.ctx)`` — inside ``configure``,
-``cleanup``, a test method, or a survey/audit hook of a statically known ``LitmusTest``,
-when ``k`` is neither a key of the dict literal ``configure()`` returns (or a field of
-the ``TypedDict`` it is annotated to return) nor assigned to ``utils.ctx["k"]`` /
-``utils.ctx.update(k=...)`` earlier in the same method body. Inside ``configure`` only
-same-method writes count: it is the phase that fills the context. An augmented
-assignment (``utils.ctx["k"] += 1``) is a read.
+Flagged, as a read: a subscript **read** ``utils.ctx["k"]`` with a string-literal key —
+directly or through a local alias such as ``ctx = cast(_Ctx, utils.ctx)`` — inside
+``configure``, ``cleanup``, a test method, or a survey/audit hook of a statically known
+``LitmusTest``, when ``k`` is not a key of the dict literal ``configure()`` returns (or a
+field of the ``TypedDict`` it is annotated to return).
 
-Not flagged: ``utils.ctx.get("k")``, ``"k" in utils.ctx``, ``setdefault``, a computed key,
-and any class whose ``configure()`` return cannot be read statically — a ``**spread``,
-a computed key, a call, a name bound outside the method. The rule is silent for such a
-class rather than guess; tier 3 is skippable by design and tier 1 is the guard.
+Flagged, as a write: any assignment to ``utils.ctx["k"]``, an augmented assignment, ``|=``,
+or a call to ``update``, ``setdefault``, ``pop``, ``popitem``, or ``clear`` on ctx, in any of
+those methods including ``configure`` itself, which returns its context rather than
+writing it.
+
+Not flagged: ``utils.ctx.get("k")``, ``"k" in utils.ctx``, a computed key, and — for reads
+only — any class whose ``configure()`` return cannot be read statically: a ``**spread``, a
+computed key, a call, a name bound outside the method. The rule stays silent on such a
+class's reads rather than guess; tier 3 is skippable by design and tier 1 is the guard.
 
 Tier-1 counterpart: a ``[]`` read of a missing key raises ``ContractViolation`` naming
+the test and the key; a write after ``configure()`` raises ``ContractViolation`` naming
 the test and the key; ``get`` and ``in`` never do.
 """
 
@@ -39,7 +43,7 @@ _CONFIGURE = "configure"
 _CLEANUP = "cleanup"
 _NON_READERS = frozenset({"__init__", "build_suite"})
 _REGISTRARS = frozenset({"use_survey", "use_audit"})
-_MUTATORS = frozenset({"update", "setdefault"})
+_MUTATORS = frozenset({"update", "setdefault", "pop", "popitem", "clear"})
 _VERDICT = "Verdict"
 _TYPED_DICT = "TypedDict"
 _BASE_CLASS = "LitmusTest"
@@ -50,50 +54,48 @@ _WILDCARD = "*"
 
 
 class CtxProvenanceRule(Rule):
-    """Flag a ``utils.ctx["k"]`` read that ``configure()`` does not provide."""
+    """Flag a ``utils.ctx["k"]`` read that ``configure()`` does not provide, and any write."""
 
     code = "litmus/ctx-provenance"
-    summary = (
-        "every utils.ctx[key] read is provided by configure() or written earlier in the method"
-    )
+    summary = "every utils.ctx[key] read is provided by configure(); ctx is never written"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
         for klass in module.litmus_classes():
             provided = _provided_keys(module, klass)
-            if provided is None:
-                continue
-            readers = _reader_methods(module, klass)
-            writers = _sibling_writers(readers)
-            for method in readers:
-                yield from self._check_method(module, method, provided, writers)
+            for method in _reader_methods(module, klass):
+                yield from self._check_method(module, method, provided)
 
     def _check_method(
         self,
         module: SuiteModule,
         method: FunctionDef,
-        provided: frozenset[str],
-        writers: dict[str, str],
+        provided: frozenset[str] | None,
     ) -> Iterator[Violation]:
         utils = _utils_parameter(method)
         if utils is None:
             return
-        available: set[str] = set() if method.name == _CONFIGURE else set(provided)
+        available: frozenset[str] = frozenset()
+        if method.name != _CONFIGURE and provided is not None:
+            available = provided
         for event in _events(method, utils):
             if event.write:
-                available.add(event.key)
+                yield module.violation(
+                    event.node,
+                    self.code,
+                    f"ctx is read-only after configure(): {event.key} is written here; "
+                    "return it from configure(), or carry it as evidence on PASS",
+                )
+                continue
+            if provided is None and method.name != _CONFIGURE:
                 continue
             if event.key in available or _WILDCARD in available:
                 continue
-            message = (
+            yield module.violation(
+                event.node,
+                self.code,
                 f'"{event.key}" is read here but configure() does not provide it; '
-                "return it from configure(), or read it with .get() if it is optional"
+                "return it from configure(), or read it with .get() if it is optional",
             )
-            writer = writers.get(event.key)
-            if writer is not None and writer != method.name:
-                message += (
-                    f" ({writer}() writes it, but a method may not rely on a sibling's write)"
-                )
-            yield module.violation(event.node, self.code, message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,10 +109,12 @@ class _Event:
 
 
 def _events(method: FunctionDef, utils: str) -> list[_Event]:
-    """Every literal-key read and write of ctx in ``method``, in source order.
+    """Every literal-key read and every write of ctx in ``method``, in source order.
 
-    A write is positioned at the end of its statement so that reads inside the same
-    statement (``ctx["n"] = ctx["n"] + 1``) precede it.
+    A read is keyed by its literal. A write is keyed by the text the violation names:
+    the literal key for a subscript, ``setdefault``, or ``pop`` with one, otherwise the
+    mutator call (``update(...)``). An augmented assignment is reported once, as the
+    write.
     """
     aliases = _ctx_aliases(method, utils)
     events: list[_Event] = []
@@ -123,8 +127,9 @@ def _events(method: FunctionDef, utils: str) -> list[_Event]:
         elif isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
             events.extend(_assignment_events(node, utils, aliases))
         elif isinstance(node, ast.Call):
-            for key in _mutator_keys(node, utils, aliases):
-                events.append(_Event(_end(node), True, key, node))
+            label = _mutator_label(node, utils, aliases)
+            if label is not None:
+                events.append(_Event(_start(node), True, label, node))
     events.sort(key=lambda event: (event.position, event.write))
     return events
 
@@ -134,22 +139,25 @@ def _assignment_events(
 ) -> Iterator[_Event]:
     if node.value is None:
         return
-    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    if isinstance(node, ast.AugAssign):
+        targets: list[ast.expr] = [node.target]
+        if _is_ctx(node.target, utils, aliases):
+            # ``utils.ctx |= {...}`` writes the whole mapping.
+            yield _Event(_start(node), True, "ctx |= ...", node)
+            return
+    else:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     for target in targets:
         if not isinstance(target, ast.Subscript) or not _is_ctx(target.value, utils, aliases):
             continue
         key = _literal_key(target.slice)
-        if key is None:
-            continue
-        if isinstance(node, ast.AugAssign):
-            yield _Event(_start(target), False, key, target)
-        yield _Event(_end(node), True, key, node)
+        yield _Event(_start(node), True, "a computed key" if key is None else repr(key), node)
 
 
 def _mutator_keys(call: ast.Call, utils: str, aliases: frozenset[str]) -> Iterator[str]:
-    """Keys written by ``ctx.update(...)`` or ``ctx.setdefault(...)``."""
+    """Keys written by ``update(...)`` or ``setdefault(...)`` on a local dict configure builds."""
     func = call.func
-    if not isinstance(func, ast.Attribute) or func.attr not in _MUTATORS:
+    if not isinstance(func, ast.Attribute) or func.attr not in ("update", "setdefault"):
         return
     if not _is_ctx(func.value, utils, aliases):
         return
@@ -170,6 +178,20 @@ def _mutator_keys(call: ast.Call, utils: str, aliases: frozenset[str]) -> Iterat
         yield _WILDCARD
         return
     yield from literal
+
+
+def _mutator_label(call: ast.Call, utils: str, aliases: frozenset[str]) -> str | None:
+    """What a mutating call on ctx wrote, for the violation message; ``None`` otherwise."""
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.attr not in _MUTATORS:
+        return None
+    if not _is_ctx(func.value, utils, aliases):
+        return None
+    if func.attr in ("setdefault", "pop") and call.args:
+        key = _literal_key(call.args[0])
+        if key is not None:
+            return repr(key)
+    return f"{func.attr}(...)"
 
 
 def _ctx_aliases(method: FunctionDef, utils: str) -> frozenset[str]:
@@ -216,10 +238,6 @@ def _literal_key(node: ast.expr) -> str | None:
 
 def _start(node: ast.expr | ast.stmt) -> tuple[int, int]:
     return (node.lineno, node.col_offset)
-
-
-def _end(node: ast.expr | ast.stmt) -> tuple[int, int]:
-    return (node.end_lineno or node.lineno, node.end_col_offset or node.col_offset)
 
 
 # --- which methods read ctx ---------------------------------------------------------
@@ -278,21 +296,6 @@ def _referenced_method_names(
     return frozenset(names)
 
 
-def _sibling_writers(readers: list[FunctionDef]) -> dict[str, str]:
-    """First method (other than ``configure``) that writes each key, for the message."""
-    writers: dict[str, str] = {}
-    for method in readers:
-        if method.name == _CONFIGURE:
-            continue
-        utils = _utils_parameter(method)
-        if utils is None:
-            continue
-        for event in _events(method, utils):
-            if event.write:
-                writers.setdefault(event.key, method.name)
-    return writers
-
-
 def _utils_parameter(function: FunctionDef) -> str | None:
     positional = function.args.posonlyargs + function.args.args
     if len(positional) < 2:
@@ -308,8 +311,11 @@ def _first_parameter(function: FunctionDef) -> str | None:
 
 
 def _is_verdict(annotation: ast.expr | None) -> bool:
+    if isinstance(annotation, ast.Subscript):
+        annotation = annotation.value
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
-        return annotation.value.rsplit(".", maxsplit=1)[-1] == _VERDICT
+        bare = annotation.value.split("[", 1)[0]
+        return bare.rsplit(".", maxsplit=1)[-1] == _VERDICT
     return _simple_name(annotation) == _VERDICT
 
 
