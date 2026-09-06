@@ -367,7 +367,7 @@ class MyDevice(LitmusTest):
     # pass or fail, cleanup is GUARANTEED to run at the end of the lifecycle.
     # Use it to close any opened connections, put the device into a neutral state, etc.
     async def cleanup(self, utils: TestUtils) -> None:
-        pass  # ssh auto-disconnected by framework
+        pass  # ssh auto-disconnected by framework, after the post-cleanup survey
 
     def build_suite(self) -> LitmusTest:
         return self.sequence(
