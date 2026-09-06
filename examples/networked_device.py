@@ -6,16 +6,16 @@ The DUT code is identical in both placements: `get_arp_resolver` in
 bug. Hardware versus infrastructure stays the triager's call.
 
 The via hop is a `Gateway` whose `use_shell` the framework owns. Pass it as
-`via=` at construction; the DUT never mentions SSH.
+`via=` at construction; the DUT never mentions SSH. Under `litmus run`,
+`configure()` reads `DUT_MAC` from `utils.env` and, when `GATEWAY_HOST` and
+`GATEWAY_USER` are set together, opens that hop itself so ARP resolves through
+it. Half-set gateway variables Fail naming the missing one.
 
-A standalone run needs `DUT_MAC` on the local ARP table. Add `GATEWAY_HOST` and
-`GATEWAY_USER` to resolve through a hop instead.
+Run it: `DUT_MAC=aa:bb:cc:dd:ee:ff litmus run examples/networked_device.py::DutDevice`.
 """
 
 from __future__ import annotations
 
-import asyncio
-import os
 from typing import Any, cast
 
 from litmus import (
@@ -29,6 +29,40 @@ from litmus import (
 )
 
 
+def _env_text(utils: TestUtils, name: str) -> str | None:
+    value = utils.env.get(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _require_env(utils: TestUtils, name: str) -> str:
+    value = _env_text(utils, name)
+    if value is None:
+        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
+    return value
+
+
+def _env_port(utils: TestUtils, name: str) -> int:
+    raw = _env_text(utils, name)
+    if raw is None:
+        return 22
+    try:
+        port = int(raw)
+    except ValueError:
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        ) from None
+    if not 1 <= port <= 65535:
+        raise TestFailure(
+            f"did not reach a testable state: {name} env var is not a valid port; "
+            f"set {name} to an integer 1-65535"
+        )
+    return port
+
+
 class Gateway(LitmusTest):
     """Class-owned SSH hop that a DUT can borrow as `via`."""
 
@@ -36,20 +70,20 @@ class Gateway(LitmusTest):
         self,
         *,
         name: str,
-        host: str,
-        username: str,
+        host: str | None = None,
+        username: str | None = None,
         password: str | None = None,
-        port: int = 22,
+        port: int | None = None,
         skip_host_verification: bool = False,
     ) -> None:
-        """Capture the hop this gateway will own for the rest of the run.
+        """Capture the hop this gateway will own, or leave it for `configure()` to resolve.
 
         Args:
             name: Node name used by logs, artifacts, and failures.
-            host: SSH peer hostname or address.
-            username: Login name on that peer.
-            password: Password auth, when used.
-            port: SSH port. Defaults to 22.
+            host: SSH peer hostname or address. `None` reads `GATEWAY_HOST`.
+            username: Login name on that peer. `None` reads `GATEWAY_USER`.
+            password: Password auth, when used. `None` reads `GATEWAY_PASSWORD`.
+            port: SSH port. `None` reads `GATEWAY_PORT`, then 22.
             skip_host_verification: Lab-only `known_hosts=None`. Default verifies.
         """
         super().__init__(name=name)
@@ -61,17 +95,23 @@ class Gateway(LitmusTest):
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Open the hop. A refused dial is Fail, not a contract banner."""
+        host = self._host or _require_env(utils, "GATEWAY_HOST")
+        username = self._username or _require_env(utils, "GATEWAY_USER")
+        password = (
+            self._password if self._password is not None else _env_text(utils, "GATEWAY_PASSWORD")
+        )
+        port = self._port if self._port is not None else _env_port(utils, "GATEWAY_PORT")
         try:
             await utils.use_shell(
-                host=self._host,
-                username=self._username,
-                port=self._port,
-                password=self._password,
+                host=host,
+                username=username,
+                port=port,
+                password=password,
                 skip_host_verification=self._skip_host_verification,
             )
         except Exception as error:
             raise TestFailure(f"SSH connect failed: {error}") from error
-        utils.logger.info("gateway hop open: %s", self._host)
+        utils.logger.info("gateway hop open: %s", host)
         return {}
 
     def build_suite(self) -> LitmusTest:
@@ -88,33 +128,58 @@ class Gateway(LitmusTest):
 class DutDevice(LitmusTest):
     """Resolve a MAC in `configure` and claim reachability plus firmware.
 
-    The same class runs locally or behind a `Gateway` passed as `via`. `configure`
-    does not mention SSH either way.
+    The same class runs locally or behind a `Gateway` passed as `via`. An
+    explicit via still owns the hop; the DUT does not mention SSH. When no via
+    was passed, `GATEWAY_HOST` / `GATEWAY_USER` in the run environment open the
+    hop here so ARP resolves through it.
     """
 
     def __init__(
         self,
         *,
         name: str,
-        mac: str,
+        mac: str | None = None,
         firmware_version: str = "2.4.1",
         via: LitmusTest | None = None,
     ) -> None:
-        """Capture the MAC this device is found by.
+        """Capture the MAC this device is found by, or leave it for `configure()`.
 
         Args:
             name: Node name used by logs, artifacts, and failures.
             mac: Device MAC in any usual form (colons, dashes, or bare hex).
+                `None` reads `DUT_MAC`.
             firmware_version: Substring the firmware claim requires in stdout.
             via: Optional gateway. The framework brings it up and routes exec.
         """
         super().__init__(name=name, via=via)
         self._mac = mac
         self._firmware_version = firmware_version
+        self._via_from_constructor = via
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Resolve the MAC and return the IP plus the resolver into ctx."""
-        arp = utils.get_arp_resolver(mac=self._mac)
+        mac = self._mac or _require_env(utils, "DUT_MAC")
+        if self._via_from_constructor is None:
+            gateway_host = _env_text(utils, "GATEWAY_HOST")
+            gateway_user = _env_text(utils, "GATEWAY_USER")
+            if gateway_host is not None or gateway_user is not None:
+                if gateway_host is None:
+                    raise TestFailure(
+                        "did not reach a testable state: GATEWAY_HOST env var not set; "
+                        "set GATEWAY_HOST"
+                    )
+                if gateway_user is None:
+                    raise TestFailure(
+                        "did not reach a testable state: GATEWAY_USER env var not set; "
+                        "set GATEWAY_USER"
+                    )
+                await utils.use_shell(
+                    host=gateway_host,
+                    username=gateway_user,
+                    password=_env_text(utils, "GATEWAY_PASSWORD"),
+                    port=_env_port(utils, "GATEWAY_PORT"),
+                )
+        arp = utils.get_arp_resolver(mac=mac)
         try:
             resolved = await arp.resolve()
         except ArpResolutionFailure as error:
@@ -151,37 +216,3 @@ class DutDevice(LitmusTest):
             self._firmware_version,
             version if version else "(empty)",
         )
-
-
-class NetworkedDeviceExample:
-    """Run the local or via-routed ARP suite as a standalone program."""
-
-    @staticmethod
-    async def run() -> None:
-        """Execute through the framework-owned lifecycle.
-
-        Requires ``DUT_MAC``. Optional ``GATEWAY_HOST`` and ``GATEWAY_USER``
-        (with optional ``GATEWAY_PASSWORD`` / ``GATEWAY_PORT``) resolve through
-        a hop instead of the test host's ARP table.
-        """
-        mac = os.environ.get("DUT_MAC")
-        if mac is None:
-            raise LookupError("DUT_MAC must be set to run this example")
-        gateway_host = os.environ.get("GATEWAY_HOST")
-        gateway_user = os.environ.get("GATEWAY_USER")
-        via: LitmusTest | None = None
-        if gateway_host is not None or gateway_user is not None:
-            if gateway_host is None or gateway_user is None:
-                raise LookupError("GATEWAY_HOST and GATEWAY_USER must both be set")
-            via = Gateway(
-                name="gateway",
-                host=gateway_host,
-                username=gateway_user,
-                password=os.environ.get("GATEWAY_PASSWORD"),
-                port=int(os.environ.get("GATEWAY_PORT", "22")),
-            )
-        await DutDevice(name="networked device", mac=mac, via=via).run()
-
-
-if __name__ == "__main__":
-    asyncio.run(NetworkedDeviceExample.run())
