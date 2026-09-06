@@ -171,6 +171,18 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Changed
 
+- **Evidence travels with the verdict (issue #118).** `PASS` is callable: `return PASS({...})`
+  carries a leaf's readings, `TestFailure(..., evidence=...)` carries them on the fail
+  path, and `@evidence(...)` declares what a pass must carry; a pass without its declared
+  evidence is a `ContractViolation`, never a green run. `utils.ctx` is read-only once
+  `configure()` returns, so inputs come in through configure and readings go out with
+  the verdict. A leaf's `run_data` is the ctx view plus its evidence; every summary-tree
+  node carries `evidence` and `evidence_declared` (additive under format version 1).
+  `Verdict` is a public class, `EvidenceViolation` names the three evidence breaks, the
+  snapshot helpers moved from `litmus.evidence` to `litmus.run_data`, and `litmus-check`
+  gained `litmus/evidence-fulfilled` while `litmus/ctx-provenance` now flags every ctx
+  write. `ArpResolver.reacquire` returns the new address instead of writing ctx.
+
 - A node halted by an integration hook now finishes its abort — hard close, paired
   `after_each`, sealed Aborted result — even when a parallel sibling's cancellation lands
   mid-close. The started row an integrator wrote in `before_each` was being left open when

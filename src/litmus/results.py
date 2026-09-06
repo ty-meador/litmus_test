@@ -9,8 +9,8 @@ from types import MappingProxyType
 from typing import cast, final
 
 from litmus.errors import Failure
-from litmus.evidence import JsonObject, default_run_data
 from litmus.lifecycle import Slot, State, TimeoutEvidence
+from litmus.run_data import JsonObject, default_run_data
 
 FORMAT_VERSION = 1
 
@@ -52,6 +52,12 @@ class SummaryTreeNode:
     keeps every link intact. It is ``None`` for a node that never ran and for a node
     whose records rolled up into an ancestor; an Inspector resolves the latter by
     walking to the nearest ancestor that carries a path.
+
+    ``evidence`` is what a leaf's verdict carried, ``PASS(evidence)`` or
+    ``TestFailure(..., evidence=...)``, already validated and detached. ``evidence_declared``
+    is the leaf's ``@evidence`` declaration. A declared key absent from ``evidence`` is a
+    reading that was not taken; an Inspector shows it by name. Both are ``None`` on a
+    node that is not a leaf, that never ran, or that declared nothing (issue #118).
     """
 
     name: str
@@ -61,6 +67,8 @@ class SummaryTreeNode:
     timeout: TimeoutEvidence | None = None
     log_path: str | None = None
     children: tuple[SummaryTreeNode, ...] = ()
+    evidence: JsonObject | None = None
+    evidence_declared: tuple[str, ...] | None = None
 
     def to_json(self) -> JsonObject:
         """Return the version-independent node shape accepted by ``json.dumps``."""
@@ -72,6 +80,10 @@ class SummaryTreeNode:
             "timeout": None if self.timeout is None else self.timeout.to_json(),
             "log_path": self.log_path,
             "children": [child.to_json() for child in self.children],
+            "evidence": None if self.evidence is None else dict(self.evidence),
+            "evidence_declared": (
+                None if self.evidence_declared is None else list(self.evidence_declared)
+            ),
         }
 
 

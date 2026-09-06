@@ -164,7 +164,7 @@ is checked against the object by the self-tests.
 
 | Name | Kind | What it is | Described in |
 |---|---|---|---|
-| `PASS` | constant | The one verdict sentinel; a test method returns it and nothing else to pass. | `docs/overview.md` (Why Litmus Rejects "Pass by Default"), `docs/contracts.md` (Terminal State Contract) |
+| `PASS` | constant | The verdict. `return PASS` passes with no evidence; `return PASS({...})` passes and carries the readings that prove it. | `docs/overview.md` (Why Litmus Rejects "Pass by Default"), `docs/idioms.md` (Evidence Travels With the Verdict), `docs/contracts.md` (Terminal State Contract) |
 | `AfterEachContext` | class | The narrow integration-hook context after a node settles: `BeforeEachContext` plus `result`. | `docs/idioms.md` (Integration Hooks), `docs/contracts.md` (Integration Hook Contract) |
 | `AfterEachHook` | type alias | `Callable[[AfterEachContext], Awaitable[None]]`; the `after_each` parameter of `LitmusTest.run`. | `docs/idioms.md` (Integration Hooks) |
 | `ArpResolutionFailure` | class | `TestFailure` raised when the resolver cannot map a MAC address to an IP. | `docs/idioms.md` (ArpResolver — MAC to IP) |
@@ -173,11 +173,12 @@ is checked against the object by the self-tests.
 | `BeforeEachContext` | class | The narrow integration-hook context before a node runs: `name`, `ancestor_names`, `bread_crumbs`, `logger`, `env`. | `docs/idioms.md` (Integration Hooks), `docs/contracts.md` (Integration Hook Contract) |
 | `BeforeEachHook` | type alias | `Callable[[BeforeEachContext], Awaitable[None]]`; the `before_each` parameter of `LitmusTest.run`. | `docs/idioms.md` (Integration Hooks) |
 | `ContractViolation` | class | A developer bug: suite code did something the verdict contract forbids. Records as Fail with `bug: true`. | `docs/overview.md` (Failure Taxonomy), `docs/contracts.md` (Failure Taxonomy Contract) |
+| `EvidenceViolation` | class | `ContractViolation` raised by the child boundary when a verdict's evidence is not JSON, shadows a ctx key, or lacks a key `@evidence` declared; `key`. | `docs/idioms.md` (Evidence Travels With the Verdict), `docs/contracts.md` (Evidence Contract) |
 | `ExecResult` | class | What a command produced: `stdout`, `stderr`, `exit_code`, `truncated`, `captured_bytes`. `exec` never throws. | `docs/contracts.md` (Utils Contract) |
 | `ExternalIntegrationFailure` | class | A harness-level halt: an integration hook threw. Aborts the run. | `docs/overview.md` (Failure Taxonomy), `docs/contracts.md` (Integration Hook Contract) |
 | `Failure` | type alias | The union of `TestFailure`, `ExternalIntegrationFailure`, `OperatorInterrupt`, and `MissingVerdict`; the type of `RunResult.failure`. | `docs/contracts.md` (Failure Taxonomy Contract) |
 | `FrameworkContractViolation` | class | A framework bug: the second layer of the guard, unreachable by design. Exported so a log line can be followed. | `docs/contracts.md` (Failure Taxonomy Contract) |
-| `JsonObject` | type alias | `dict[str, JsonValue]`; the shape of `run_data` and of `Artifact.data`. | `docs/idioms.md` (run_data — Automatic Structured Evidence) |
+| `JsonObject` | type alias | `dict[str, JsonValue]`; the shape of `run_data`, of a node's `evidence`, and of `Artifact.data`. | `docs/idioms.md` (run_data — Automatic Structured Evidence) |
 | `LitmusError` | class | Root of the framework's exception taxonomy. | `docs/contracts.md` (Failure Taxonomy Contract) |
 | `LitmusTest` | class | The atom: a claim about hardware and the procedure that produces its evidence. `configure`, `build_suite`, `cleanup`, `run`, `main`, `test`, `sequence`, `parallel`, `use_survey`, `use_audit`, `name`, `log_path`, `run_data`. | `docs/overview.md` (The Atom), `docs/idioms.md`, `docs/contracts.md` (Lifecycle Contract) |
 | `MissingVerdict` | class | No verdict was produced: the test method returned something other than `PASS`. | `docs/overview.md` (Failure Taxonomy), `docs/contracts.md` (Terminal State Contract) |
@@ -190,8 +191,9 @@ is checked against the object by the self-tests.
 | `Shell` | class | The scoped exec handle returned by `TestUtils.use_shell` and `TestUtils.get_shell`; the `via` argument to both. | `docs/idioms.md` (SSH Device, SSH Tunneling), `docs/contracts.md` (Exec Routing Contract) |
 | `Slot` | class | `StrEnum` of the lifecycle positions the framework calls suite code from; `RunResult.slot`. | `docs/inspector-json.md` (Version 1 result), `docs/contracts.md` (Lifecycle Contract) |
 | `State` | class | `StrEnum` of the three terminal states, `PASS`, `FAIL`, `ABORTED`; `RunResult.state`. There is no fourth. | `docs/overview.md` (The Three Terminal States), `docs/contracts.md` (Terminal State Contract) |
-| `SummaryTreeNode` | class | Plain recursive snapshot of the run tree on `RunResult.summary_tree`; `to_json`. | `docs/inspector-json.md` (Summary tree) |
-| `TestFailure` | class | A verdict of Fail: the hardware did not meet the spec. The exception a test method raises. | `docs/overview.md` (Failure Taxonomy), `docs/contracts.md` (Failure Taxonomy Contract) |
+| `SummaryTreeNode` | class | Plain recursive snapshot of the run tree on `RunResult.summary_tree`; `evidence`, `evidence_declared`, `to_json`. | `docs/inspector-json.md` (Summary tree) |
+| `TestFailure` | class | A verdict of Fail: the hardware did not meet the spec. The exception a test method raises; `evidence=` carries the readings taken before it failed. | `docs/overview.md` (Failure Taxonomy), `docs/contracts.md` (Failure Taxonomy Contract) |
 | `TestUtils` | class | The scoped service object handed to every lifecycle method: `logger`, `ctx`, `env`, `signal`, `artifact_root`, `exec_route`, `exec`, `wait_for`, `capture_artifact`, `get_arp_resolver`, `use_shell`, `get_shell`. | `docs/idioms.md` (TestUtils Injection), `docs/contracts.md` (Utils Contract) |
 | `TimeoutEvidence` | class | Structured evidence when a time budget cut a subtree: `reason`, `declared`, `budget_seconds`, `elapsed_seconds`, `clock`; `RunResult.timeout`. | `docs/idioms.md` (Time Budgets), `docs/contracts.md` (Time Budget Contract) |
-| `Verdict` | type alias | The return annotation of a test method; only `PASS` inhabits it. | `docs/overview.md` (Why Litmus Rejects "Pass by Default"), `docs/litmus-check.md` (`litmus/unannotated-interface`) |
+| `Verdict` | class | The return type of a test method: `PASS` or `PASS(evidence)`; `evidence`. Generic in the evidence shape, so `-> Verdict[MyEvidence]` lets pyright check the payload. | `docs/overview.md` (Why Litmus Rejects "Pass by Default"), `docs/idioms.md` (Evidence Travels With the Verdict), `docs/litmus-check.md` (`litmus/unannotated-interface`) |
+| `evidence` | function | Decorator naming the keys a test method's `PASS` must carry: `@evidence("k", ...)` or `@evidence(MyTypedDict)`. Static at class definition. | `docs/idioms.md` (Evidence Travels With the Verdict), `docs/litmus-check.md` (`litmus/evidence-fulfilled`) |

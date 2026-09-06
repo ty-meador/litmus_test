@@ -156,8 +156,12 @@ def _is_receiver_call(node: ast.expr, receiver: str, method: str) -> bool:
 
 
 def _is_verdict(annotation: ast.expr | None) -> bool:
+    if isinstance(annotation, ast.Subscript):
+        # ``-> Verdict[MyEvidence]`` names the evidence shape (issue #118).
+        annotation = annotation.value
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
-        return annotation.value.rsplit(".", maxsplit=1)[-1] == _VERDICT_TYPE
+        bare = annotation.value.split("[", 1)[0]
+        return bare.rsplit(".", maxsplit=1)[-1] == _VERDICT_TYPE
     return _decorator_name(annotation) == _VERDICT_TYPE
 
 

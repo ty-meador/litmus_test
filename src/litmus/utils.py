@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast, final
 from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
 from litmus.errors import (
+    ContextImmutable,
     ContextInsufficient,
     FrameworkContractViolation,
     HaltReason,
@@ -351,28 +352,95 @@ class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
 
 @final
 class RunContext(dict[str, Any]):
-    """The mutable ``ctx`` of one authored instance, holding the context contract.
+    """The ``ctx`` of one authored instance: what ``configure()`` provided, read-only after.
 
     ``configure()`` returns every key a test method, hook, or ``cleanup()`` reads by
     subscript. A ``[]`` read of anything else raises :class:`ContextInsufficient`, a
     contract violation, instead of the bare ``KeyError`` an author could catch by
-    accident. ``get``, ``in``, ``setdefault``, and iteration are ordinary ``dict``
-    behaviour: they are the author declaring a key optional.
+    accident. ``get``, ``in``, and iteration are ordinary ``dict`` behaviour: they are
+    the author declaring a key optional.
 
-    Everything else is a plain ``dict``. ``update`` merges configure's return, the
-    ``run_data`` snapshot iterates it, and ``json.dumps`` accepts it. ``owner`` is the
+    The framework merges configure's return and then freezes the context. Every write
+    after that point raises :class:`ContextImmutable`: a reading belongs on the verdict,
+    and a value cleanup must restore is captured in ``configure()`` (issue #118). The
+    ``run_data`` snapshot iterates it and ``json.dumps`` accepts it. ``owner`` is the
     authored instance whose ``configure()`` fills it, named once the instance binds.
     """
 
-    __slots__ = ("owner",)
+    __slots__ = ("frozen", "owner")
 
     def __init__(self, seed: Mapping[str, Any] | None = None, *, owner: str | None = None) -> None:
         """Start from a copy of ``seed``; ``owner`` may be named later by the framework."""
         super().__init__({} if seed is None else seed)
         self.owner = owner
+        self.frozen = False
 
     def __missing__(self, key: str) -> NoReturn:
         raise ContextInsufficient(self.owner or "context", key=key, owner=self.owner)
+
+    def _refuse(self, key: str) -> NoReturn:
+        raise ContextImmutable(self.owner or "context", key=key, owner=self.owner)
+
+    def _merge(self, provided: Mapping[str, Any]) -> None:
+        """Merge configure's return. Framework only; the context is still open."""
+        for key, value in provided.items():
+            super().__setitem__(key, value)
+
+    def _freeze(self) -> None:
+        """Close the context once ``configure()`` has settled. Framework only."""
+        self.frozen = True
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if self.frozen:
+            self._refuse(key)
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        if self.frozen:
+            self._refuse(key)
+        super().__delitem__(key)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+        if self.frozen:
+            self._refuse(_first_key(args, kwargs, "update(...)"))
+        super().update(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType]
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        if self.frozen and key not in self:
+            self._refuse(key)
+        return super().setdefault(key, default)
+
+    def pop(self, key: str, *default: Any) -> Any:
+        if self.frozen:
+            self._refuse(key)
+        return super().pop(key, *default)
+
+    def popitem(self) -> tuple[str, Any]:
+        if self.frozen:
+            self._refuse("popitem()")
+        return super().popitem()
+
+    def clear(self) -> None:
+        if self.frozen:
+            self._refuse("clear()")
+        super().clear()
+
+    def __ior__(self, other: Any) -> RunContext:  # pyright: ignore[reportIncompatibleMethodOverride]
+        if self.frozen:
+            self._refuse(_first_key((other,), {}, "|="))
+        super().__ior__(other)
+        return self
+
+
+def _first_key(args: tuple[Any, ...], kwargs: Mapping[str, Any], operation: str) -> str:
+    """Name the first key a bulk write would have touched, for the violation message."""
+    for arg in args:
+        keys = list(arg.keys()) if isinstance(arg, Mapping) else [pair[0] for pair in arg]  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType, reportUnknownMemberType]
+        if keys:
+            return str(keys[0])  # pyright: ignore[reportUnknownArgumentType]
+    for key in kwargs:
+        return key
+    return operation
 
 
 @final
@@ -482,8 +550,8 @@ class TestUtils:
         return self._logger
 
     @property
-    def ctx(self) -> dict[str, Any]:
-        """This authored instance's mutable runtime context."""
+    def ctx(self) -> Mapping[str, Any]:
+        """This authored instance's context: what ``configure()`` provided, read-only after."""
         return self._ctx
 
     @property
@@ -743,6 +811,14 @@ class TestUtils:
         """Name the authored instance whose ``configure()`` fills this context. Framework only."""
         if self._ctx.owner is None:
             self._ctx.owner = node
+
+    def _merge_context(self, provided: Mapping[str, Any]) -> None:
+        """Merge ``configure()``'s return into the still-open context. Framework only."""
+        self._ctx._merge(provided)  # pyright: ignore[reportPrivateUsage]
+
+    def _freeze_context(self) -> None:
+        """Close the context once ``configure()`` has settled. Framework only."""
+        self._ctx._freeze()  # pyright: ignore[reportPrivateUsage]
 
     def _halt_signal(self) -> RunAbort:
         """The run abort this node was scoped with. Framework lifecycle only."""

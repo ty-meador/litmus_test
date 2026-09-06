@@ -6,10 +6,10 @@ list is. Import public names from `litmus` itself; the module a name is defined 
 an implementation detail and may move.
 
 Suite authors need `LitmusTest`, `TestUtils`, `Shell`, `ExecResult`, `Artifact`,
-`JsonObject`, `PASS`, `Verdict`, `TestFailure`, and `ArpResolver`. The rest of the
-failure taxonomy is exported because it appears in artifacts and logs, where a reader
-will follow a name back to its meaning (`ExternalIntegrationFailure`,
-`OperatorInterrupt`, `ArpResolutionFailure`). The record types (`RunResult`,
+`JsonObject`, `PASS`, `Verdict`, `evidence`, `TestFailure`, and `ArpResolver`. The
+rest of the failure taxonomy is exported because it appears in artifacts and logs,
+where a reader will follow a name back to its meaning (`ExternalIntegrationFailure`,
+`OperatorInterrupt`, `ArpResolutionFailure`, `EvidenceViolation`). The record types (`RunResult`,
 `SummaryTreeNode`, `State`, `NodeType`, `Slot`, `TimeoutEvidence`, `RunSignal`,
 `ScopedLogger`) are exported because a public object has no attribute of a private
 type. `Phase` names the survey dispatch points for `use_survey(phases=)`. Harness
@@ -34,6 +34,7 @@ from litmus.base import LitmusTest
 from litmus.errors import (
     ArpResolutionFailure,
     ContractViolation,
+    EvidenceViolation,
     ExternalIntegrationFailure,
     Failure,
     FrameworkContractViolation,
@@ -42,12 +43,13 @@ from litmus.errors import (
     OperatorInterrupt,
     TestFailure,
 )
-from litmus.evidence import JsonObject
+from litmus.evidence import evidence
 from litmus.executor import ExecResult
 from litmus.hooks import AfterEachContext, AfterEachHook, BeforeEachContext, BeforeEachHook
 from litmus.lifecycle import Phase, Slot, State, TimeoutEvidence
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.routing import Shell
+from litmus.run_data import JsonObject
 from litmus.utils import RunSignal, ScopedLogger, TestUtils
 from litmus.verdict import PASS, Verdict
 
@@ -66,6 +68,7 @@ __all__ = [
     "BeforeEachContext",
     "BeforeEachHook",
     "ContractViolation",
+    "EvidenceViolation",
     "ExecResult",
     "ExternalIntegrationFailure",
     "Failure",
@@ -88,4 +91,5 @@ __all__ = [
     "TestUtils",
     "TimeoutEvidence",
     "Verdict",
+    "evidence",
 ]
