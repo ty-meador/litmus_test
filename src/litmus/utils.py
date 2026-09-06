@@ -13,11 +13,16 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast, final
+from typing import TYPE_CHECKING, Any, NoReturn, cast, final
 
 from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
-from litmus.errors import FrameworkContractViolation, HaltReason, TestFailure
+from litmus.errors import (
+    ContextInsufficient,
+    FrameworkContractViolation,
+    HaltReason,
+    TestFailure,
+)
 from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, ExecResult, LocalExec
 from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
@@ -345,6 +350,32 @@ class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
 
 
 @final
+class RunContext(dict[str, Any]):
+    """The mutable ``ctx`` of one authored instance, holding the context contract.
+
+    ``configure()`` returns every key a test method, hook, or ``cleanup()`` reads by
+    subscript. A ``[]`` read of anything else raises :class:`ContextInsufficient`, a
+    contract violation, instead of the bare ``KeyError`` an author could catch by
+    accident. ``get``, ``in``, ``setdefault``, and iteration are ordinary ``dict``
+    behaviour: they are the author declaring a key optional.
+
+    Everything else is a plain ``dict``. ``update`` merges configure's return, the
+    ``run_data`` snapshot iterates it, and ``json.dumps`` accepts it. ``owner`` is the
+    authored instance whose ``configure()`` fills it, named once the instance binds.
+    """
+
+    __slots__ = ("owner",)
+
+    def __init__(self, seed: Mapping[str, Any] | None = None, *, owner: str | None = None) -> None:
+        """Start from a copy of ``seed``; ``owner`` may be named later by the framework."""
+        super().__init__({} if seed is None else seed)
+        self.owner = owner
+
+    def __missing__(self, key: str) -> NoReturn:
+        raise ContextInsufficient(self.owner or "context", key=key, owner=self.owner)
+
+
+@final
 class TestUtils:
     """The single fully scoped service object passed to every lifecycle method.
 
@@ -390,7 +421,8 @@ class TestUtils:
         Raises ``ValueError`` when both ``env_allow`` and ``env_deny`` are given.
 
         Args:
-            ctx: Initial root context. The framework mutates this dict in place.
+            ctx: Initial root context, copied into the run's context; read it back
+                through :attr:`ctx`. The framework mutates that copy in place.
             env: Environment source. Defaults to the process environment. The
                 published snapshot is an immutable copy, filtered per the lists below.
             env_allow: Regular expressions; only variables whose *name* matches one
@@ -406,7 +438,7 @@ class TestUtils:
                 ``exec`` this run issues, local or SSH. Defaults to
                 ``DEFAULT_EXEC_OUTPUT_BUDGET`` (4 MiB).
         """
-        self._ctx = {} if ctx is None else ctx
+        self._ctx = RunContext(ctx)
         self._base_logger = LOGGER if logger is None else logger
         self._scope: tuple[str, ...] = ()
         self._logger = ScopedLogger(self._base_logger, self._scope)
@@ -687,6 +719,11 @@ class TestUtils:
         """Hard-close this node's remotes without touching an inherited hop."""
         await self._routing.cancel_opened()
 
+    def _own_context(self, node: str) -> None:
+        """Name the authored instance whose ``configure()`` fills this context. Framework only."""
+        if self._ctx.owner is None:
+            self._ctx.owner = node
+
     def _halt_signal(self) -> RunAbort:
         """The run abort this node was scoped with. Framework lifecycle only."""
         return self._signal._run_abort  # pyright: ignore[reportPrivateUsage]
@@ -704,7 +741,7 @@ class TestUtils:
         """Create one node-owned view from this node's child inheritance policy."""
         scoped = object.__new__(TestUtils)
         scoped._artifact_store = self._artifact_store
-        scoped._ctx = {} if isolate_context else self._ctx
+        scoped._ctx = RunContext(owner=node) if isolate_context else self._ctx
         scoped._env = self._env
         scoped._env_filter_warning = self._env_filter_warning
         scoped._base_logger = self._base_logger
