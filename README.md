@@ -9,7 +9,8 @@ at runtime.
 ```sh
 make install   # uv sync + git hooks
 make fix       # auto-format + auto-fix lint
-make check     # CI gate: format check, lint, pyright strict, pytest, litmus-check
+make check     # CI gate: format check, lint, pyright strict, pytest, litmus-check, docs
+make docs      # documentation site (strict: a broken cross-reference is red)
 ```
 
 `litmus run` is the runner (`docs/litmus-run.md`): it loads a suite file or module,
@@ -70,9 +71,10 @@ source), and
 deprecation procedure). `CHANGELOG.md` at the root records every change
 to that surface.
 
-The Floor Technician guide is `docs/floor-technician.md`. Until the docs site
-(issue #82) publishes `docs/`, that path is the URL that belongs on a station
-label.
+The Floor Technician guide is `docs/floor-technician.md` in the checkout and
+https://tyler-meador.gitlab.io/litmus_test/floor-technician/ on the docs site
+(https://tyler-meador.gitlab.io/litmus_test/). That published URL is the one
+that belongs on a station label.
 
 ## Deployment requirement
 
