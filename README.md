@@ -69,7 +69,9 @@ to the port's semantics, `litmus-run.md` (the runner and its exit status contrac
 source), and
 `api-stability.md` (the public surface, semantic versioning from 1.0.0, and the
 deprecation procedure). `CHANGELOG.md` at the root records every change
-to that surface.
+to that surface. For a release MR, select the
+[Release template](.gitlab/merge_request_templates/Release.md): it records the
+candidate's checks, changelog cut, and the handoff to Zavala for review.
 
 The Floor Technician guide is `docs/floor-technician.md` in the checkout and
 https://tyler-meador.gitlab.io/litmus_test/floor-technician/ on the docs site
