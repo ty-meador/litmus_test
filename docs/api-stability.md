@@ -33,8 +33,13 @@ and every documented code block imports only that set from the package root, and
 - The records the framework emits (`result.json`, `timeline.jsonl`, the point-in-time
   artifact envelope) are promised through their published JSON Schemas and
   `format_version`, under the policy in `docs/inspector-json.md`.
-- `LITMUS_ARTIFACT_ROOT` is the one environment variable the framework reads. It is
-  public configuration.
+- Three environment variables are public configuration, and the framework reads no
+  others: `LITMUS_ARTIFACT_ROOT`, the artifact root when `TestUtils` is given none;
+  `environment=DEBUG`, which publishes every variable despite an `env_allow` or
+  `env_deny` list and logs a warning saying so (`docs/inspector-json.md`); and
+  `SSH_AUTH_SOCK`, the SSH agent `get_shell` and `use_shell` fall back to when no
+  credential is given. The run environment as a whole is published as evidence under
+  `env_allow` / `env_deny`, not read as configuration.
 - The `litmus-check` command line is public in two respects: its exit status contract
   and the rule codes it ships (`docs/litmus-check.md`). The Python API of the
   `litmus_check` package is not.
