@@ -133,11 +133,21 @@ the record identifies the exact clock and budget without requiring the suite sou
   - Once a hook returns a non-`None` observation, its automatic artifact publication is
     shielded from shutdown within its own 30-second evidence budget. Repeated
     cancellation cannot orphan an accepted observation after the hardware was read.
-  - Survey dispatch points are `pre-configure`, `post-configure`, `pre-test`,
-    `post-test`, `pre-cleanup`, and `post-cleanup`, limited to the phases the lifecycle
-    reaches. The artifact name identifies the dispatch point and registered-hook index;
-    audit names identify both the hook and interval dispatch. Both use artifact type
-    `survey`, keeping one Inspector evidence contract.
+  - Survey dispatch points are the six members of `Phase`, in order: `pre-configure`,
+    `post-configure`, `pre-test`, `post-test`, `pre-cleanup`, and `post-cleanup`,
+    limited to the phases the lifecycle reaches. The artifact name identifies the
+    dispatch point and registered-hook index; audit names identify both the hook and
+    interval dispatch. Both use artifact type `survey`, keeping one Inspector evidence
+    contract.
+  - `use_survey(fn, phases=...)` schedules a survey at a subset of those points; the
+    default is all six, and an empty selection is a `ValueError` at registration. A
+    boundary the survey is not scheduled at writes one debug line and no artifact, so
+    the run directory holds one artifact per boundary the survey was meant to observe.
+  - Order is not reach. The phases are totally ordered, but after a failed `configure`
+    the engine skips `post-configure`, `pre-test`, and `post-test` and still fires
+    `pre-cleanup` and `post-cleanup`, with `utils.exec` on the test host if `use_shell`
+    never returned. A survey that reads the device therefore guards on
+    `utils.exec_route`, not on the phase; the phase says when, the route says where.
 - Log artifacts are co-located with their node.
 - All serializable values (primitives, plain dicts, lists) added to `ctx` are automatically added to `run_data`.
   - Functions, class instances, and live handles (e.g. SSH connections) are stripped.
@@ -300,6 +310,7 @@ The operator-signal handler is installed by `run()`/`main()` only while that run
 
 - Local exec and every SSH session this router opens share the run's `output_budget` (see the Utils Contract). A fat command is truncated and killed at the resource; it does not take the rest of the rack with it.
 - A transport's address is fixed while it is live. `connect(host, port)` re-points an addressed transport only through a closed handle; asking a live one for a different address is refused, never silently replaced. After a flash or DHCP churn the flow is `disconnect()`, reacquire, `connect(new_ip)`. There is no self-healing: a socket the framework killed stays dead (In-Flight Termination Contract), and an unexpected drop reaches the author as a `ConnectionError` on the next `exec`, not as a quiet redial.
+- `utils.exec_route` states where `utils.exec` lands at the moment it is read: `local` for the test host, otherwise the endpoint of the hop the route attaches to (the last name in the `exec routing:` chain). It is derived from the router, never stored, so it is right in a survey at every phase, including the pre-configure dispatch before `use_shell` has run and the pre-cleanup dispatch after a `configure` that failed before it.
 - The router logs what it opens and where every node's exec lands (see the Evidence Contract). A transport that hides its hop hides the topology: `endpoint`, `hop`, and `route_label` on `RemoteInterface` are how a transport states its place in the chain, and `provenance_lines` (starting with `connect_provenance`) are the lines the router records for it.
 
 **Developer obligation:** Call `use_shell` when this node's `utils.exec` should land somewhere other than the test host. Call `get_shell` for auxiliary endpoints. Do not stuff SSH handles into ctx and expect routing to notice.

@@ -6,8 +6,10 @@ import logging
 from pathlib import Path
 
 import pytest
+from tests.loopback_sshd import LoopbackSshd
 
-from litmus import PASS, Artifact, LitmusTest, TestFailure, TestUtils, Verdict
+from litmus import PASS, Artifact, LitmusTest, Phase, TestFailure, TestUtils, Verdict
+from litmus.hooks import SurveyHook
 from litmus.lifecycle import Slot, State
 
 
@@ -155,6 +157,240 @@ class TestSurveyHooks:
         assert result.state is State.PASS
         assert await asyncio.to_thread(lambda: list(tmp_path.rglob("*.artifact"))) == []
         assert sum("verdict unaffected" in record.getMessage() for record in caplog.records) == 6
+
+
+class TestPhase:
+    def test_the_six_boundaries_order_by_declaration_not_by_string(self) -> None:
+        assert list(Phase) == [
+            Phase.PRE_CONFIGURE,
+            Phase.POST_CONFIGURE,
+            Phase.PRE_TEST,
+            Phase.POST_TEST,
+            Phase.PRE_CLEANUP,
+            Phase.POST_CLEANUP,
+        ]
+        assert Phase.PRE_CONFIGURE < Phase.POST_CONFIGURE < Phase.PRE_TEST < Phase.POST_TEST
+        assert Phase.POST_TEST < Phase.PRE_CLEANUP < Phase.POST_CLEANUP
+        assert Phase.POST_CLEANUP >= Phase.POST_CLEANUP > Phase.PRE_CLEANUP
+        assert Phase.PRE_TEST <= Phase.PRE_TEST
+        shuffled = [Phase.POST_CLEANUP, Phase.PRE_TEST, Phase.PRE_CONFIGURE, Phase.PRE_CLEANUP]
+        assert sorted(shuffled) == [
+            Phase.PRE_CONFIGURE,
+            Phase.PRE_TEST,
+            Phase.PRE_CLEANUP,
+            Phase.POST_CLEANUP,
+        ]
+        # String order would put "post-configure" before "pre-configure".
+        assert "pre-configure" > "post-configure"
+
+    def test_the_values_are_the_artifact_name_prefixes(self) -> None:
+        assert [phase.value for phase in Phase] == [
+            "pre-configure",
+            "post-configure",
+            "pre-test",
+            "post-test",
+            "pre-cleanup",
+            "post-cleanup",
+        ]
+        assert Phase("post-cleanup") is Phase.POST_CLEANUP
+
+    def test_ordering_against_a_non_phase_is_refused(self) -> None:
+        with pytest.raises(TypeError):
+            _ = Phase.PRE_TEST < 3  # pyright: ignore[reportOperatorIssue]
+        other = object()
+        with pytest.raises(TypeError):
+            _ = other <= Phase.PRE_TEST  # pyright: ignore[reportOperatorIssue]
+        with pytest.raises(TypeError):
+            _ = other >= Phase.PRE_TEST  # pyright: ignore[reportOperatorIssue]
+        with pytest.raises(TypeError):
+            _ = other < Phase.PRE_TEST  # pyright: ignore[reportOperatorIssue]
+
+
+class TestScheduledSurveys:
+    async def test_phases_selects_the_boundaries_a_survey_observes(self, tmp_path: Path) -> None:
+        skipped: list[str] = []
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_survey(self._everywhere)
+                self.use_survey(
+                    self._after_configure,
+                    phases=[phase for phase in Phase if phase >= Phase.POST_CONFIGURE],
+                )
+                self.use_survey(self._bookends, phases=(Phase.PRE_CONFIGURE, "post-cleanup"))  # pyright: ignore[reportArgumentType]
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _everywhere(self, utils: TestUtils) -> object:
+                return "all"
+
+            async def _after_configure(self, utils: TestUtils) -> object:
+                return "configured"
+
+            async def _bookends(self, utils: TestUtils) -> object:
+                return "bookend"
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        class _SkipWatcher(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                message = record.getMessage()
+                if "not scheduled at this phase" in message:
+                    skipped.append(message)
+
+        watcher = _SkipWatcher(level=logging.DEBUG)
+        logger = logging.getLogger("litmus")
+        previous = logger.level
+        logger.addHandler(watcher)
+        logger.setLevel(logging.DEBUG)
+        try:
+            result = await Suite(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+        finally:
+            logger.removeHandler(watcher)
+            logger.setLevel(previous)
+
+        assert result.state is State.PASS
+        assert _artifact_payloads(tmp_path) == {
+            "pre-configure-1": "all",
+            "post-configure-1": "all",
+            "pre-test-1": "all",
+            "post-test-1": "all",
+            "pre-cleanup-1": "all",
+            "post-cleanup-1": "all",
+            "post-configure-2": "configured",
+            "pre-test-2": "configured",
+            "post-test-2": "configured",
+            "pre-cleanup-2": "configured",
+            "post-cleanup-2": "configured",
+            "pre-configure-3": "bookend",
+            "post-cleanup-3": "bookend",
+        }
+        assert sorted(skipped) == sorted(
+            [
+                "survey pre-configure hook #2 not scheduled at this phase; skipping",
+                "survey post-configure hook #3 not scheduled at this phase; skipping",
+                "survey pre-test hook #3 not scheduled at this phase; skipping",
+                "survey post-test hook #3 not scheduled at this phase; skipping",
+                "survey pre-cleanup hook #3 not scheduled at this phase; skipping",
+            ]
+        )
+
+    def test_an_empty_selection_is_refused_at_registration(self) -> None:
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_survey(self._survey, phases=())
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _survey(self, utils: TestUtils) -> object:
+                return {}
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        with pytest.raises(ValueError, match="at least one phase"):
+            Suite(name="rack")
+
+        async def survey(utils: TestUtils) -> object:
+            return {}
+
+        with pytest.raises(ValueError, match="at least one phase"):
+            SurveyHook(fn=survey, phases=frozenset())
+
+    def test_a_name_outside_the_six_is_refused_at_registration(self) -> None:
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_survey(self._survey, phases=["mid-test"])  # pyright: ignore[reportArgumentType]
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _survey(self, utils: TestUtils) -> object:
+                return {}
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        with pytest.raises(ValueError, match="mid-test"):
+            Suite(name="rack")
+
+    async def test_order_is_not_reach_so_the_route_is_the_guard(self, tmp_path: Path) -> None:
+        """After a failed configure the cleanup boundaries still fire, exec on the test host."""
+        routes: list[str] = []
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_survey(
+                    self._survey,
+                    phases=[phase for phase in Phase if phase >= Phase.POST_CONFIGURE],
+                )
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                raise TestFailure("target unreachable before use_shell")
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _survey(self, utils: TestUtils) -> object:
+                routes.append(utils.exec_route)
+                return None
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        result = await Suite(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.FAIL
+        assert routes == ["local", "local"]  # pre-cleanup and post-cleanup, nothing else
+        assert _artifact_payloads(tmp_path) == {}
+
+    async def test_exec_route_names_the_device_once_the_hop_is_up_through_post_cleanup(
+        self, tmp_path: Path
+    ) -> None:
+        peer = await LoopbackSshd.start(username="ops", password="jump")
+        password = peer.password
+        assert password is not None
+        seen: list[str] = []
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                self.use_survey(self._survey)
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                await utils.use_shell(
+                    host="127.0.0.1",
+                    port=peer.port,
+                    username=peer.username,
+                    password=password,
+                    skip_host_verification=True,
+                )
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _survey(self, utils: TestUtils) -> object:
+                seen.append(utils.exec_route)
+                return None
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        try:
+            result = await Suite(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+        finally:
+            await peer.aclose()
+
+        assert result.state is State.PASS
+        assert seen == ["local", "127.0.0.1", "127.0.0.1", "127.0.0.1", "127.0.0.1", "127.0.0.1"]
 
 
 class TestAuditHooks:
