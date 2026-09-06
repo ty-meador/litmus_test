@@ -265,7 +265,7 @@ async def _bounded_finalization(call: Awaitable[object], *, node: str, operation
     except TimeoutError as error:
         detail = (
             f"{operation} exceeded its {_FINALIZATION_TIMEOUT_SECONDS:g}-second "
-            "finalization timeout; return from {operation} within the evidence budget"
+            f"finalization timeout; return from {operation} within the evidence budget"
         )
         raise ContractViolation(node, detail=detail, cause=error) from error
     finally:
