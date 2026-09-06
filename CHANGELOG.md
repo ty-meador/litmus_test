@@ -9,6 +9,11 @@ kept so that it exists before the promise does.
 
 ### Added
 
+- Docs site: `make docs` builds `docs/` with mkdocs and an API reference from
+  the public surface's docstrings. The gate fails on a broken cross-reference.
+  A version tag publishes the site to GitLab Pages
+  (`https://tyler-meador.gitlab.io/litmus_test/`); the Floor Technician guide
+  there is the URL that belongs on a station label (issue #82).
 - `litmus new SuiteName`: writes a gated-PASS suite and a matching self-test stub
   (`SuiteName.py` / `test_suite_name.py` derived from the class name). The generated
   suite has an annotated constructor, `configure` returning a narrowed ctx, a pure
@@ -19,8 +24,8 @@ kept so that it exists before the promise does.
 - `docs/floor-technician.md`, the station page: how to read `result.json` without
   reading suite source, the Fail / Aborted / bug-signal recovery protocol, and
   every Inspector JSON field explained from the Floor Technician's side. Linked
-  from the README and `docs/overview.md`; the docs site (issue #82) publishes
-  `docs/` when it lands (issue #83).
+  from the README and `docs/overview.md`; published on the docs site
+  (issue #83, issue #82).
 - `litmus run <path-or-module>[::SuiteClass]`, the runner: loads a suite file or
   module, selects one `LitmusTest` subclass, runs it, and exits 0 Pass, 1 Fail,
   2 Aborted, 3 usage error. `--artifact-root DIR` overrides `LITMUS_ARTIFACT_ROOT`,
