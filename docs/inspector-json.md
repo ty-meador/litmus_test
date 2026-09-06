@@ -22,7 +22,7 @@ type `run-result`; consumers do not need to derive the run directory name.
 | `failure` | object or null | JSON-safe framework failure, including nested causes. |
 | `timeout` | object or null | Structured time-budget evidence when a deadline determined or contributed to this state. |
 | `test_case` | string | Stable name of this node. |
-| `type` | string | `test-suite`, `test-case`, `test-group`, or `test-sequence`. |
+| `type` | string | `suite`, `test`, `parallel`, or `sequence`: the node shape, in the vocabulary of `build_suite`. |
 | `ancestor_names` | array of strings | Root-to-this path, inclusive. |
 | `bread_crumbs` | string | Display path, exactly `ancestor_names.join("/")`. |
 | `summary_tree` | object | Recursive snapshot rooted at this node. |
@@ -148,6 +148,10 @@ One rule governs all of them.
    publishes a new schema file and leaves the previous one in place: a run directory
    written under version 1 stays readable by a version-1 consumer for as long as the
    record exists.
+
+Before 1.0.0 the record may change in place under version 1, because no consumer
+exists to break; the `type` vocabulary was renamed this way to match the composition
+vocabulary (ruling on issue #111, 2026-09-06). From 1.0.0 rule 2 applies as written.
 
 ## Published schemas
 

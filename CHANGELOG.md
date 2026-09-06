@@ -34,6 +34,11 @@ kept so that it exists before the promise does.
 
 ### Changed
 
+- The Inspector `type` discriminator speaks the composition vocabulary: `suite`, `test`,
+  `parallel`, `sequence` replace `test-suite`, `test-case`, `test-group`,
+  `test-sequence`, and the `NodeType` members are `SUITE`, `TEST`, `PARALLEL`,
+  `SEQUENCE`. Changed in place under result `format_version` 1 by ruling: no consumer
+  exists before 1.0.0, so no version roll (issue #111).
 - A shell a node opened with `use_shell` / `get_shell` now stays connected through that
   node's post-cleanup survey and closes after it, before the via lease is released. It
   used to close inside cleanup, so a post-cleanup survey on a self-owned hop settled
