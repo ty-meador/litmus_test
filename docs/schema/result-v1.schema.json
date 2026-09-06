@@ -86,8 +86,8 @@
     },
     "nodeType": {
       "type": "string",
-      "enum": ["test-suite", "test-case", "test-group", "test-sequence"],
-      "description": "Framework-owned node-shape discriminator."
+      "enum": ["suite", "test", "parallel", "sequence"],
+      "description": "Framework-owned node-shape discriminator; the composition vocabulary of build_suite."
     },
     "failure": {
       "type": "object",

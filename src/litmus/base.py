@@ -1516,12 +1516,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     def _node_type(self) -> NodeType:
         """Name the framework-owned node shape for the Inspector contract."""
         if isinstance(self, _Test):
-            return NodeType.TEST_CASE
+            return NodeType.TEST
         if isinstance(self, _Parallel):
-            return NodeType.TEST_GROUP
+            return NodeType.PARALLEL
         if isinstance(self, _Sequence):
-            return NodeType.TEST_SEQUENCE
-        return NodeType.TEST_SUITE
+            return NodeType.SEQUENCE
+        return NodeType.SUITE
 
     @final
     def _pending_summary_tree(self) -> SummaryTreeNode:
