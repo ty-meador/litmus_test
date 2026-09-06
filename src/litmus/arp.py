@@ -38,7 +38,10 @@ _LEADING_INT: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 def _normalize_mac(mac: str) -> str:
     hex_digits = "".join(character for character in mac.lower() if character in _HEX_DIGITS)
     if len(hex_digits) != 12:
-        raise ValueError(f"MAC address must contain 12 hex digits, got {mac!r}")
+        raise ValueError(
+            f"MAC address must contain 12 hex digits, got {mac!r}; "
+            "pass a colon, dash, or bare-hex MAC"
+        )
     return ":".join(hex_digits[index : index + 2] for index in range(0, 12, 2))
 
 
@@ -124,7 +127,7 @@ class ArpResolver:
             cache_key: Routing label identifying which host's table this is.
         """
         if ping_count < 1:
-            raise ValueError("ping_count must be at least 1")
+            raise ValueError("ping_count must be at least 1; pass a positive packet count")
         self._mac = _normalize_mac(mac)
         self._ping_count = ping_count
         self._exec = exec_fn
