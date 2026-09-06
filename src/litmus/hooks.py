@@ -21,7 +21,10 @@ type AfterEachHook = Callable[["AfterEachContext"], Awaitable[None]]
 
 def _require_coroutine(kind: str, fn: HookFunction) -> None:
     if not inspect.iscoroutinefunction(fn):
-        msg = f"{kind} hook function must be defined with async def"
+        msg = (
+            f"{kind} hook function must be defined with async def; "
+            f"write it as async def {kind}(self, utils)"
+        )
         raise TypeError(msg)
 
 
@@ -39,7 +42,10 @@ class SurveyHook:
     def __post_init__(self) -> None:
         _require_coroutine("survey", self.fn)
         if not self.phases:
-            raise ValueError("a survey must observe at least one phase")
+            raise ValueError(
+                "a survey must observe at least one phase; "
+                "pass one or more Phase values, or omit phases to observe every boundary"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +64,10 @@ class AuditHook:
             or not math.isfinite(interval)
             or interval <= 0
         ):
-            raise ValueError("audit interval must be a positive finite number")
+            raise ValueError(
+                "audit interval must be a positive finite number; "
+                "pass a number of seconds greater than zero"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +102,7 @@ class IntegrationHooks:
             ("after_each", self.after_each),
         ):
             if hook is not None and not callable(hook):
-                msg = f"{kind} hook must be callable"
+                msg = f"{kind} hook must be callable; pass an async function"
                 raise TypeError(msg)
 
     def warn_if_unpaired(self, logger: logging.LoggerAdapter[logging.Logger]) -> None:
@@ -123,6 +132,9 @@ async def invoke_integration_hook(
     """Await one hook while keeping calls and invalid returns inside the boundary."""
     returned: object = hook(context)  # pyright: ignore[reportArgumentType]
     if not inspect.isawaitable(returned):
-        msg = f"{kind} hook must return an awaitable"
+        msg = (
+            f"{kind} hook must return an awaitable; "
+            "define it with async def so the call returns a coroutine"
+        )
         raise TypeError(msg)
     await returned

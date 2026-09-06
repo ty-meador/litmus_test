@@ -602,9 +602,13 @@ class TestUtils:
     ) -> bool:
         """Poll until ``predicate`` succeeds or raise a structured timeout verdict."""
         if interval <= 0:
-            raise ValueError("wait_for interval must be greater than zero")
+            raise ValueError(
+                "wait_for interval must be greater than zero; pass a positive number of seconds"
+            )
         if timeout_seconds < 0:
-            raise ValueError("wait_for timeout must not be negative")
+            raise ValueError(
+                "wait_for timeout must not be negative; pass zero or a positive number of seconds"
+            )
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
