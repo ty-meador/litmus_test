@@ -205,8 +205,8 @@ may still change in place under version 1.
 
 The published schemas live next to this guide:
 
-- `docs/schema/result-v1.schema.json`
-- `docs/schema/timeline-v1.schema.json`
+- [`docs/schema/result-v1.schema.json`](schema/result-v1.schema.json)
+- [`docs/schema/timeline-v1.schema.json`](schema/timeline-v1.schema.json)
 
 You do not have to validate against them on the station. They exist so a
 decoder can refuse a version it was not written for, loudly.
