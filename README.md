@@ -33,7 +33,8 @@ uv run litmus run examples/run_data_evidence.py
 projection beside it.
 
 The SSH-backed examples take their target from `utils.env` in `configure()`. A missing
-variable Fails the suite (exit 1) and names the variable to set. Optional password and
+variable Fails the suite (exit 1): the device did not reach a testable state, and the
+message names the variable to set. Optional password and
 port variables (`SSH_PASSWORD` / `SSH_PORT`, `JUMP_*` / `TARGET_*`, `GATEWAY_*`) default
 the port to 22 when unset. `networked_device.py` defines `Gateway` and `DutDevice`; pick
 the station suite with `::DutDevice`. `GATEWAY_HOST` and `GATEWAY_USER` (both required
