@@ -41,7 +41,7 @@ Two-level service contract:
 
 #### "Floor technicians simultaneously have the biggest impact on the success of our business, and the least control over how it operates"
 
-Typically early-career technology enthusiast. Passionate, capable, but many are operating at the edge of their knowledge. They are the first person to see failures and to make failure category judgment calls. They are the experts on how to handle any given failure mode. The inspector is their primary tool — and also a containment layer preventing them from going places they shouldn't.
+Typically early-career technology enthusiast. Passionate, capable, but many are operating at the edge of their knowledge. They are the first person to see failures and to make failure category judgment calls. They are the experts on how to handle any given failure mode. The inspector is their primary tool — and also a containment layer preventing them from going places they shouldn't. The station page is `docs/floor-technician.md`: how to read `result.json` and what to do next, without opening the suite source.
 
 ## The Atom
 
