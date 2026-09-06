@@ -1,19 +1,21 @@
-"""The evidence surface as the subject: ctx flows into `run_data` automatically.
+"""The evidence surface as the subject: readings travel with the verdict.
 
 `configure` returns the context the test methods rely on — here the spec limits.
-Those entries merge into `utils.ctx`; each test method reads its limit from ctx,
-records the reading it took beside it, and both appear on `RunResult.run_data`
-with no extra work. Class instances, functions, and live handles are stripped —
-only JSON-safe values survive. Override `run_data` only when a computed field
-(here `within_spec`) is needed on top of that snapshot.
+Those entries merge into `utils.ctx`, which is read-only from then on. Each test
+method reads its limit from ctx, takes its reading, and hands the reading back
+with the verdict: `PASS({...})` when the unit is in spec, `TestFailure(...,
+evidence={...})` when it is not. `@evidence` names the reading each pass must
+carry, so a pass without it is a contract violation rather than a green run.
 
-`configure` does not seed placeholder readings. A reading a test method never
-took is absent from the evidence rather than reported as `0.0`, and `within_spec`
-treats a missing reading as out of spec.
+The leaf's record is the ctx view plus what its verdict carried: the limit sits
+beside the reading. The authored node's `run_data` is the ctx view alone. A
+reading a test method never took is absent from the record, never reported as
+`0.0`; a declared reading that was not taken is listed by name so the Floor
+Technician sees the gap.
 
 The readings are constructor-injected so the example runs on any development
 machine. A real suite would take them with `utils.exec()` inside the test
-method; the ctx write, the snapshot, and the override stay the same.
+method; the declaration, the verdict, and the record stay the same.
 
 Run it: `litmus run examples/run_data_evidence.py`.
 """
@@ -22,11 +24,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from litmus import PASS, JsonObject, LitmusTest, TestFailure, TestUtils, Verdict
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict, evidence
 
 
 class PowerSupply(LitmusTest):
-    """Record voltage and temperature, then publish a computed within-spec flag."""
+    """Judge voltage and temperature against their limits and record both readings."""
 
     def __init__(
         self,
@@ -59,7 +61,7 @@ class PowerSupply(LitmusTest):
         self._temp_limit_c = temp_limit_c
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        """Provide the limits the test methods judge against; readings are theirs to add."""
+        """Provide the limits the test methods judge against; readings are theirs to carry."""
         return {
             "voltage_low_v": self._voltage_low_v,
             "voltage_high_v": self._voltage_high_v,
@@ -76,39 +78,33 @@ class PowerSupply(LitmusTest):
             ],
         )
 
+    @evidence("output_voltage_v")
     async def _check_voltage(self, utils: TestUtils) -> Verdict:
         low: float = utils.ctx["voltage_low_v"]
         high: float = utils.ctx["voltage_high_v"]
         voltage = self._output_voltage_v
-        utils.ctx["output_voltage_v"] = voltage
         utils.logger.info("PSU voltage: %s V (spec: %s-%s V)", voltage, low, high)
+        reading = {"output_voltage_v": voltage}
         if low <= voltage <= high:
-            return PASS
-        raise TestFailure("PSU voltage out of spec", f"{low:g}-{high:g} V", f"{voltage:g} V")
+            return PASS(reading)
+        raise TestFailure(
+            "PSU voltage out of spec",
+            f"{low:g}-{high:g} V",
+            f"{voltage:g} V",
+            evidence=reading,
+        )
 
+    @evidence("temperature_c")
     async def _check_temperature(self, utils: TestUtils) -> Verdict:
         limit: float = utils.ctx["temp_limit_c"]
         temperature = self._temperature_c
-        utils.ctx["temperature_c"] = temperature
         utils.logger.info("PSU temperature: %s degC (limit: %s degC)", temperature, limit)
+        reading = {"temperature_c": temperature}
         if temperature <= limit:
-            return PASS
+            return PASS(reading)
         raise TestFailure(
             "PSU temperature over limit",
             f"<= {limit:g} degC",
             f"{temperature:g} degC",
+            evidence=reading,
         )
-
-    @property
-    def run_data(self) -> JsonObject:
-        """Default snapshot plus a computed within-spec flag for the FT."""
-        base = super().run_data
-        voltage = base.get("output_voltage_v")
-        temperature = base.get("temperature_c")
-        within_spec = False
-        if isinstance(voltage, int | float) and isinstance(temperature, int | float):
-            within_spec = (
-                self._voltage_low_v <= voltage <= self._voltage_high_v
-                and temperature <= self._temp_limit_c
-            )
-        return {**base, "within_spec": within_spec}

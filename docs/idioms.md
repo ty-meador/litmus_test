@@ -21,15 +21,15 @@ feels awkward because it tries to import that runtime model, the friction identi
 boundary, not a missing Litmus feature.
 
 ## Immutable-self Convention
-After `__init__` runs, `self` is read-only. All runtime state flows through configure's return value into `utils.ctx`. This eliminates hidden state coupling and makes the data flow explicit.
+After `__init__` runs, `self` is read-only. What the tests need flows through configure's return value into `utils.ctx`, and what they observed leaves with the verdict. This eliminates hidden state coupling and makes the data flow explicit.
 
 **Rules:**
 - `__init__` sets read-only config (MAC, credentials, site, etc.)
-- `configure()` returns runtime state as a plain dict — the framework merges it into `utils.ctx`
-- test methods, `cleanup()`, and all child test bodies read state from `utils.ctx`, not from `self`; every key they read with `[]` is one `configure()` returned, and a key it did not provide is read with `.get()` or not at all — a missing `[]` read is a `ContractViolation`, not a `KeyError` (issue #112)
-- No `self.field = value` after construction — if you need to update state mid-test, mutate `utils.ctx` in place (e.g. `utils.ctx.update(ip=new_ip)`)
+- `configure()` returns what the tests will read, as a plain dict — the framework merges it into `utils.ctx` and closes it
+- test methods, `cleanup()`, and all child test bodies read from `utils.ctx`, not from `self`; every key they read with `[]` is one `configure()` returned, and a key it did not provide is read with `.get()` or not at all — a missing `[]` read is a `ContractViolation`, not a `KeyError` (issue #112)
+- No `self.field = value` after construction, and no write to `utils.ctx` after `configure()` — a reading travels with the verdict, `PASS({...})`, and a thing that changes mid-run (an address, a connection) is an object in ctx that manages itself (issue #118)
 
-**Why:** Mutable instance state creates hidden coupling between lifecycle phases. When state flows through ctx, the data path is explicit and traceable. The Floor Technician benefits because `run_data` captures ctx automatically — structured evidence appears in `RunResult` with zero extra work.
+**Why:** Mutable state, on `self` or in ctx, creates hidden coupling between lifecycle phases. When inputs flow through ctx and readings flow out with the verdict, the data path is explicit and traceable. The Floor Technician benefits because each leaf's record carries exactly what that leaf handed back, beside the limits it judged against.
 
 **Enforcement:** This is a tier-1 runtime guard, not merely a lint convention.
 `LitmusTest` freezes only after the most-derived `__init__` returns, so subclasses may
@@ -38,7 +38,51 @@ deletion then raise `AttributeError`. Framework-owned lifecycle and evidence tra
 use `object.__setattr__` directly; suite code receives no framework escape-hatch method.
 The static no-self-mutation rule remains defense in depth.
 
-**Scope note:** ctx is strictly instance-local. A parent's ctx never flows into composed children — composition is the only coupling mechanism, and ctx inheritance would smuggle hidden state across it.
+**Scope note:** ctx is strictly instance-local. A parent's ctx never flows into composed children — composition is the only coupling mechanism, and ctx inheritance would smuggle hidden state across it. One leaf never reads another's reading either: what a sibling observed is on that sibling's record, not in ctx.
+
+## Evidence Travels With the Verdict
+A test method is a function from `utils.ctx` to a verdict. Its readings leave with the
+verdict: `PASS({...})` on the pass path, `TestFailure(..., evidence={...})` on the fail
+path. `@evidence` is the method's return signature — it names the keys a pass must
+carry, beside the code that keeps the promise (issue #118).
+
+```python
+@evidence("output_voltage_v")
+async def _check_voltage(self, utils: TestUtils) -> Verdict:
+    v = await self._read(utils, utils.ctx["ip"])
+    reading = {"output_voltage_v": v}
+    if v <= utils.ctx["voltage_high_v"]:
+        return PASS(reading)
+    raise TestFailure(f"{v} V exceeds limit", evidence=reading)
+```
+
+- The declaration is fixed at class definition and never computed at run time. Pass
+  criteria that vary by SKU or fixture are a leaf argument or a different leaf, decided
+  before `build_suite` runs.
+- A pass without its declared evidence is not a pass: the child boundary refuses it as a
+  `ContractViolation` naming the leaf and the key. Extra keys are allowed; the
+  declaration is a floor. A failure is not held to it, since a failure may fire before
+  every reading was taken; it records what it is handed.
+- The payload is validated entry by entry. A value that is not JSON, or a key that shadows
+  a ctx entry or the reserved `measurements` slot, is a `ContractViolation` naming the
+  key. Nothing is stripped silently.
+- An undecorated method may still return `PASS(payload)`; the payload is recorded
+  unchecked. Declare when you want to be held to it.
+- The same decorator accepts a `TypedDict`. With `-> Verdict[MyEvidence]` on the method,
+  pyright checks the `PASS({...})` payload against the shape at write time; at run time
+  the `TypedDict`'s required keys are the declaration.
+
+```python
+class VoltageEvidence(TypedDict):
+    output_voltage_v: float
+
+
+@evidence(VoltageEvidence)
+async def _check_voltage(self, utils: TestUtils) -> Verdict[VoltageEvidence]: ...
+```
+
+`litmus-check` enforces the declaration statically as `litmus/evidence-fulfilled` and the
+read-only context as part of `litmus/ctx-provenance`.
 
 ## Via-Routing — Framework-Managed Lifecycle
 
@@ -64,9 +108,12 @@ hop out from under a sibling. A declared via that never opens a shell is a
 
 ## run_data — Automatic Structured Evidence
 The default `run_data` returns a detached snapshot of all serializable values from
-`utils.ctx`. JSON primitives (with finite numbers), plain dicts with string keys, and
-lists survive; class instances (`SshInterface`, etc.), functions, live handles,
-non-finite floats, and cycles are stripped automatically.
+`utils.ctx`: the ctx view. JSON primitives (with finite numbers), plain dicts with string
+keys, and lists survive; class instances (`SshInterface`, etc.), functions, live handles,
+non-finite floats, and cycles are stripped automatically. A leaf's `RunResult.run_data` is
+that view plus the evidence its verdict carried, flat, so the limit sits beside the
+reading; the leaf's `summary_tree` node carries the same evidence and its declaration.
+A non-leaf node's `run_data` is the ctx view alone.
 
 Stripping is deterministic and all-or-nothing at each top-level ctx entry. If a list or
 dict contains one invalid nested value, that complete entry is absent from `run_data`.
@@ -86,7 +133,8 @@ async def configure(self, utils: TestUtils) -> dict[str, Any]:
 # }
 ```
 
-Override `run_data` only when you need computed or filtered output:
+Override `run_data` only when you need computed or filtered output from the context.
+An override sees the ctx view, not the readings, which are merged when the leaf settles:
 
 ```python
 from litmus import JsonObject
@@ -243,7 +291,7 @@ timeout evidence, then the framework runs the via's cleanup and releases any bor
 upstream hop.
 
 ## Pass/Fail/Aborted Contract
-- A test method returning the `PASS` sentinel → test passes (state `Pass`). The check is `result is PASS` — identity, not equality. The string `"PASS"` does not pass.
+- A test method returning `PASS`, or `PASS(evidence)` with its readings → test passes (state `Pass`). The check is `isinstance(result, Verdict)`, and only `PASS` mints one. The string `"PASS"` does not pass, and a `PASS` missing a key its `@evidence` declared is a contract violation, not a pass.
 - A test method raising `TestFailure` (or subclass) → test fails with structured data (state `Fail`)
 - A test method raising any other exception → BUG-signaled Fail: the developer didn't model this failure mode
 - A test method returning anything other than the `PASS` sentinel (including falling through with `None`) → node-local `Aborted`. No verdict was produced, so the framework refuses to forge one. Siblings are unaffected.
@@ -346,9 +394,9 @@ Register once at the root — the framework fires them around every executed tes
 The exception-path behavior is: throw from either hook → run halts → every enclosing node transitions to `Aborted` → every in-flight SSH session and subprocess is killed immediately. A 30-minute firmware flash mid-abort must NOT continue to mutate the hardware.
 
 ## Configure-Returns-Context Pattern
-`configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant leaves. No instance fields are needed for configure-phase data.
+`configure()` returns a plain dict; the framework merges it into `utils.ctx` for test methods, survey hooks, `cleanup()`, and all descendant leaves, then closes it. No instance fields are needed for configure-phase data.
 
-The return value is the contract with the test methods: it names every key they read with `[]`. Seed no placeholders — a reading a test method has not taken yet is absent, not `0.0` — and do not rely on a sibling leaf's write, which is order under `sequence` and a race under `parallel`. `litmus-check` enforces this statically as `litmus/ctx-provenance`; at run time a `[]` read of a missing key is a `ContractViolation` naming the test and the key, while `.get()` and `in` read an optional key (issue #112).
+The return value is the contract with the test methods: it names every key they read with `[]`, and it is all they will ever find there. Seed no placeholders — a reading belongs on the verdict, not in ctx — and nothing writes ctx after configure returns. `litmus-check` enforces both statically as `litmus/ctx-provenance`; at run time a `[]` read of a missing key, or any later write, is a `ContractViolation` naming the test and the key, while `.get()` and `in` read an optional key (issues #112, #118).
 
 The framework annotation is `Mapping[str, Any]`; a plain `dict[str, Any]` return is the
 default and satisfies it. When a suite benefits from precise key types, define a local
@@ -522,7 +570,7 @@ Use when tests are fully independent. The Floor Technician sees everything broke
 
 ## ArpResolver — MAC to IP
 
-`ArpResolver` is a composable utility for resolving a device's IP from its MAC. Create one via `utils.get_arp_resolver()` in `configure()`, call `resolve()`, and return both the resolved data and the resolver into ctx. Test methods read the IP and the resolver from `utils.ctx`. Call `arp.ping(utils)` for reachability. Call `arp.reacquire(utils)` after anything that may change the IP (reboot, firmware flash, DHCP churn).
+`ArpResolver` is a composable utility for resolving a device's IP from its MAC. Create one via `utils.get_arp_resolver()` in `configure()`, call `resolve()`, and return both the resolved data and the resolver into ctx. Test methods read the IP and the resolver from `utils.ctx`. Call `arp.ping(utils)` for reachability. Call `arp.reacquire(utils)` after anything that may change the IP (reboot, firmware flash, DHCP churn): it returns the new address and the resolver remembers it, so a later `ping` dials the address it last resolved while ctx stays as `configure()` left it. Carry the new address as evidence on the verdict if the Floor Technician should see it.
 
 `ArpResolutionFailure` is not a `TestFailure`. Catch it in `configure` and re-raise as `TestFailure` so a missing ARP entry is a verdict. Uncaught, it is a developer bug — the suite did not model the failure mode.
 
@@ -611,6 +659,6 @@ root `summary_tree` without adding another evidence API.
 
 ## run_data — Structured Evidence
 
-Configure's return values flow into ctx and appear in `RunResult.run_data` automatically. Class instances and non-serializable values are stripped. Override `run_data` only when you need computed or filtered output.
+Configure's return values flow into ctx and appear in `RunResult.run_data` automatically; the readings a leaf hands back with its verdict appear on that leaf's record. Class instances and non-serializable values are stripped from the ctx view. Override `run_data` only when you need computed or filtered output from the context.
 
 See `examples/run_data_evidence.py`.

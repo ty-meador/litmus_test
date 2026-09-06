@@ -4,8 +4,8 @@ import json
 from collections.abc import Mapping
 from typing import Any, cast
 
-from litmus import PASS, LitmusTest, TestUtils, Verdict
-from litmus.evidence import JsonObject, snapshot_run_data
+from litmus import PASS, AfterEachContext, LitmusTest, RunResult, TestUtils, Verdict
+from litmus.run_data import JsonObject, snapshot_run_data
 
 
 class _Handle:
@@ -97,21 +97,22 @@ class TestLitmusTestRunData:
                 return self.test("sample", self._sample)
 
             async def _sample(self, utils: TestUtils) -> Verdict:
-                utils.ctx["voltage"] = 12.1
-                return PASS
+                return PASS({"voltage": 12.1})
 
         suite = Suite(name="power-supply")
 
         result = await suite.main()
 
-        expected: JsonObject = {
-            "measurements": [],
-            "serial": "SN-0042",
-            "voltage": 12.1,
-        }
-        assert suite.run_data == expected
-        assert result.run_data == expected
-        assert result.to_json()["run_data"] == expected
+        # The authored node's run_data is the ctx view; the leaf's carries its own
+        # evidence beside that view (issue #118).
+        context_view: JsonObject = {"measurements": [], "serial": "SN-0042"}
+        assert suite.run_data == context_view
+        assert result.run_data == context_view
+        assert result.to_json()["run_data"] == context_view
+        leaf = result.summary_tree.children[0]
+        assert leaf.evidence == {"voltage": 12.1}
+        assert leaf.evidence_declared is None
+        assert result.summary_tree.evidence is None
 
     async def test_run_data_is_a_detached_snapshot_of_node_local_context(self) -> None:
         samples = [1]
@@ -136,20 +137,35 @@ class TestLitmusTestRunData:
             "evidence": {"samples": [1, 2]},
         }
 
-    async def test_cleanup_context_is_included_in_the_completed_result(self) -> None:
+    async def test_a_leaf_result_is_the_context_view_plus_its_evidence(self) -> None:
         class Suite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                return {"limit_v": 12.5, "transport": _Handle()}
+
             def build_suite(self) -> LitmusTest:
                 return self.test("claim", self._claim)
 
             async def _claim(self, utils: TestUtils) -> Verdict:
-                return PASS
+                return PASS({"reading_v": 12.1, "samples": [1, 2]})
 
-            async def cleanup(self, utils: TestUtils) -> None:
-                utils.ctx["restored"] = True
+        leaves: dict[str, RunResult] = {}
 
-        result = await Suite(name="rack").main()
+        async def after_each(hook: AfterEachContext) -> None:
+            leaves[hook.name] = hook.result
 
-        assert result.run_data == {"measurements": [], "restored": True}
+        root = await Suite(name="rack").run(after_each=after_each, allow_unpaired_hooks=True)
+        result = leaves["claim"]
+
+        assert root.run_data == {"measurements": [], "limit_v": 12.5}
+        assert result.run_data == {
+            "measurements": [],
+            "limit_v": 12.5,
+            "reading_v": 12.1,
+            "samples": [1, 2],
+        }
+        assert result.summary_tree.evidence == {"reading_v": 12.1, "samples": [1, 2]}
+        tree = cast("dict[str, object]", result.to_json()["summary_tree"])
+        assert tree["evidence"] == {"reading_v": 12.1, "samples": [1, 2]}
 
     async def test_composed_authored_nodes_capture_only_their_own_context(self) -> None:
         class Child(LitmusTest):

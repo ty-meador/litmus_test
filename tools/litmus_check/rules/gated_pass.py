@@ -67,6 +67,9 @@ class GatedPassRule(Rule):
 
 def _returns_pass(node: ast.Return) -> bool:
     value = node.value
+    if isinstance(value, ast.Call):
+        # ``return PASS({...})`` carries evidence; it is still a PASS (issue #118).
+        value = value.func
     if isinstance(value, ast.Name):
         return value.id == _PASS
     return isinstance(value, ast.Attribute) and value.attr == _PASS

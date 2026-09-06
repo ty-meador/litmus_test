@@ -31,7 +31,7 @@ type `run-result`; consumers do not need to derive the run directory name.
 | `summary_tree` | object | Recursive snapshot rooted at this node. |
 | `physical_location` | string | `PHYSICAL_LOCATION`, or `unknown` when absent. |
 | `env` | object | Environment snapshot taken at the start of the run, filtered per the run's allow or deny list; see below. |
-| `run_data` | object | Detached structured evidence snapshot. It always contains a framework-owned `measurements` array reserved for a future parametric-measurement protocol. |
+| `run_data` | object | Detached structured evidence snapshot: the JSON-safe view of the node's ctx, plus, on a leaf, the evidence its verdict carried. It always contains a framework-owned `measurements` array reserved for a future parametric-measurement protocol. |
 
 Version 1 does not define measurement entries, limits, units, aggregation, SPC, or Cpk;
 the reserved `measurements` array is therefore empty. Integrators must not infer
@@ -189,6 +189,8 @@ Every `summary_tree` node contains exactly these version-1 fields:
 | `timeout` | object or null | Structured time-budget evidence for this exact node. |
 | `log_path` | string or null | POSIX path of this node's `timeline.jsonl`, relative to the run directory. Null when the node never ran or when its records rolled up into an ancestor. |
 | `children` | array | Ordered child nodes. Groups retain declaration order after settlement. |
+| `evidence` | object or null | The readings this leaf's verdict carried: `PASS({...})` or `TestFailure(..., evidence={...})`, validated entry by entry and detached. Null on a node that is not a leaf, that never ran, or whose verdict carried none. |
+| `evidence_declared` | array of string or null | The keys the leaf's `@evidence` declaration promised on `PASS`, in declaration order. A declared key absent from `evidence` is a reading that was not taken; show it by name. Null when the node is not a leaf or declared nothing. |
 
 A null tree state means pending/unreached; it is not a fourth terminal state. A stopped
 sequence retains its unexecuted descendants with null states, so the root snapshot

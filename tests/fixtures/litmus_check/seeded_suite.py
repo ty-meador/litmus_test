@@ -7,7 +7,7 @@ end rather than merely somewhere.
 
 from typing import Any
 
-from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict, evidence
 
 
 class SeededBlade(LitmusTest):
@@ -49,3 +49,9 @@ class SeededBlade(LitmusTest):
         if utils.ctx["rail_v"] > 0:  # seed: litmus/ctx-provenance
             return PASS
         raise TestFailure("rail down", "> 0 V", "0 V")
+
+    @evidence("reading_c")
+    async def _unfulfilled(self, utils: TestUtils) -> Verdict:
+        if self._limit_c:
+            return PASS  # seed: litmus/evidence-fulfilled
+        raise TestFailure("no limit", "> 0", "0")

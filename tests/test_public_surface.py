@@ -50,6 +50,8 @@ def _reference_rows() -> dict[str, str]:
 
 
 def _kind_of(obj: object) -> str:
+    if inspect.isfunction(obj):
+        return "function"
     if isinstance(obj, TypeAliasType):
         return "type alias"
     if inspect.isclass(obj):

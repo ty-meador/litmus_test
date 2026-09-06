@@ -1,8 +1,10 @@
-"""``litmus/ctx-provenance``: every ``utils.ctx["k"]`` read is provided by ``configure()``.
+"""``litmus/ctx-provenance``: every ``utils.ctx["k"]`` read is provided by ``configure()``,
+and ctx is never written.
 
-Strict by ruling (issue #112): a read is provided by ``configure()``'s returned dict or
-``TypedDict``, or by a write earlier in the same method. A sibling method's write does
-not count. Reads through ``.get()`` and ``in`` are the author declaring a key optional.
+Strict by ruling (issues #112 and #118): a read is provided by ``configure()``'s returned
+dict or ``TypedDict`` and by nothing else. Ctx is read-only after configure returns, so
+every write is flagged, in every lifecycle method including ``configure`` itself. Reads
+through ``.get()`` and ``in`` are the author declaring a key optional.
 """
 
 import io
@@ -25,7 +27,7 @@ def _lines(source: str) -> list[int]:
     return [violation.line for violation in _check(source)]
 
 
-class TestCtxProvenanceFires:
+class TestCtxProvenanceFiresOnReads:
     def test_read_of_a_key_configure_never_returns(self) -> None:
         source = """
             class Suite(LitmusTest):
@@ -51,38 +53,6 @@ class TestCtxProvenanceFires:
                     return utils.ctx["ip"]
         """
         assert _lines(source) == [6]
-
-    def test_sibling_write_does_not_count_and_is_named(self) -> None:
-        source = """
-            class Suite(LitmusTest):
-                async def configure(self, utils: TestUtils) -> dict[str, Any]:
-                    return {}
-                async def _first(self, utils: TestUtils) -> Verdict:
-                    utils.ctx["ip"] = "10.0.0.1"
-                    return PASS
-                async def _second(self, utils: TestUtils) -> Verdict:
-                    if utils.ctx["ip"]:
-                        return PASS
-                    raise TestFailure("no", "ip", "none")
-        """
-        violations = _check(source)
-
-        assert [v.line for v in violations] == [9]
-        assert "_first() writes it, but a method may not rely on a sibling's write" in (
-            violations[0].message
-        )
-
-    def test_read_before_the_same_method_writes_it(self) -> None:
-        source = """
-            class Suite(LitmusTest):
-                async def configure(self, utils: TestUtils) -> dict[str, Any]:
-                    return {}
-                async def _claim(self, utils: TestUtils) -> Verdict:
-                    utils.ctx["n"] = utils.ctx["n"] + 1
-                    utils.ctx["m"] += 1
-                    return PASS
-        """
-        assert _lines(source) == [6, 7]
 
     def test_cleanup_and_hooks_and_configure_are_readers(self) -> None:
         source = """
@@ -136,6 +106,91 @@ class TestCtxProvenanceFires:
         assert [v.line for v in violations] == [7]
         assert '"firmware"' in violations[0].message
 
+    def test_a_subscripted_verdict_annotation_still_marks_a_test_method(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                    return {}
+                async def _claim(self, utils: TestUtils) -> Verdict[_Shape]:
+                    return utils.ctx["ip"]
+                async def _other(self, utils: TestUtils) -> "litmus.Verdict[_Shape]":
+                    return utils.ctx["ip"]
+        """
+        assert _lines(source) == [6, 8]
+
+
+class TestCtxProvenanceFiresOnWrites:
+    def test_every_write_is_flagged_and_named(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                    return {"n": 0, "m": 0}
+                async def _claim(self, utils: TestUtils) -> Verdict:
+                    utils.ctx["reading"] = 1.0
+                    utils.ctx["n"] = utils.ctx["n"] + 1
+                    utils.ctx["m"] += 1
+                    utils.ctx.update(attempts=1)
+                    utils.ctx.setdefault("samples", [])
+                    utils.ctx.pop("n")
+                    utils.ctx.popitem()
+                    utils.ctx.clear()
+                    utils.ctx |= {"o": 1}
+                    utils.ctx[name] = 1
+                    return PASS
+        """
+        violations = _check(source)
+
+        assert [v.line for v in violations] == [6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        written = [v.message.split(": ", 1)[1].split(" is written")[0] for v in violations]
+        assert written == [
+            "'reading'",
+            "'n'",
+            "'m'",
+            "update(...)",
+            "'samples'",
+            "'n'",
+            "popitem(...)",
+            "clear(...)",
+            "ctx |= ...",
+            "a computed key",
+        ]
+        assert all("ctx is read-only after configure()" in v.message for v in violations)
+        assert all("carry it as evidence on PASS" in v.message for v in violations)
+
+    def test_a_write_through_an_alias_is_flagged(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                    return {}
+                async def _claim(self, utils: TestUtils) -> Verdict:
+                    ctx = cast("_Device", utils.ctx)
+                    ctx["reading"] = 1.0
+                    return PASS
+        """
+        assert _lines(source) == [7]
+
+    def test_configure_and_cleanup_writes_are_flagged_too(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                    utils.ctx["early"] = 1
+                    return {"rail": "on"}
+                async def cleanup(self, utils: TestUtils) -> None:
+                    utils.ctx["restored"] = True
+        """
+        assert _lines(source) == [4, 7]
+
+    def test_writes_are_flagged_even_when_configure_is_unreadable(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                    return self._build()
+                async def _claim(self, utils: TestUtils) -> Verdict:
+                    utils.ctx["reading"] = 1.0
+                    return utils.ctx["ip"]
+        """
+        assert _lines(source) == [6]
+
 
 class TestCtxProvenanceStaysQuiet:
     def test_provided_by_dict_literal_typed_dict_and_local_dict(self) -> None:
@@ -170,24 +225,23 @@ class TestCtxProvenanceStaysQuiet:
         """
         assert _lines(source) == []
 
-    def test_same_method_write_before_read_and_optional_reads(self) -> None:
+    def test_optional_reads_and_mutation_of_a_value_held_in_ctx(self) -> None:
         source = """
             class Suite(LitmusTest):
                 async def configure(self, utils: TestUtils) -> dict[str, Any]:
-                    return {}
+                    return {"samples": [], "rail": rail}
                 async def _claim(self, utils: TestUtils) -> Verdict:
-                    utils.ctx["reading"] = 1.0
-                    utils.ctx.update(attempts=1)
-                    utils.ctx.setdefault("samples", [])
                     optional = utils.ctx.get("optional")
                     present = "flag" in utils.ctx
-                    if utils.ctx["reading"] and utils.ctx["attempts"] and utils.ctx["samples"]:
-                        return PASS
+                    utils.ctx["samples"].append(1)
+                    utils.ctx["rail"].drop()
+                    if utils.ctx["samples"]:
+                        return PASS({"count": len(utils.ctx["samples"])})
                     raise TestFailure("no", str(optional), str(present))
         """
         assert _lines(source) == []
 
-    def test_unreadable_configure_return_silences_the_class(self) -> None:
+    def test_unreadable_configure_return_silences_the_class_reads(self) -> None:
         spread = """
             class Suite(LitmusTest):
                 async def configure(self, utils: TestUtils) -> dict[str, Any]:
@@ -219,19 +273,19 @@ class TestCtxProvenanceStaysQuiet:
             assert _lines(source) == [], source
         assert _lines(foreign_base) == []
 
-    def test_dynamic_keys_wildcard_updates_and_non_suite_classes(self) -> None:
+    def test_dynamic_keys_and_non_suite_classes(self) -> None:
         source = """
             class Suite(LitmusTest):
                 async def configure(self, utils: TestUtils) -> dict[str, Any]:
                     return {}
                 async def _claim(self, utils: TestUtils) -> Verdict:
                     name = "x"
-                    utils.ctx.update(await self._probe())
-                    if utils.ctx[name] and utils.ctx["anything"]:
+                    if utils.ctx[name]:
                         return PASS
                     raise TestFailure("no", "x", "none")
             class Helper:
                 async def _claim(self, utils: TestUtils) -> Verdict:
+                    utils.ctx["ip"] = 1
                     return utils.ctx["ip"]
         """
         assert _lines(source) == []
@@ -270,12 +324,9 @@ class TestCtxProvenanceEdges:
                     return None
                 async def _claim(self, utils: TestUtils) -> "Verdict":
                     count: int
-                    name = "k"
-                    utils.ctx[name] = 1
-                    utils.ctx.setdefault(name, [])
-                    utils.ctx.update(**extra)
-                    utils.ctx.update({"literal": 1})
-                    if utils.ctx["literal"]:
+                    other["k"] = 1
+                    other.update(k=1)
+                    if utils.ctx.get("literal"):
                         return PASS
                     raise TestFailure("no", "1", "0")
         """
@@ -342,6 +393,19 @@ class TestCtxProvenanceEdges:
                     return utils.ctx["anything"]
         """
         assert _lines(dict_call_splat) == []
+        local_setdefault = """
+            class Suite(LitmusTest):
+                async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                    built = {}
+                    built.setdefault("rail", "on")
+                    built.setdefault(name, "on")
+                    built.update({"limit": 1})
+                    built.update(**extra)
+                    return built
+                async def _claim(self, utils: TestUtils) -> Verdict:
+                    return utils.ctx["rail"] and utils.ctx["limit"] and utils.ctx["other"]
+        """
+        assert _lines(local_setdefault) == [11]
 
     def test_typed_dict_inheritance_and_string_annotation(self) -> None:
         source = """

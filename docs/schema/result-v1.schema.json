@@ -150,7 +150,7 @@
     },
     "summaryTreeNode": {
       "type": "object",
-      "required": ["name", "type", "state", "failure", "timeout", "log_path", "children"],
+      "required": ["name", "type", "state", "failure", "timeout", "log_path", "children", "evidence", "evidence_declared"],
       "properties": {
         "name": { "type": "string", "description": "Stable node name." },
         "type": { "$ref": "#/$defs/nodeType" },
@@ -174,6 +174,16 @@
           "type": "array",
           "items": { "$ref": "#/$defs/summaryTreeNode" },
           "description": "Ordered child nodes; groups retain declaration order after settlement."
+        },
+        "evidence": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "description": "The readings this leaf's verdict carried (PASS(evidence) or TestFailure(..., evidence=...)), validated entry by entry and detached. Null on a node that is not a leaf, that never ran, or whose verdict carried none (issue #118)."
+        },
+        "evidence_declared": {
+          "type": ["array", "null"],
+          "items": {"type": "string"},
+          "description": "The keys the leaf's @evidence declaration promised on PASS, in declaration order. A declared key absent from evidence is a reading that was not taken. Null when the node is not a leaf or declared nothing."
         }
       },
       "description": "One node of the structural view."
