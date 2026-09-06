@@ -16,6 +16,11 @@ kept so that it exists before the promise does.
   destination; `--force` overwrites. The files pass `litmus-check`, ruff, and pyright
   strict unmodified. Teaching examples are verified against that core shape rather
   than regenerated from it. `docs/litmus-new.md` (issue #79).
+- `docs/floor-technician.md`, the station page: how to read `result.json` without
+  reading suite source, the Fail / Aborted / bug-signal recovery protocol, and
+  every Inspector JSON field explained from the Floor Technician's side. Linked
+  from the README and `docs/overview.md`; the docs site (issue #82) publishes
+  `docs/` when it lands (issue #83).
 - `litmus run <path-or-module>[::SuiteClass]`, the runner: loads a suite file or
   module, selects one `LitmusTest` subclass, runs it, and exits 0 Pass, 1 Fail,
   2 Aborted, 3 usage error. `--artifact-root DIR` overrides `LITMUS_ARTIFACT_ROOT`,
