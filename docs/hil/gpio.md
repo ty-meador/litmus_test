@@ -1,13 +1,13 @@
 # Design note: GPIO interface contract
 
-Status: DRAFT — awaiting Ty's signature on #93
+Status: SIGNED — Ty ruled the open questions on #93 on 2026-09-07
 
-This note proposes the developer-framework contract for digital I/O pins —
+This note states the developer-framework contract for digital I/O pins —
 direction, level, debounce, safe-state on abort, the error taxonomy for a pin
 that will not settle, and timing guarantees. It is written to the diligence of
 `docs/contracts.md` and governed by the three rulings in `docs/hil/index.md`.
 All names below (`GpioInterface`, `GpioPin`, `PinDirection`, `PinLevel`,
-`PinSettleFailure`) are provisional: they name the shape being signed off, not
+`PinSettleFailure`) are provisional: they name the shape Ty signed off, not
 a promised spelling.
 
 ## Why not an `exec` subclass
@@ -35,39 +35,66 @@ regardless of backend:
   lifetime — a suite that needs the other direction opens a different
   declared pin, it does not flip one live. `set_level(pin, PinLevel.HIGH |
   PinLevel.LOW)` and `read_level(pin) -> PinLevel` are the only level
-  operations. Setting an input pin or reading an output-only pin (on hardware
+  operations. `PinLevel` carries three members, not two: `HIGH`, `LOW`, and
+  `UNAVAILABLE` — the last meaning the controller could not be reached for
+  this read. A two-valued return would have to answer that case with a level
+  nobody measured, and there is no honest choice between them.
+  Setting an input pin or reading an output-only pin (on hardware
   that cannot read back its own output) is a `TypeError` at the call site, not
   a silent no-op — the same posture `RemoteInterface.exec` takes toward a
   disconnected transport, caught before it can be mistaken for a hardware
   reading.
-- **Debounce.** `read_level` on an input pin accepts a `settle: float` (seconds,
-  default per-backend but always explicit in the resolved call) naming how
-  long the level must hold steady before the read returns. The framework
-  samples at a fixed interval no coarser than a tenth of `settle` and returns
-  the first level that holds for the full window. A pin that never stops
-  chattering within `settle` does not return a guessed value — it raises
-  (see error taxonomy below). Debounce is symmetric: it is not a filter for
-  "the level I expected," it is a filter for "the level that stopped moving."
+- **Debounce.** A read on an input pin names two quantities, never one: a
+  **stability window** — how long the level must hold unchanged for the
+  reading to count — and an **acquisition deadline** — how long the framework
+  keeps looking for such a stretch. Both are seconds, both validated positive
+  and finite, and the deadline must exceed the window. One number cannot carry
+  both jobs: a transition halfway through a window leaves no complete stable
+  stretch before that same instant, so a single `settle` can demand an outcome
+  it has also made unreachable. Given the two, the framework samples at an
+  interval no coarser than a tenth of the window and returns the first level
+  that holds for a full window. A pin still chattering when the deadline
+  passes does not return a guessed value — it raises (see the failure
+  vocabulary below). Both defaults are per-backend but always explicit in the
+  resolved call. Debounce is symmetric: it is not a filter for "the level I
+  expected," it is a filter for "the level that stopped moving."
 - **Safe-state on abort.** Every declared output pin carries a required idle
   level, given at declaration time, not inferred from its first `set_level`
-  call. When the run-level abort fires — an integration hook throw, an
-  operator SIGINT/SIGTERM, or a time-budget expiry on the node that owns the
-  pin — every output pin this interface opened is driven to its declared idle
-  level before the interface reports `cancel_in_flight` complete. This is the
-  GPIO-specific instance of the In-Flight Termination Contract's "cancel the
-  resource, not just the coroutine": for a relay driving mains power or a
-  reset line holding a DUT in a known state, leaving the last-written level in
-  place across an abort is the failure mode this contract exists to prevent.
-  Input pins have no safe-state action; they carry no risk from being read
-  after abort, and `cancel_in_flight` stops accepting reads immediately.
+  call. Two different events drive pins to idle, and this note keeps them
+  apart because the contracts do:
+    - *The run-level halt* — an integration hook throw, or an operator
+      SIGINT/SIGTERM — drives every output pin that every open
+      `GpioInterface` holds to its declared idle level before any interface
+      reports `cancel_in_flight` complete. The whole bench is coming down.
+    - *A node's time budget expiring is not that halt.* Deadline Aborted is
+      node-local: it never fires the shared run halt and never cascades past
+      the bounded subtree (`docs/contracts.md`, Time Budget Contract). It
+      drives only the pins the cut subtree itself opened; an inherited
+      controller or a borrowed `via` hop is never in that owned set, and a
+      sibling outside the subtree is untouched under the Group Isolation
+      Contract. On a rack of thirty units, one node overrunning its clock must
+      not idle the other twenty-nine.
+  The sweep is owed under both budget names. `fail_after` renders Fail and
+  `abort_after` renders node-local Aborted; the verdict differs, the safe
+  state does not. This is the GPIO-specific instance of the In-Flight
+  Termination Contract's "cancel the resource, not just the coroutine": for a
+  relay driving mains power or a reset line holding a DUT in a known state,
+  leaving the last-written level in place across an abort is the failure mode
+  this contract exists to prevent. Input pins have no safe-state action; they
+  carry no risk from being read after abort, and `cancel_in_flight` stops
+  accepting reads immediately.
 - **Timing guarantees.** `set_level` and `read_level` (after debounce settles)
   complete within a bounded, backend-declared latency ceiling — the interface
   states its worst-case pin-toggle latency so a suite author can reason about
   whether a protocol timing requirement (a reset pulse width, a chip-select
   setup time) is achievable at all through this backend before writing the
-  test. A call that cannot complete within that ceiling is a timeout, reported
-  through the existing Time Budget Contract if the calling node declared one,
-  or as a `PinSettleFailure` if not.
+  test. A call that cannot complete within that ceiling is a
+  backend-operation timeout — the controller gave up — and it is reported as
+  the operational failure below. It is not the node's clock expiring, and the
+  record must never conflate the two: a suite that declared a generous
+  `fail_after` has not thereby reclassified a controller that timed out in
+  milliseconds, and a node deadline firing during a pin call has not made the
+  controller at fault.
 
 **Developer obligation:**
 
@@ -76,13 +103,23 @@ regardless of backend:
   A pin whose idle level is not knowable ("depends on what the last test left
   it at") is a design defect in the test, not something the framework can
   paper over.
-- Use `settle` deliberately. The default is not "fast enough for every
-  signal" — a mechanical relay and a solid-state one debounce on different
-  timescales, and the author who knows the hardware states the number.
-- Treat `PinSettleFailure` as a `TestFailure` opportunity, not a bug: catch it
-  where a chattering pin is itself the hardware finding (a flaky connector), and
-  let it propagate as a plain exception (becoming a `ContractViolation`) only
-  where debounce failure truly indicates a test-harness bug.
+- State both debounce quantities deliberately. The defaults are not "right for
+  every signal" — a mechanical relay and a solid-state one settle on different
+  timescales, and a noisy line often needs a strict window with a generous
+  deadline. The author who knows the hardware states both numbers.
+- Catch `PinSettleFailure` and decide what it means. It is a `LitmusError`,
+  not a `TestFailure`, and that ancestry is the whole point: a pin that will
+  not stop moving does not by itself say whether the DUT is faulty, the
+  harness is noisy, or the probe is loose. The author models it into a verdict
+  or the child boundary classifies the escape as the bug it is — a mode the
+  suite never handled.
+- Handle `PinLevel.UNAVAILABLE` at every read. It is a real state of the
+  bench, not defensive padding: the controller was unreachable and no
+  measurement exists. Compare against the member you mean
+  (`if level is PinLevel.LOW:`), never against its negation —
+  `if level != PinLevel.HIGH:` quietly reads an unreachable controller as a
+  low line, and a technician acting on that verdict believes a wire is dead
+  when nothing confirmed it.
 
 **Consequence:** A relay left energized, a reset line left asserted, or a
 power-enable pin left high across an aborted run is a safety and equipment-
@@ -122,16 +159,24 @@ lifecycle.
 
 | Situation | Raised as | Terminal state |
 |---|---|---|
-| A pin never settles within `settle` | `PinSettleFailure` (provisional; a `TestFailure` subclass, parallel to `ArpResolutionFailure`'s relationship to `TestFailure`) | Fail, if the author catches and re-raises as a verdict; a `ContractViolation`-wrapped Fail if it escapes as a plain exception |
+| A pin never settles within its acquisition deadline | `PinSettleFailure` (provisional; a `LitmusError`, deliberately **not** a `TestFailure` — the exact posture `ArpResolutionFailure` holds, `src/litmus/errors.py`) | Fail when the author catches it and states the verdict; a `ContractViolation`-wrapped Fail (`bug: true`) when it escapes, because the suite never modeled the mode |
+| A pin call exceeds the backend's declared latency ceiling | `PinSettleFailure`, naming the backend operation | As above. Never recorded as a node time-budget expiry |
 | Direction/level operation misused (write to an input, read an output-only pin) | `TypeError` at the call site | `ContractViolation` (Fail, `bug: true`) — same posture as `ExecRouting`'s connection-pair `TypeError`s |
-| Backend cannot reach the physical controller | `ConnectionError` from the interface's own `connect`/`exec`-equivalent | Absorbed the way `RemoteInterface.exec`'s `ConnectionError` is absorbed today — not a bug, a hardware-unreachable reading for the test method to judge |
-| Integration hook throws while pins are held mid-toggle | Framework raises `ExternalIntegrationFailure` | Aborted; every open `GpioInterface` is driven to idle as part of the halt, per the In-Flight Termination Contract |
-| Operator SIGINT/SIGTERM mid-run | Framework raises `OperatorInterrupt` | Aborted; same idle-drive sweep |
+| Backend cannot reach the controller during a read | No exception: `read_level` returns `PinLevel.UNAVAILABLE` | Whatever verdict the author writes for that state. An unhandled third member is not a framework error — it is a reading the suite declined to judge |
+| Backend cannot reach the controller at bring-up | `ConnectionError` from the interface's own `connect` | Absorbed the way `RemoteInterface`'s connect failures are absorbed today — not a bug, a hardware-unreachable condition for the test method to judge |
+| An idle drive cannot be confirmed during the safe-state sweep | No exception; the run is already ending | The node's terminal state is unchanged, and the timeline records the failure to confirm, naming the pin. A sweep that could not verify idle never leaves a success line behind |
+| Integration hook throws while pins are held mid-toggle | Framework raises `ExternalIntegrationFailure` | Aborted; the run-level halt drives every open `GpioInterface` to idle, per the In-Flight Termination Contract |
+| Operator SIGINT/SIGTERM mid-run | Framework raises `OperatorInterrupt` | Aborted; same run-level sweep |
+| A node's time budget expires while it holds pins | Framework settles the node per its declared budget | `fail_after` → Fail, `abort_after` → node-local Aborted; either way only the pins that subtree opened are driven to idle |
 
-No new terminal state is introduced. `PinSettleFailure` is data (a `TestFailure`
-subclass), never control flow — a flaky pin failing to settle is a hardware
-finding, exactly the same posture `TestFailure` already holds for a DUT that
-fails a check.
+No new terminal state is introduced, and no new exception root.
+`PinSettleFailure` is an operational condition rather than a verdict, which is
+why it takes `LitmusError` and not `TestFailure`: "this pin will not stop
+moving" does not tell anyone whether the DUT is faulty, the harness is noisy,
+or the probe is loose, and the framework must not choose among those on the
+author's behalf. That is the epistemic position `ArpResolutionFailure` already
+occupies. `PinLevel.UNAVAILABLE` is likewise data and never control flow — a
+reading the author judges, exactly as a non-zero exit code from `exec` is.
 
 ## Mock and real backends: one contract, two implementations
 
@@ -169,16 +214,26 @@ state was promised without opening the suite source.
 
 ## What the Floor Technician sees
 
-When an abort drives a pin to its idle level, the node's `timeline.jsonl`
-(and its human-readable `timeline.log` twin) carries a log entry at the scope
-of the node that owned the pin, stating which pin was driven and to what
-level, immediately before the node's terminal Aborted entry — the same
-temporal-backbone placement the In-Flight Termination Contract already gives
-a hard-closed SSH transport. `result.json`'s `summary_tree` for that node
-shows `state: "Aborted"`; there is no separate GPIO-specific field, because
-the safe-state action is evidence of what the framework did to protect the
-hardware, not a verdict of its own. A technician reading the timeline sees:
-the run aborted (from `failure`, naming the operator or the integration hook
-that threw), and — from the log line — that the reset/enable/relay pin the
-suite declared was left in its documented idle state, not in whatever level
-the test last happened to set.
+When a pin is driven to its idle level, the node's `timeline.jsonl` (and its
+human-readable `timeline.log` twin) carries a log entry at the scope of the
+node that owned the pin, naming which pin was driven and to what level,
+immediately before that node's terminal entry — the same temporal-backbone
+placement the In-Flight Termination Contract already gives a hard-closed SSH
+transport. The terminal entry is not always Aborted: a run-level halt and an
+`abort_after` expiry both settle the node Aborted, a `fail_after` expiry
+settles it Fail, and the idle sweep is owed under every one of them.
+`result.json`'s `summary_tree` shows whichever state applies; there is no
+separate GPIO-specific field, because a safe-state action is evidence of what
+the framework did to protect the hardware, not a verdict of its own. A
+technician reading the timeline sees why the run ended (from `failure`, naming
+the operator, the integration hook that threw, or the clock that fired) and —
+from the log line — that the reset/enable/relay pin the suite declared was left
+in its documented idle state, not in whatever level the test last happened to
+set.
+
+Where the sweep could not confirm a pin reached its idle level, the timeline
+says exactly that, naming the pin. This is the most load-bearing line in the
+note. A technician reaching into a rack trusts a record that says a relay was
+de-energized, and a success line written for a drive nobody confirmed is how
+someone puts a hand on a line believing it dead. An unconfirmed idle is
+recorded as unconfirmed.
