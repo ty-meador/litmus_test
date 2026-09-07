@@ -28,6 +28,7 @@ nav:
   - Contracts: contracts.md
   - Serial/UART (design note): hil/serial.md
   - Inspector JSON: inspector-json.md
+  - Inspector (target specification): inspector.md
   - Measurements: measurements.md
   - JUnit XML: junit-xml.md
   - litmus run: litmus-run.md
