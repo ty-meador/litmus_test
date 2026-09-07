@@ -171,6 +171,12 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 - `litmus-check` rule `litmus/ctx-provenance`: every `utils.ctx["k"]` read in a test
   method, hook, `configure`, or `cleanup` is provided by `configure()`'s return or
   written earlier in the same method; a sibling leaf's write does not count (issue #112).
+- `docs/measurements.md`: the design note for the parametric measurements protocol —
+  `utils.measure(name, value, *, unit=None, limits=None)`, the `measurements` array the
+  reserved `run_data` slot will carry, the evidence-not-verdict rule for limits, and the
+  export contract the downstream SPC/Cpk consumer needs. Barrelled at the package root
+  as `litmus.measure` per Ty's condition on the approval; `utils.measure` stays the
+  documented home. No code changes yet — `#86` implements the note (issue #85).
 
 ### Changed
 
