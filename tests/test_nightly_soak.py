@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from tools.nightly_soak import (
@@ -155,6 +157,32 @@ class TestNightReport:
 
 
 class TestNightlySoak:
+    def test_each_run_records_its_replay_command_before_starting(self, tmp_path: Path) -> None:
+        runner = _FakeRunner({("all", 1): "FAILED tests/a.py::T::t - boom\n"})
+        out = io.StringIO()
+        seeds = [101, 102, 103, 104, 105]
+
+        def run_with_record(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            index = len(runner.argv)
+            series = "soak" if index < 2 else "rack"
+            number = index + 1 if index < 2 else index - 1
+            log = tmp_path / f"{series}-{number:02d}.log"
+            assert log.read_text() == f"$ {shlex.join(argv)}\n"
+            assert f"--hypothesis-seed={seeds[index]}" in argv
+            return runner(argv)
+
+        soak = NightlySoak(
+            env=CI_ENV, post=False, runner=run_with_record, log_dir=tmp_path, out=out
+        )
+        with patch("secrets.randbits", side_effect=seeds):
+            assert soak.run() == 1
+
+        assert len(runner.argv) == len(seeds)
+        for seed in seeds:
+            assert f"--hypothesis-seed={seed}" in out.getvalue()
+        assert "FAILED tests/a.py::T::t" in (tmp_path / "soak-01.log").read_text()
+        assert "2 passed" in (tmp_path / "rack-03.log").read_text()
+
     def test_runs_both_series_the_configured_number_of_times(self, tmp_path: Path) -> None:
         runner, http = _FakeRunner({}), _FakeHttp()
         soak, _ = _soak(runner, http, tmp_path)
@@ -163,7 +191,9 @@ class TestNightlySoak:
         full = [argv for argv in runner.argv if argv[-1] == "-rfE"]
         rack = [argv for argv in runner.argv if argv[-1] == RACK]
         assert (len(full), len(rack)) == (2, 3)
-        assert full[0] == ["uv", "run", "pytest", "-q", "-rfE"]
+        assert full[0][:3] == ["uv", "run", "pytest"]
+        assert full[0][3].startswith("--hypothesis-seed=")
+        assert full[0][4:] == ["-q", "-rfE"]
         assert sorted(path.name for path in tmp_path.iterdir()) == [
             "rack-01.log",
             "rack-02.log",

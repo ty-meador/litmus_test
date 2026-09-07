@@ -174,6 +174,10 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Changed
 
+- The nightly soak draws and records a fresh Hypothesis seed for each pytest run,
+  extending generated composition coverage while retaining a replay command in every
+  run log. The ordinary gate and eight-run race soak keep their fixed seed
+  (follow-up to [!102](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/102)).
 - The pi-hole dogfood example reads the Pi-hole v6 log layout (`FTL.log` and
   `webserver.log` under `/var/log/pihole/`), schedules its survey from
   `post-configure` onward behind an `exec_route` guard so no tail runs on the test
