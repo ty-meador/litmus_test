@@ -27,6 +27,7 @@ nav:
   - Idioms: idioms.md
   - Contracts: contracts.md
   - Inspector JSON: inspector-json.md
+  - Measurements: measurements.md
   - JUnit XML: junit-xml.md
   - litmus run: litmus-run.md
   - litmus new: litmus-new.md
