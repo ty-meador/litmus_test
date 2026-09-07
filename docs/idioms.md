@@ -415,9 +415,49 @@ class DeviceContext(TypedDict):
 async def configure(self, utils: TestUtils) -> DeviceContext: ...
 ```
 
-Generic `TestUtils[CtxT]` typing may later carry the same suite-local type through
-`utils.ctx`, but remains opt-in sugar. The framework stores a dict either way, and
-`run_data` still strips class instances, functions, and live handles value by value.
+### Carrying the same type into the test methods
+
+A `TypedDict` return tells the reader the shape, but `utils.ctx` still hands the test
+methods a `Mapping[str, Any]`, so a misspelled key survives pyright and reaches the
+floor as a `ContextInsufficient` contract violation — a Fail under the bug banner,
+where the author meant to take a reading (issue #112). Naming the type once on the
+class closes that gap: declare
+`class MySuite(LitmusTest[MyCtx])` and annotate the lifecycle methods
+`utils: TestUtils[MyCtx]`, and `utils.ctx["volts"]` is a `float` to the editor while
+`utils.ctx["volt"]` is a type error before it is ever run (issue #75).
+
+```python
+class PowerCtx(TypedDict):
+    rail: str
+    volts: float
+
+
+class PowerSuite(LitmusTest[PowerCtx]):
+    async def configure(self, utils: TestUtils[PowerCtx]) -> PowerCtx:
+        return {"rail": "3v3", "volts": 3.3}
+
+    def build_suite(self) -> LitmusTest:
+        return self.test("rail", self._rail_is_up)
+
+    async def _rail_is_up(self, utils: TestUtils[PowerCtx]) -> Verdict:
+        if utils.ctx["volts"] > 3.0:  # a float here, not Any
+            return PASS
+        raise TestFailure("rail low", "> 3.0V", f"{utils.ctx['volts']}V")
+```
+
+This is sugar, and it is opt-in in both directions. Writing `LitmusTest` and
+`TestUtils` bare means what it always did — the parameter defaults to
+`Mapping[str, Any]` — so no existing suite has to change, and a suite that adopts the
+parameter is making a claim to its own reader, not to the framework. Nothing about the
+run moves: the context object is the framework's `RunContext`, a `dict[str, Any]` it
+owns; a key `configure()` never provided is still a runtime `ContractViolation` rather
+than a static one; and `run_data` still strips class instances, functions, and live
+handles value by value.
+
+Composition stays unparameterized on purpose. `self.test()`, `self.sequence()`,
+`self.parallel()`, and the `via` argument speak of `LitmusTest` nodes of any context
+shape, because a rack composes suites that do not share one context — pinning them to
+a single `CtxT` would make the parameter contagious rather than opt-in.
 
 ```python
 class MyDevice(LitmusTest):
