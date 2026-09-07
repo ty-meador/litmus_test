@@ -36,9 +36,12 @@ rules and pyright strict — an unannotated def fails `make check`.
   The framework annotation for `configure()` is `Mapping[str, Any]` so that a suite may
   narrow that return type to a local `TypedDict` under pyright strict; returning a plain
   `dict[str, Any]` remains the default. The framework copies the return into the dict
-  it owns, so the one runtime shape is `utils.ctx`, not the return value. A future
-  generic `TestUtils[CtxT]` may carry that same annotation as opt-in sugar, but it must
-  still expose the framework-owned dict at runtime. Do not introduce a context
+  it owns, so the one runtime shape is `utils.ctx`, not the return value. The generic
+  `LitmusTest[CtxT]` / `TestUtils[CtxT]` carries that same annotation into the test
+  methods as opt-in sugar (issue #75); both parameters default to `Mapping[str, Any]`,
+  so a bare `TestUtils` annotation means exactly what it always did, and the object
+  exposed at runtime is still the framework-owned dict. Composition — `test`,
+  `sequence`, `parallel`, `via` — stays shape-agnostic. Do not introduce a context
   dataclass or require every suite to parameterize `LitmusTest`.
 - Public packages ship `py.typed`.
 
