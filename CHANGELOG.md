@@ -19,6 +19,9 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- `RunEnv`, the type of `utils.env`: still a read-only mapping, now with `require`,
+  `text`, and `port` readers that Fail the run naming the bench variable to set. The
+  SSH-backed examples use them in place of per-file helper functions.
 - **Phase 0 — Skeleton and kernel of trust.** Python 3.14 with uv, ruff, pyright
   strict, and pytest; the identity-checked `PASS` sentinel, structured failure taxonomy,
   and runtime child boundary. A non-PASS return is node-local Aborted, never an implicit

@@ -25,6 +25,7 @@ the module a name is defined in is an implementation detail. The policy is
 ::: litmus.NodeType
 ::: litmus.OperatorInterrupt
 ::: litmus.Phase
+::: litmus.RunEnv
 ::: litmus.RunResult
 ::: litmus.RunSignal
 ::: litmus.ScopedLogger

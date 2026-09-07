@@ -46,62 +46,6 @@ from typing import Any, ClassVar
 
 from litmus import PASS, LitmusTest, Phase, TestFailure, TestUtils, Verdict, evidence
 
-# --- Environment helpers -----------------------------------------------------------
-#
-# These read `utils.env`, never `os.environ`. The framework hands each run its own
-# environment view so a self-test can inject a target without touching the process,
-# and so the run record can say where a value came from.
-#
-# The failure wording is deliberate. "did not reach a testable state" is the phrase
-# the Floor Technician (FT) is taught to read as "the bench is wrong, not the device",
-# and naming the variable turns the failure into an instruction.
-
-
-def _env_text(utils: TestUtils, name: str) -> str | None:
-    """Return a trimmed env value, treating blank the same as unset.
-
-    A shell script that exports `TARGET_PASSWORD=""` means "no password", not "the
-    empty password". Collapsing blank to `None` keeps that intent.
-    """
-    value = utils.env.get(name)
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
-
-
-def _require_env(utils: TestUtils, name: str) -> str:
-    """Return the env value or Fail the run with the variable to set."""
-    value = _env_text(utils, name)
-    if value is None:
-        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
-    return value
-
-
-def _env_port(utils: TestUtils, name: str) -> int:
-    """Return the env port, defaulting to 22, and reject values a dial would choke on.
-
-    Validating here rather than letting the SSH library fail keeps the message about
-    the bench variable, which is what the operator can fix.
-    """
-    raw = _env_text(utils, name)
-    if raw is None:
-        return 22
-    try:
-        port = int(raw)
-    except ValueError:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        ) from None
-    if not 1 <= port <= 65535:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        )
-    return port
-
-
 # --- What the survey reads ---------------------------------------------------------
 #
 # Pi-hole v6 keeps every log under `/var/log/pihole/`: FTL moved there from
@@ -189,14 +133,17 @@ class PiHoleServer(LitmusTest):
         pi-hole is still a healthy one, but the FT wants to know which build produced
         this record. Ctx lands on the suite's `run_data`, so they are on every run.
         """
-        host = self._host or _require_env(utils, "TARGET_ADDRESS")
-        username = self._username or _require_env(utils, "TARGET_USER")
+        # `utils.env`, never `os.environ`: the run's own view, injectable by the self-tests and
+        # published on the record. `require` Fails naming the variable to set; `port` defaults
+        # to 22 and rejects a typo; `text` treats blank as unset.
+        host = self._host or utils.env.require("TARGET_ADDRESS")
+        username = self._username or utils.env.require("TARGET_USER")
         # `is not None` rather than `or`: an explicit empty password from the
         # constructor is a choice; only an absent one falls through to the env.
         password = (
-            self._password if self._password is not None else _env_text(utils, "TARGET_PASSWORD")
+            self._password if self._password is not None else utils.env.text("TARGET_PASSWORD")
         )
-        port = self._port if self._port is not None else _env_port(utils, "TARGET_PORT")
+        port = self._port if self._port is not None else utils.env.port("TARGET_PORT")
         try:
             # `use_shell` rebinds `utils.exec` for this node and its descendants. The
             # framework owns the handle from here: it closes it after the last survey,
@@ -281,7 +228,8 @@ class PiHoleServer(LitmusTest):
             return PASS({"uptime": uptime})
         raise TestFailure("uptime returned no output!", "uptime output", result.stdout)
 
-    # Remember, if this function doesn't return PASS({ftl_state: <value>}) it's a contract violation!
+    # Remember, if this function doesn't return PASS({ftl_state: <value>})
+    # it's a contract violation!
     @evidence("ftl_state")
     async def _pihole_is_running(self, utils: TestUtils) -> Verdict:
         """Claim the FTL resolver service is active.
@@ -335,7 +283,8 @@ class PiHoleServer(LitmusTest):
             evidence={"kernel_critical_lines": lines},
         )
 
-    # Remember, if this function doesn't return PASS({status_lines: <value>}) it's a contract violation!
+    # Remember, if this function doesn't return PASS({status_lines: <value>})
+    # it's a contract violation!
     @evidence("status_lines")
     async def _status_check(self, utils: TestUtils) -> Verdict:
         """Claim every line of `pihole status` carries a check mark.
