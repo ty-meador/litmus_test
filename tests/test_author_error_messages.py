@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from collections.abc import Iterable
 from datetime import datetime
@@ -212,6 +213,8 @@ class TestAuthorContractViolations:
         assert sequence.value.detail == (
             "a sequence must contain at least one child; pass one or more LitmusTest instances"
         )
+        assert parallel.value.node == "parallel"
+        assert sequence.value.node == "sequence"
         _assert_names_rule_and_fix(parallel.value.detail)
         _assert_names_rule_and_fix(sequence.value.detail)
 
@@ -222,12 +225,37 @@ class TestAuthorContractViolations:
 
         with pytest.raises(ContractViolation) as raised:
             LitmusTest(name="rack").test("no cpu", probe)
+        assert raised.value.node == "no cpu"
         assert raised.value.detail == (
             "arguments do not fit test method "
             f"{probe.__qualname__} (missing a required keyword-only argument: 'cpu'); "
             "pass arguments that match the method (utils is supplied by the framework)"
         )
         _assert_names_rule_and_fix(raised.value.detail)
+
+    def test_a_method_without_a_qualname_is_named_by_its_repr(self) -> None:
+        # A partial or a callable instance has no __qualname__. The message must still
+        # point at what the author passed instead of failing while being composed.
+        async def probe(_utils: object, *, cpu: int) -> Verdict:
+            del cpu
+            return PASS
+
+        bound = functools.partial(probe, cpu=0)
+        with pytest.raises(ContractViolation) as misfit:
+            LitmusTest(name="rack").test("bound", bound, 5)
+        assert misfit.value.node == "bound"
+        assert misfit.value.detail.startswith(f"arguments do not fit test method {bound!r} (")
+
+        class Probe:
+            async def __call__(self, _utils: object) -> Verdict:
+                return PASS
+
+        instance = Probe()
+        with pytest.raises(TypeError) as synchronous:
+            LitmusTest(name="rack").test("instance", instance)  # pyright: ignore[reportArgumentType]
+        assert str(synchronous.value).startswith(
+            f"test method {instance!r} must be defined with async def; "
+        )
 
     def test_hooks_after_construction_name_the_fix(self) -> None:
         class Suite(LitmusTest):
@@ -252,6 +280,7 @@ class TestAuthorContractViolations:
     def test_base_build_suite_names_the_composition_fix(self) -> None:
         with pytest.raises(ContractViolation) as raised:
             LitmusTest(name="rack").build_suite()
+        assert raised.value.node == "rack"
         assert raised.value.detail == (
             "build_suite() must return a test, sequence, or parallel composition; "
             "return self.test(...), self.sequence(...), or self.parallel(...)"
@@ -261,6 +290,7 @@ class TestAuthorContractViolations:
     def test_mutual_exclusive_deadlines_name_the_fix(self) -> None:
         with pytest.raises(ContractViolation) as raised:
             LitmusTest(name="rack", fail_after=1.0, abort_after=1.0)
+        assert raised.value.node == "rack"
         assert raised.value.detail == (
             "fail_after and abort_after are mutually exclusive; declare exactly one or neither"
         )
@@ -269,11 +299,20 @@ class TestAuthorContractViolations:
     def test_non_positive_deadline_names_the_fix(self) -> None:
         with pytest.raises(ContractViolation) as raised:
             LitmusTest(name="rack", fail_after=0)
+        assert raised.value.node == "rack"
         assert raised.value.detail == (
             "fail_after must be a positive finite number of seconds; "
             "pass a number of seconds greater than zero"
         )
         _assert_names_rule_and_fix(raised.value.detail)
+
+    def test_a_deadline_violation_names_the_parameter_that_was_declared(self) -> None:
+        # The author declared abort_after; telling them fail_after is wrong sends them
+        # to the wrong line.
+        with pytest.raises(ContractViolation) as raised:
+            LitmusTest(name="rack", abort_after="soon")  # pyright: ignore[reportArgumentType]
+        assert raised.value.node == "rack"
+        assert raised.value.detail.startswith("abort_after must be a positive finite number")
 
     async def test_duplicate_root_deadline_names_the_fix(self) -> None:
         class Suite(LitmusTest):
@@ -302,6 +341,10 @@ class TestAuthorContractViolations:
 
         with pytest.raises(ContractViolation) as raised:
             await _bounded_finalization(hang(), node="rack", operation="cleanup")
+        assert raised.value.node == "rack"
+        # The timeout itself travels into the artifact as the cause, not only as
+        # the exception chain a log reader may never see.
+        assert isinstance(raised.value.cause, TimeoutError)
         assert raised.value.detail == (
             "cleanup exceeded its 0.01-second finalization timeout; "
             "return from cleanup within the evidence budget"

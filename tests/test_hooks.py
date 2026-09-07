@@ -174,6 +174,10 @@ class TestPhase:
         assert Phase.POST_TEST < Phase.PRE_CLEANUP < Phase.POST_CLEANUP
         assert Phase.POST_CLEANUP >= Phase.POST_CLEANUP > Phase.PRE_CLEANUP
         assert Phase.PRE_TEST <= Phase.PRE_TEST
+        # The strict forms are strict: a phase is neither before nor after itself, so a
+        # survey scheduled "after PRE_TEST" does not also fire at PRE_TEST.
+        assert not Phase.PRE_TEST < Phase.PRE_TEST
+        assert not Phase.PRE_TEST > Phase.PRE_TEST
         shuffled = [Phase.POST_CLEANUP, Phase.PRE_TEST, Phase.PRE_CONFIGURE, Phase.PRE_CLEANUP]
         assert sorted(shuffled) == [
             Phase.PRE_CONFIGURE,

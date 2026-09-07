@@ -19,6 +19,12 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- `make mutants`: a `mutmut` mutation audit over the kernel of trust (`verdict.py`,
+  `base.py`, `lifecycle.py`), configured in `[tool.mutmut]` and kept out of `make check`.
+  STANDARDS §6 records the standing rule: every surviving mutant gets a killing test or
+  a written equivalence reason in the MR that ran the audit. The first audit closed its
+  survivors with tests on deadline-cancellation ownership, deferred and parameterized
+  `Verdict` annotations, and the node named by composition-time violations (issue #69).
 - `litmus/shell-in-configure`, the tier-3 rule that flags `utils.use_shell(...)` with
   arguments outside `configure()`, seeded in the fixture and listed in the rule table
   with its tier-1 counterpart (issue #76).

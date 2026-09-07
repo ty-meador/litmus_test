@@ -22,6 +22,11 @@ from litmus import (
     TestUtils,
     Verdict,
 )
+from litmus.base import (
+    _DEADLINE_CANCELLATION,  # pyright: ignore[reportPrivateUsage]
+    _cancel_for_deadline,  # pyright: ignore[reportPrivateUsage]
+    _consume_deadline_cancellation,  # pyright: ignore[reportPrivateUsage]
+)
 from litmus.executor import ExecResult
 from litmus.lifecycle import RunAbort, Slot, State, TimeBudget, TimeBudgetClock
 from litmus.mock import MockTransport
@@ -97,8 +102,11 @@ class _OneClaim(LitmusTest):
 class TestTimeBudgetValidation:
     @pytest.mark.parametrize("value", [True, 0, -1, math.inf, -math.inf, math.nan, "1"])
     def test_duration_must_be_a_positive_finite_number(self, value: object) -> None:
-        with pytest.raises(ContractViolation, match="positive finite"):
+        with pytest.raises(ContractViolation, match="positive finite") as raised:
             LitmusTest(name="invalid", fail_after=value)  # pyright: ignore[reportArgumentType]
+        # A violation raised at composition names the node it was declared on; a rack
+        # of seventy declarations is otherwise a search.
+        assert raised.value.node == "invalid"
 
     @pytest.mark.parametrize("declared", ["fail_after", "abort_after"])
     def test_huge_integer_is_a_contract_violation_at_composition(
@@ -112,8 +120,11 @@ class TestTimeBudgetValidation:
             else (lambda: LitmusTest(name="invalid", abort_after=huge))
         )
 
-        with pytest.raises(ContractViolation, match="positive finite"):
+        with pytest.raises(ContractViolation, match="positive finite") as raised:
             construct()
+        # float() refusing the integer is the evidence; the violation keeps it.
+        assert raised.value.node == "invalid"
+        assert isinstance(raised.value.cause, OverflowError)
 
     @pytest.mark.parametrize("declared", ["fail_after", "abort_after"])
     def test_huge_integer_is_a_contract_violation_at_a_composition_factory(
@@ -989,3 +1000,69 @@ class TestTimeBudgetResourceCancellation:
         assert result.state is State.FAIL
         assert abort_calls == 1
         assert peer.connections == 1
+
+
+class TestDeadlineCancellationOwnership:
+    """The marker alone proves nothing; the recorded request count is what is owned.
+
+    A deadline cut cancels a task with a private marker and records how many of that
+    task's cancellation requests are the framework's. Consumption takes back exactly
+    those, so an operator's or harness's cancel landing on the same task keeps
+    travelling instead of being read as "the budget expired".
+    """
+
+    @staticmethod
+    async def _park(seen: list[tuple[bool, int]]) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as error:
+            task = asyncio.current_task()
+            assert task is not None
+            seen.append((_consume_deadline_cancellation(error), task.cancelling()))
+
+    async def test_a_recorded_request_is_consumed_and_the_task_is_no_longer_cancelling(
+        self,
+    ) -> None:
+        seen: list[tuple[bool, int]] = []
+        task = asyncio.create_task(self._park(seen))
+        await asyncio.sleep(0)
+
+        _cancel_for_deadline(task)
+        await task
+
+        assert seen == [(True, 0)]
+
+    async def test_a_marker_without_a_recorded_request_is_not_ours(self) -> None:
+        async def forge() -> tuple[bool, int]:
+            try:
+                raise asyncio.CancelledError(_DEADLINE_CANCELLATION)
+            except asyncio.CancelledError as error:
+                task = asyncio.current_task()
+                assert task is not None
+                return _consume_deadline_cancellation(error), task.cancelling()
+
+        assert await asyncio.create_task(forge()) == (False, 0)
+
+    async def test_an_external_cancel_colliding_with_the_deadline_keeps_travelling(
+        self,
+    ) -> None:
+        seen: list[tuple[bool, int]] = []
+        task = asyncio.create_task(self._park(seen))
+        await asyncio.sleep(0)
+
+        _cancel_for_deadline(task)
+        task.cancel()
+        await task
+
+        # One request was the framework's and is taken back; the other is not its to
+        # remove, so the task is still cancelling when the handler returns.
+        assert seen == [(False, 1)]
+
+    async def test_outside_any_task_the_marker_belongs_to_nobody(self) -> None:
+        loop = asyncio.get_running_loop()
+        consumed: asyncio.Future[bool] = loop.create_future()
+        error = asyncio.CancelledError(_DEADLINE_CANCELLATION)
+
+        loop.call_soon(lambda: consumed.set_result(_consume_deadline_cancellation(error)))
+
+        assert await consumed is False
