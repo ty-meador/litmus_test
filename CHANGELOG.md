@@ -19,6 +19,11 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- Internal Inspector timeline reader (issue #89): preserves valid JSON Lines in file
+  order with explicit truncation, decoding, version, and availability diagnostics.
+  Validates against the published timeline schema packaged with the installation;
+  `jsonschema` is now a runtime dependency. This is the log-pane reading boundary,
+  not a shipped terminal UI or an execution adapter.
 - Inspector target specification review rulings (issue #89): Inspect and Failures
   ship independently of a separately approved Run adapter; ancestor-configure replay
   and suite reconstruction from saved evidence are prohibited. Relocated artifacts
