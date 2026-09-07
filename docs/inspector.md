@@ -12,6 +12,19 @@ The [review rulings on !119](https://gitlab.com/Tyler-Meador/litmus_test/-/merge
 set the implementation order: ship Inspect and Failures first. Run is a separate
 increment behind its own decision and does not gate saved-evidence inspection.
 
+The internal timeline reader (`litmus.inspector_timeline.TimelineReader`) is implemented
+as a foundation for the log pane. It asynchronously reads a selected timeline path,
+validates each version-1 object against the packaged published schema, and returns
+records and line-numbered diagnostics in physical order. Additive fields and recorded
+scopes and pointers survive unchanged. A complete final JSON object is readable without
+a trailing newline; an unfinished final object or UTF-8 sequence produces a truncation
+diagnostic. Malformed complete records, duplicate keys, non-finite numbers, and
+unsupported versions are explicit diagnostics, and later valid records remain readable.
+Missing or unreadable logs produce a file-level unavailable diagnostic. These are reader
+observations, never test verdicts. The reader does not open artifact pointers or resolve
+tree ownership; screens, root containment and relocation, and the entry point remain
+later increments under #89.
+
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
 protocol within sixty seconds, without opening suite source.
