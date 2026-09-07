@@ -70,8 +70,11 @@ class TestDocsSiteConfig:
         assert f"site_url: {PAGES_URL}" in text
 
     def test_every_markdown_page_is_in_the_nav(self) -> None:
+        # Recursive: docs/hil/ groups the HIL interface design notes under one
+        # directory rather than flattening every note into docs/*.md (issue #91).
         nav_pages = set(_NAV_ENTRY.findall(MKDOCS.read_text(encoding="utf-8")))
-        on_disk = {path.name for path in (ROOT / "docs").glob("*.md")}
+        docs_dir = ROOT / "docs"
+        on_disk = {path.relative_to(docs_dir).as_posix() for path in docs_dir.rglob("*.md")}
         assert on_disk, "docs/ grew no markdown pages"
         missing = on_disk - nav_pages
         extra = nav_pages - on_disk

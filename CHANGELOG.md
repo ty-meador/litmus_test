@@ -19,6 +19,12 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- `docs/hil/serial.md`: the design note for a serial/UART console transport as a
+  `RemoteInterface` peer — prompt detection, timeouts, line discipline,
+  exit-status recovery via a sentinel, output bounding, safe-state on abort, and
+  the `via`-hop composition that reaches a remote console over SSH. Design only;
+  no code change. Awaiting Ty's sign-off on the note before an implementation MR
+  opens (issue #91).
 - `RunEnv`, the type of `utils.env`: still a read-only mapping, now with `require`,
   `text`, and `port` readers that Fail the run naming the bench variable to set. The
   SSH-backed examples use them in place of per-file helper functions.
