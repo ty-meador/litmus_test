@@ -7,7 +7,8 @@ Nothing about the run changes. The context object is always the framework's
 ``RunContext``, a ``dict[str, Any]`` the framework owns. The parameter exists so that a
 suite which already writes its context shape down as a ``TypedDict`` gets that shape
 back in its own methods, and the developer's editor rejects a misspelled key while it is
-still a typo — before the Floor Technician meets it as an ``Aborted`` run.
+still a typo — before the Floor Technician meets it as a ``ContextInsufficient`` Fail
+under the contract-violation banner (#112).
 
 Half of this file is checked by pyright rather than by pytest: the ``assert_type`` calls
 and the ignore comments are the assertions, and ``make check`` is what runs them.

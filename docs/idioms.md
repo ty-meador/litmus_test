@@ -418,8 +418,10 @@ async def configure(self, utils: TestUtils) -> DeviceContext: ...
 ### Carrying the same type into the test methods
 
 A `TypedDict` return tells the reader the shape, but `utils.ctx` still hands the test
-methods a `Mapping[str, Any]`, so a misspelled key survives pyright and lands on the
-floor as an `Aborted` run. Naming the type once on the class closes that gap: declare
+methods a `Mapping[str, Any]`, so a misspelled key survives pyright and reaches the
+floor as a `ContextInsufficient` contract violation — a Fail under the bug banner,
+where the author meant to take a reading (issue #112). Naming the type once on the
+class closes that gap: declare
 `class MySuite(LitmusTest[MyCtx])` and annotate the lifecycle methods
 `utils: TestUtils[MyCtx]`, and `utils.ctx["volts"]` is a `float` to the editor while
 `utils.ctx["volt"]` is a type error before it is ever run (issue #75).
