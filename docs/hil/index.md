@@ -38,7 +38,7 @@ once, so each note can cite them instead of repeating them.
 
 | Interface | Note | Issue | Status |
 |---|---|---|---|
-| GPIO | [gpio.md](gpio.md) | #93 | DRAFT |
+| GPIO | [gpio.md](gpio.md) | #93 | SIGNED 2026-09-07 |
 | PWM | `pwm.md` | #94 | DRAFT — lands in its own MR |
 | CAN bus | `can.md` | #95 | DRAFT — lands in its own MR |
 | I2C / SPI | `i2c-spi.md` | #96 | DRAFT — lands in its own MR |
