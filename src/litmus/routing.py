@@ -202,6 +202,20 @@ class RouterRunParams:
         return self._router
 
 
+def require_connection_pair(host: str | None, username: str | None) -> None:
+    """Refuse a half-declared connection before any slot or router logic runs.
+
+    Shared by ``ExecRouting`` and ``TestUtils`` so a malformed call is a ``TypeError``
+    naming the missing argument wherever it is made, ahead of the configure-only guard.
+    """
+    if host is not None and username is None:
+        msg = "use_shell connection form requires username; pass username= together with host="
+        raise TypeError(msg)
+    if host is None and username is not None:
+        msg = "use_shell username requires host; pass host= together with username="
+        raise TypeError(msg)
+
+
 @final
 class ExecRouting:
     """Per-node exec policy. The only writer of the router is `use_shell`.
@@ -342,7 +356,7 @@ class ExecRouting:
 
         `propagate=False` stops this node's router from flowing to children.
         """
-        self._require_connection_pair(host, username)
+        require_connection_pair(host, username)
         self._propagate = propagate
         if host is None:
             if not inherit:
@@ -448,12 +462,3 @@ class ExecRouting:
         if router is None:
             return None
         return router.ssh
-
-    @staticmethod
-    def _require_connection_pair(host: str | None, username: str | None) -> None:
-        if host is not None and username is None:
-            msg = "use_shell connection form requires username; pass username= together with host="
-            raise TypeError(msg)
-        if host is None and username is not None:
-            msg = "use_shell username requires host; pass host= together with username="
-            raise TypeError(msg)
