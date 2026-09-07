@@ -21,7 +21,8 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 - Optional context typing: `LitmusTest[CtxT]` and `TestUtils[CtxT]` carry a suite's own
   `TypedDict` into `utils.ctx`, so a misspelled key is a pyright error at the author's
-  desk instead of an `Aborted` run on the floor (issue #75). Opt-in and defaulted: the
+  desk instead of a contract-violation Fail on the floor (issue #75). Opt-in and
+  defaulted: the
   bare names still mean `Mapping[str, Any]`, composition and `via` stay shape-agnostic,
   and the runtime context object is unchanged.
 
