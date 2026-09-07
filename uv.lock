@@ -585,12 +585,12 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "asyncssh" },
+    { name = "jsonschema" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
-    { name = "jsonschema" },
     { name = "mkdocs" },
     { name = "mkdocstrings", extra = ["python"] },
     { name = "mutmut" },
@@ -603,12 +603,14 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "asyncssh", specifier = ">=2.21" }]
+requires-dist = [
+    { name = "asyncssh", specifier = ">=2.21" },
+    { name = "jsonschema", specifier = ">=4.23" },
+]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.151" },
-    { name = "jsonschema", specifier = ">=4.23" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.6" },
     { name = "mutmut", specifier = ">=3.7.0" },
