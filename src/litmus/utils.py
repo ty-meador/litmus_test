@@ -20,6 +20,7 @@ from litmus.artifacts import Artifact
 from litmus.errors import (
     ContextImmutable,
     ContextInsufficient,
+    ContractViolation,
     FrameworkContractViolation,
     HaltReason,
     TestFailure,
@@ -28,7 +29,13 @@ from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, ExecResult, LocalExec
 from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
 from litmus.remote import RemoteInterface
-from litmus.routing import ExecRouter, ExecRouting, RouterRunParams, Shell
+from litmus.routing import (
+    ExecRouter,
+    ExecRouting,
+    RouterRunParams,
+    Shell,
+    require_connection_pair,
+)
 from litmus.timeline import RunTimeline, TimelinePaths
 
 if TYPE_CHECKING:
@@ -534,6 +541,7 @@ class TestUtils:
         "_ctx",
         "_env",
         "_env_filter_warning",
+        "_in_configure",
         "_integration_hooks",
         "_local_exec",
         "_logger",
@@ -617,6 +625,7 @@ class TestUtils:
             output_budget=self._local_exec.output_budget,
         )
         self._signal = RunSignal(RunAbort())
+        self._in_configure = False
 
     @property
     def logger(self) -> ScopedLogger:
@@ -805,7 +814,29 @@ class TestUtils:
         inherit: bool = True,
         propagate: bool = True,
     ) -> Shell:
-        """Declare this node's primary exec route and its child propagation policy."""
+        """Declare this node's exec route from ``configure()``, or read the active one.
+
+        With no arguments this returns the active ``Shell`` and may be called from any
+        slot. A route-shaping argument (``host``, ``via``, ``inherit=False``,
+        ``propagate=False``) declares the route, and the framework admits that only
+        while this node's ``configure()`` is running: the ``exec routing:`` line is
+        written when configure returns and the FT reads it as true for the whole node
+        (Exec Routing Contract). From any other slot the declaring call raises
+        ``ContractViolation`` before the router is touched.
+        """
+        require_connection_pair(host, username)
+        declares = host is not None or via is not None or not inherit or not propagate
+        if declares and not self._in_configure:
+            node = self._scope[-1] if self._scope else "<unknown>"
+            raise ContractViolation(
+                node,
+                detail=(
+                    "use_shell declared a route outside configure(); the exec route is "
+                    "fixed when configure() returns so the 'exec routing:' line stays "
+                    "true for the whole node; declare it there, or call use_shell() "
+                    "with no arguments to read the active route"
+                ),
+            )
         return await self._routing.use_shell(
             host=host,
             username=username,
@@ -896,6 +927,14 @@ class TestUtils:
         """Close the context once ``configure()`` has settled. Framework only."""
         self._ctx._freeze()  # pyright: ignore[reportPrivateUsage]
 
+    def _enter_configure(self) -> None:
+        """Open the route-declaration window. Framework only, around ``configure()``."""
+        self._in_configure = True
+
+    def _exit_configure(self) -> None:
+        """Shut the window once ``configure()`` has settled, returned or raised."""
+        self._in_configure = False
+
     def _halt_signal(self) -> RunAbort:
         """The run abort this node was scoped with. Framework lifecycle only."""
         return self._signal._run_abort  # pyright: ignore[reportPrivateUsage]
@@ -959,6 +998,7 @@ class TestUtils:
             output_budget=self._local_exec.output_budget,
         )
         scoped._signal = RunSignal(run_abort, audit_signal)
+        scoped._in_configure = False
         return scoped
 
     async def _cancel_in_flight(self) -> None:
