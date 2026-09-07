@@ -254,8 +254,8 @@ class PiHoleServer(LitmusTest):
         if utils.exec_route == "local":
             return None
         keys = tuple(key for key, _path in _LOG_TAILS)
-        # The tails are independent reads of one host; gathering them keeps the
-        # boundary short so the survey does not stretch the phase it observes.
+        # Read logs async - we want hooks to complete as quickly as possible because
+        # their total execution time contributes to the suites overall run time
         results = await asyncio.gather(
             *(utils.exec(f"tail -n 50 {path}") for _key, path in _LOG_TAILS)
         )
