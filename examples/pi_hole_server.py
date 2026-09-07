@@ -216,6 +216,7 @@ class PiHoleServer(LitmusTest):
         result = await utils.exec("pihole -v")
         return {"versions": self._parse_versions(result.stdout)}
 
+    # Build the pi hole server test sequence
     def build_suite(self) -> LitmusTest:
         """Sanity, then FTL, then independent kernel and status claims.
 
@@ -264,6 +265,7 @@ class PiHoleServer(LitmusTest):
             for key, result in zip(keys, results, strict=True)
         }
 
+    # Remember, if this function doesn't return PASS({uptime: <value>}) it's a contract violation!
     @evidence("uptime")
     async def _sanity_check(self, utils: TestUtils) -> Verdict:
         """Prove the hop executes at all before asking anything of the service.
@@ -279,6 +281,7 @@ class PiHoleServer(LitmusTest):
             return PASS({"uptime": uptime})
         raise TestFailure("uptime returned no output!", "uptime output", result.stdout)
 
+    # Remember, if this function doesn't return PASS({ftl_state: <value>}) it's a contract violation!
     @evidence("ftl_state")
     async def _pihole_is_running(self, utils: TestUtils) -> Verdict:
         """Claim the FTL resolver service is active.
@@ -302,6 +305,8 @@ class PiHoleServer(LitmusTest):
             evidence={"ftl_state": state},
         )
 
+    # Remember, if this function doesn't return PASS({kernel_critical_lines: <value>})
+    # it's a contract violation!
     @evidence("kernel_critical_lines")
     async def _dmesg_clean(self, utils: TestUtils) -> Verdict:
         """Claim the kernel has logged nothing at emerg, alert, or crit.
@@ -330,6 +335,7 @@ class PiHoleServer(LitmusTest):
             evidence={"kernel_critical_lines": lines},
         )
 
+    # Remember, if this function doesn't return PASS({status_lines: <value>}) it's a contract violation!
     @evidence("status_lines")
     async def _status_check(self, utils: TestUtils) -> Verdict:
         """Claim every line of `pihole status` carries a check mark.
