@@ -19,6 +19,9 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- `RunEnv`, the type of `utils.env`: still a read-only mapping, now with `require`,
+  `text`, and `port` readers that Fail the run naming the bench variable to set. The
+  SSH-backed examples use them in place of per-file helper functions.
 - **Phase 0 — Skeleton and kernel of trust.** Python 3.14 with uv, ruff, pyright
   strict, and pytest; the identity-checked `PASS` sentinel, structured failure taxonomy,
   and runtime child boundary. A non-PASS return is node-local Aborted, never an implicit
@@ -171,6 +174,12 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Changed
 
+- The pi-hole dogfood example reads the Pi-hole v6 log layout (`FTL.log` and
+  `webserver.log` under `/var/log/pihole/`), schedules its survey from
+  `post-configure` onward behind an `exec_route` guard so no tail runs on the test
+  host, carries each claim's reading on the verdict, and Fails on an unreadable
+  kernel log instead of passing on its empty output. Every example under `examples/`
+  now carries teaching comments that give the reasoning behind each pattern.
 - **Evidence travels with the verdict (issue #118).** `PASS` is callable: `return PASS({...})`
   carries a leaf's readings, `TestFailure(..., evidence=...)` carries them on the fail
   path, and `@evidence(...)` declares what a pass must carry; a pass without its declared
