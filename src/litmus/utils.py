@@ -525,13 +525,21 @@ class RunEnv(Mapping[str, str]):
 
 
 @final
-class TestUtils:
+class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
     """The single fully scoped service object passed to every lifecycle method.
 
     A node owns the object, logger, and routing policy. Its authored composition
     receives distinct ``TestUtils`` objects which deliberately share that authored
     instance's mutable ``ctx``. A composed ``LitmusTest`` subclass instead begins with
     a fresh context, preserving instance locality.
+
+    ``CtxT`` is opt-in sugar (issue #75): the runtime object is always a
+    :class:`RunContext`, a framework-owned ``dict[str, Any]``. A suite that narrows
+    ``configure``'s return to a local ``TypedDict`` and declares
+    ``class MySuite(LitmusTest[MyCtx])`` gets that type back from :attr:`ctx` in every
+    method it types as ``utils: TestUtils[MyCtx]`` — pyright then catches a typo in a
+    ctx key at the call site. Nothing forces a suite to parameterize; the default
+    ``Mapping[str, Any]`` reproduces today's un-parameterized behavior exactly.
     """
 
     __test__ = False
@@ -633,9 +641,15 @@ class TestUtils:
         return self._logger
 
     @property
-    def ctx(self) -> Mapping[str, Any]:
-        """This authored instance's context: what ``configure()`` provided, read-only after."""
-        return self._ctx
+    def ctx(self) -> CtxT:
+        """This authored instance's context: what ``configure()`` provided, read-only after.
+
+        Always a :class:`RunContext` at runtime regardless of ``CtxT``; the cast here is
+        the framework's, narrowing to the suite's declared shape for an author who typed
+        ``utils: TestUtils[MyCtx]`` (issue #75). An un-parameterized caller sees the
+        same ``Mapping[str, Any]`` as before.
+        """
+        return cast(CtxT, self._ctx)
 
     @property
     def env(self) -> RunEnv:

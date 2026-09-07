@@ -88,7 +88,7 @@ class TestLitmusTestImmutability:
 
 class TestLitmusTestMain:
     async def test_bound_verdict_method_reaches_main_only_through_case(self) -> None:
-        calls: list[object] = []
+        calls: list[TestUtils] = []
 
         class Suite(LitmusTest):
             def __init__(self, *, name: str) -> None:
@@ -98,7 +98,7 @@ class TestLitmusTestMain:
             def build_suite(self) -> LitmusTest:
                 return self.test("claim", self._claim)
 
-            async def _claim(self, utils: object) -> Verdict:
+            async def _claim(self, utils: TestUtils) -> Verdict:
                 self.calls.append(utils)
                 return PASS
 
@@ -109,7 +109,6 @@ class TestLitmusTestMain:
         assert outcome.state is State.PASS
         assert len(calls) == 1
         assert calls[0] is not marker
-        assert isinstance(calls[0], TestUtils)
         assert calls[0].ctx is marker.ctx
 
     async def test_instance_cannot_run_twice(self) -> None:
