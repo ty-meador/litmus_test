@@ -426,20 +426,16 @@ class MyDevice(LitmusTest):
     # context your test requires and what it supplies — important, for
     # example, for ssh chaining, which requires an "ssh" entry in ctx.
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        username = utils.env.get("TARGET_USER")
-        password = utils.env.get("TARGET_PASSWORD")
-        address = utils.env.get("TARGET_ADDRESS")
-        # Raise TestFailure to signal a verdict from configure — the test lands
-        # in Fail without the suite ever running. The verdict means "did not
-        # reach a testable state"; whether the cause is config/infra or DUT is
-        # the human's call from logs and survey artifacts. Always model as many
-        # failure modes as possible so they surface as verdicts rather than bugs.
-        if not username:
-            raise TestFailure("TARGET_USER env var not set")
-        if not password:
-            raise TestFailure("TARGET_PASSWORD env var not set")
-        if not address:
-            raise TestFailure("TARGET_ADDRESS env var not set")
+        # utils.env.require raises TestFailure when the variable is unset or
+        # blank: a verdict from configure — the test lands in Fail without the
+        # suite ever running. The verdict means "did not reach a testable
+        # state"; whether the cause is config/infra or DUT is the human's call
+        # from logs and survey artifacts. Model as many failure modes as
+        # possible so they surface as verdicts rather than bugs. utils.env.port
+        # does the same for a port, defaulting to 22 and rejecting a typo.
+        username = utils.env.require("TARGET_USER")
+        password = utils.env.require("TARGET_PASSWORD")
+        address = utils.env.require("TARGET_ADDRESS")
         shell = await utils.use_shell(host=address, username=username, password=password)
         # use_shell wires utils.exec to route through SSH automatically
         return {"ssh": shell.ssh, "token": await self._authenticate()}

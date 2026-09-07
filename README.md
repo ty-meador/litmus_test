@@ -53,8 +53,9 @@ TARGET_ADDRESS=pihole.lab TARGET_USER=root uv run litmus run examples/pi_hole_se
 `wait_for_patterns.py` demonstrates both readiness polling in `configure()` and verdict
 polling in a test method. `hardware_device_lifecycle.py` registers survey and audit
 hooks around a rail that comes up, is watched, and is dropped in cleanup.
-`run_data_evidence.py` shows ctx flowing into `run_data` and a computed `within_spec`
-override.
+`run_data_evidence.py` shows limits flowing in through ctx and readings travelling out
+with the verdict. Every example carries comments that explain the reasoning behind
+its pattern, not only what the code does; read them as the authoring guide.
 
 Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
 `overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring

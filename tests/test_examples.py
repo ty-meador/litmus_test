@@ -378,10 +378,12 @@ _PIHOLE_STATUS = """\
 """
 _PIHOLE_SECRET = "pihole-secret"
 _TAIL_COMMANDS = (
-    "tail -n 50 /opt/pihole/ftl.log",
+    "tail -n 50 /var/log/pihole/FTL.log",
     "tail -n 50 /var/log/pihole/pihole.log",
     "tail -n 50 /var/log/pihole/pihole_updateGravity.log",
+    "tail -n 50 /var/log/pihole/webserver.log",
 )
+_PIHOLE_STATUS_LINES = ["  [✓] DNS service is running", "  [✓] Pi-hole blocking is enabled"]
 
 
 def _ok(stdout: str = "") -> ExecResult:
@@ -481,8 +483,8 @@ class TestPiHoleServerExample:
                             "type": "test",
                             "state": "Pass",
                             "failure": None,
-                            "evidence": None,
-                            "evidence_declared": None,
+                            "evidence": {"uptime": "10:04:11 up 4 days,  3:12"},
+                            "evidence_declared": ["uptime"],
                             "children": [],
                         },
                         {
@@ -490,8 +492,8 @@ class TestPiHoleServerExample:
                             "type": "test",
                             "state": "Pass",
                             "failure": None,
-                            "evidence": None,
-                            "evidence_declared": None,
+                            "evidence": {"ftl_state": "Active: active (running)"},
+                            "evidence_declared": ["ftl_state"],
                             "children": [],
                         },
                         {
@@ -507,8 +509,8 @@ class TestPiHoleServerExample:
                                     "type": "test",
                                     "state": "Pass",
                                     "failure": None,
-                                    "evidence": None,
-                                    "evidence_declared": None,
+                                    "evidence": {"kernel_critical_lines": []},
+                                    "evidence_declared": ["kernel_critical_lines"],
                                     "children": [],
                                 },
                                 {
@@ -516,8 +518,8 @@ class TestPiHoleServerExample:
                                     "type": "test",
                                     "state": "Pass",
                                     "failure": None,
-                                    "evidence": None,
-                                    "evidence_declared": None,
+                                    "evidence": {"status_lines": _PIHOLE_STATUS_LINES},
+                                    "evidence_declared": ["status_lines"],
                                     "children": [],
                                 },
                             ],
@@ -527,8 +529,11 @@ class TestPiHoleServerExample:
             ],
         }
         artifacts = _artifact_payloads(tmp_path)
+        # The survey is scheduled from post-configure onward: no pre-configure tail
+        # ran on the test host, and no pre-configure artifact claims to be pi-hole
+        # evidence (#116).
+        assert "pre-configure-1" not in artifacts
         assert set(artifacts) >= {
-            "pre-configure-1",
             "post-configure-1",
             "pre-test-1",
             "post-test-1",
@@ -539,9 +544,10 @@ class TestPiHoleServerExample:
             "ftl": "(empty)",
             "pihole": "(empty)",
             "gravity": "(empty)",
+            "web-server": "(empty)",
         }
         # The hop served the post-cleanup survey: five boundaries after configure,
-        # three tails each, and the transport closed only after the last one (#115).
+        # four tails each, and the transport closed only after the last one (#115).
         assert transport.commands.count(_TAIL_COMMANDS[0]) == 5
         assert set(transport.commands[-len(_TAIL_COMMANDS) :]) == set(_TAIL_COMMANDS)
         for secret_line in caplog.records:
@@ -598,6 +604,35 @@ class TestPiHoleServerExample:
         dmesg, status = health.children
         assert dmesg.state is State.FAIL
         assert status.state is State.PASS
+        assert result.failure.evidence == {
+            "kernel_critical_lines": [" miller-raid: disk 2 unrecoverable"]
+        }
+
+    async def test_unreadable_dmesg_is_not_a_clean_kernel_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unprivileged login gets empty stdout from dmesg, exactly like a clean log."""
+        transport = MockTransport()
+        _script_healthy_pihole(transport)
+        transport.script(
+            "dmesg --level=emerg,alert,crit",
+            ExecResult(
+                stdout="",
+                stderr="dmesg: read kernel buffer failed: Operation not permitted",
+                exit_code=1,
+            ),
+        )
+
+        result = await _run_pihole(transport, monkeypatch, artifact_root=tmp_path)
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert result.failure.fail_message == "dmesg could not read the kernel log"
+        assert (
+            result.failure.received
+            == "exit 1: dmesg: read kernel buffer failed: Operation not permitted"
+        )
+        assert result.failure.evidence is None
 
     async def test_status_lines_without_a_checkmark_fail(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -612,6 +647,7 @@ class TestPiHoleServerExample:
         assert isinstance(result.failure, TestFailure)
         assert result.failure.fail_message == "One or more status checks failed"
         assert result.failure.received == ["  [✗] DNS service is NOT running"]
+        assert result.failure.evidence == {"status_lines": ["  [✗] DNS service is NOT running"]}
 
     async def test_refused_connect_is_fail_not_a_contract_banner(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
