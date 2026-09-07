@@ -17,6 +17,7 @@ site/
 .audit/
 .soak/
 htmlcov/
+mutants/
 
 # Editors
 .idea/

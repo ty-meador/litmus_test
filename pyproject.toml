@@ -22,6 +22,7 @@ dev = [
     "hypothesis>=6.151",
     "mkdocs>=1.6.1",
     "mkdocstrings[python]>=1.0.6",
+    "mutmut>=3.7.0",
 ]
 
 [project.scripts]
@@ -118,3 +119,34 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.mutmut]
+# Mutation audit over the kernel of trust (issue #69). `make mutants`, not a gate.
+# The whole package is copied so imports resolve; only these three files are mutated.
+source_paths = ["src/litmus"]
+only_mutate = ["src/litmus/verdict.py", "src/litmus/base.py", "src/litmus/lifecycle.py"]
+# Scoped to the test files that actually cover the three modules (verified via
+# coverage contexts), so a mutant's rerun stays cheap under the 90-minute audit budget.
+pytest_add_cli_args_test_selection = [
+    "tests/test_verdict.py",
+    "tests/test_base.py",
+    "tests/test_lifecycle.py",
+    "tests/test_evidence_on_verdict.py",
+    "tests/test_abort_phase_matrix.py",
+    "tests/test_author_error_messages.py",
+    "tests/test_time_budget.py",
+    "tests/test_composition.py",
+    "tests/test_context_sufficiency.py",
+    "tests/test_hooks.py",
+    "tests/test_operator_interrupt.py",
+    "tests/test_rack_scale.py",
+    "tests/test_results.py",
+    "tests/test_structural_contracts.py",
+    "tests/test_via.py",
+    "tests/test_artifacts.py",
+    "tests/test_junit.py",
+    "tests/test_run_data.py",
+    "tests/test_lifecycle_engine.py",
+    "tests/test_in_flight_termination.py",
+]
+pytest_add_cli_args = ["-p", "no:cacheprovider"]

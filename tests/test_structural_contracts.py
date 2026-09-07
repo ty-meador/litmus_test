@@ -1,5 +1,7 @@
 """Import-time structural enforcement for authored LitmusTest subclasses."""
 
+from collections.abc import Mapping
+
 import pytest
 
 from litmus import PASS, ContractViolation, LitmusTest, Verdict
@@ -80,11 +82,37 @@ class TestCoroutineContracts:
                 def _claim(self, utils: object) -> Verdict:
                     return PASS
 
-    def test_deferred_verdict_annotation_is_also_enforced(self) -> None:
+    def test_a_parameterized_verdict_annotation_is_also_enforced(self) -> None:
+        # `Verdict[...]` is a generic alias, not the class; the contract still has to
+        # recognize it, or an evidence-carrying method could quietly be synchronous.
+        with pytest.raises(TypeError, match=r"_claim.*async def"):
+
+            class SynchronousClaim(LitmusTest):  # pyright: ignore[reportUnusedClass]
+                def build_suite(self) -> LitmusTest:
+                    return self.test(
+                        "claim",
+                        self._claim,  # pyright: ignore[reportArgumentType]
+                    )
+
+                def _claim(self, utils: object) -> Verdict[Mapping[str, object]]:
+                    return PASS({})
+
+    @pytest.mark.parametrize(
+        "annotation",
+        [
+            "Verdict",
+            "litmus.verdict.Verdict",
+            "Verdict[Mapping[str, object]]",
+            "litmus.verdict.Verdict[Mapping[str, object]]",
+        ],
+    )
+    def test_deferred_verdict_annotation_is_also_enforced(self, annotation: str) -> None:
+        # Under `from __future__ import annotations` the hint is a string. Authors write
+        # it bare, qualified, parameterized, or all three; each spelling is the contract.
         def synchronous(self: LitmusTest, utils: object) -> object:
             return PASS
 
-        synchronous.__annotations__["return"] = "Verdict"
+        synchronous.__annotations__["return"] = annotation
         namespace: dict[str, object] = {
             "build_suite": _suite,
             "_claim": synchronous,
