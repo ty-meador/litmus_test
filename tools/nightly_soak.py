@@ -11,6 +11,9 @@ also reaches #general through ``DISCORD_WEBHOOK_URL`` so the fireteam sees the f
 case before an MR does. Exit code 0 on a green night, 1 on red; every run of a series
 executes even after a failure, because "3 of 8" is the datum a timing race leaves.
 
+Each invocation draws a fresh Hypothesis seed and records its replay command before
+starting pytest. This overrides the fixed gate seed without changing ``make check``.
+
 Environment (CI provides all but the two secrets): ``LITMUS_BOT_TOKEN`` (api scope),
 ``DISCORD_WEBHOOK_URL``, ``CI_API_V4_URL``, ``CI_PROJECT_ID``, ``CI_PIPELINE_URL``,
 ``CI_COMMIT_SHORT_SHA``. A missing secret is reported, never fatal: the suite verdict
@@ -23,6 +26,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -181,9 +186,15 @@ class NightlySoak:
         runs: list[SoakRun] = []
         for number in range(1, total + 1):
             self._say(f"{series} {number}/{total}")
-            result = self._runner(["uv", "run", "pytest", "-q", "-rfE", *target])
+            seed = secrets.randbits(64)
+            argv = ["uv", "run", "pytest", f"--hypothesis-seed={seed}", "-q", "-rfE", *target]
+            replay = f"$ {shlex.join(argv)}\n"
             log = self._log_dir / f"{series}-{number:02d}.log"
-            log.write_text(result.stdout + result.stderr)
+            log.write_text(replay)
+            self._say(replay.rstrip())
+            result = self._runner(argv)
+            with log.open("a") as output:
+                output.write(result.stdout + result.stderr)
             failed = tuple(dict.fromkeys(_FAILURE_LINE.findall(result.stdout)))
             runs.append(SoakRun(series, number, total, result.returncode, failed))
         return runs

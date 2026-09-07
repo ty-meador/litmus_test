@@ -123,6 +123,12 @@ that reader is soon a stranger.
   `main` (`tools/nightly_soak.py`, `make nightly` at the bench) and records each night
   on issue #68; a red night names the failing case and run in #general before an MR
   meets it.
+- **Generated coverage must remain replayable.** `make check` and `make soak` retain
+  the fixed Hypothesis seed in `pyproject.toml`. The nightly driver (`make nightly`)
+  draws a fresh seed for every pytest invocation and writes the exact replay command
+  to stdout and the first line of each `.soak/*.log` before starting it. To reproduce
+  that generated coverage, check out the recorded revision, sync its lockfile, and run
+  the logged command. A seed reproduces generated inputs, not event-loop scheduling.
 
 ## 7. Workflow
 
