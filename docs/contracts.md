@@ -227,6 +227,10 @@ evidence references.
 The private `_run_lifecycle()` entry point is not a full run and therefore does not
 create a timestamped run directory. Framework self-tests that invoke it directly may
 leave point-in-time artifacts at the configured base root; authored suites use `run()`.
+Standalone `run_configure_only()` likewise creates no run directory: artifacts captured
+during that bring-up remain at the configured base root. Via bring-up inside a full
+`run()` instead shares the existing run's artifact store. These configure-only paths
+are framework-owned; suite authors declare `via=` and let the framework manage it.
 
 ---
 
