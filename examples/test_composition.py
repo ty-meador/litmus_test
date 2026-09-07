@@ -1,7 +1,22 @@
 """Sequence and parallel composition translated from the legacy Litmus example.
 
-The values are deterministic stand-ins for device readings. This keeps the example
-dependent claims belong in a sequence; independent claims belong in a parallel node.
+Concept: the shape of the tree is a statement about dependencies between claims.
+
+- A `sequence` says "each claim assumes the ones before it passed". It stops at the
+  first failure, and the tree records the claims it never reached as pending rather
+  than pretending they passed. Use it when a later claim would be meaningless, or
+  misleading, after an earlier one failed.
+- A `parallel` says "these claims do not depend on each other". Every claim runs and
+  every result is recorded, so one run shows the Floor Technician all of the
+  failures instead of the first one.
+
+Both nodes have verdicts of their own: a sequence or parallel is Pass only when every
+child is. The verdict of the composition is what `litmus run` reports and what the
+exit status reflects.
+
+The values are deterministic stand-ins for device readings so the example runs on
+any development machine. A real suite takes them with `utils.exec()` or a hardware
+read inside the test method; the composition is unchanged.
 
 Run them: `litmus run examples/test_composition.py::SequencedDevice` settles Pass;
 `litmus run examples/test_composition.py::ParallelDevice` settles Fail with two of
@@ -25,6 +40,7 @@ class SequencedDevice(LitmusTest):
         """Capture the simulated observations that the sequence will evaluate.
 
         The defaults are the healthy readings, so `litmus run` needs no arguments.
+        The self-tests pass unhealthy ones to pin the stop-at-first-failure rule.
         """
         super().__init__(name=name)
         self._service_active = service_active
@@ -32,7 +48,13 @@ class SequencedDevice(LitmusTest):
         self._application_pid = application_pid
 
     def build_suite(self) -> LitmusTest:
-        """Order the startup claims so later checks depend on earlier success."""
+        """Order the startup claims so later checks depend on earlier success.
+
+        Read the list top to bottom as "boot, then firmware, then the application".
+        If the service never came up, the firmware string is whatever the last flash
+        left behind and the PID is stale; reporting either would send the FT after
+        the wrong fault. The sequence encodes that reasoning so it holds on every run.
+        """
         return self.sequence(
             self.name,
             [
@@ -42,12 +64,18 @@ class SequencedDevice(LitmusTest):
             ],
         )
 
+    # Each claim below has the same three-line shape: the gate, the pass, the fail
+    # with expected and received. `_utils` is underscored because these scripted
+    # claims take no reading; a real one would call `utils.exec()` here.
+
     async def _boot_check(self, _utils: TestUtils) -> Verdict:
         if self._service_active:
             return PASS
         raise TestFailure("service not active", "active", "inactive")
 
     async def _firmware_version_check(self, _utils: TestUtils) -> Verdict:
+        # Substring, not equality: a build string such as "release-2.4.1" still
+        # carries the version the claim is about.
         if "2.4.1" in self._firmware_version:
             return PASS
         raise TestFailure("firmware version mismatch", "2.4.1", self._firmware_version)
@@ -72,7 +100,8 @@ class ParallelDevice(LitmusTest):
         """Capture the simulated readings that the parallel node will evaluate.
 
         The defaults put temperature and fan speed out of spec on purpose: the
-        parallel node collects both failures instead of stopping at the first.
+        parallel node collects both failures instead of stopping at the first, and
+        the example exists to show that. Running it is expected to exit 1.
         """
         super().__init__(name=name)
         self._temperature_c = temperature_c
@@ -80,7 +109,13 @@ class ParallelDevice(LitmusTest):
         self._fan_rpm = fan_rpm
 
     def build_suite(self) -> LitmusTest:
-        """Group the sensor claims because none depends on another."""
+        """Group the sensor claims because none depends on another.
+
+        A hot board does not make the voltage reading wrong, and a slow fan does not
+        make the temperature reading wrong. Running them in parallel means one run
+        of the suite reports the whole picture; a sequence here would hide the fan
+        failure behind the temperature failure and cost the FT a second run.
+        """
         return self.parallel(
             self.name,
             [
@@ -89,6 +124,10 @@ class ParallelDevice(LitmusTest):
                 self.test("fan-speed", self._fan_speed),
             ],
         )
+
+    # The `expected` and `received` strings carry units and the formatted value.
+    # They are shown side by side in the failure record, so writing them for a human
+    # ("<= 85 degC" against "92 degC") is worth more than the raw float.
 
     async def _temperature(self, _utils: TestUtils) -> Verdict:
         if self._temperature_c <= 85:
