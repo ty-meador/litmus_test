@@ -55,3 +55,7 @@ class SeededBlade(LitmusTest):
         if self._limit_c:
             return PASS  # seed: litmus/evidence-fulfilled
         raise TestFailure("no limit", "> 0", "0")
+
+    async def _retarget(self, utils: TestUtils) -> object:
+        await utils.use_shell(inherit=False)  # seed: litmus/shell-in-configure
+        return None
