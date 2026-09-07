@@ -129,6 +129,17 @@ that reader is soon a stranger.
   to stdout and the first line of each `.soak/*.log` before starting it. To reproduce
   that generated coverage, check out the recorded revision, sync its lockfile, and run
   the logged command. A seed reproduces generated inputs, not event-loop scheduling.
+- **Coverage proves a line ran, not that a test would notice it breaking.** `make
+  mutants` attacks `verdict.py`, `base.py`, and `lifecycle.py` — the child boundary
+  that turns a suite's return into a non-forgeable verdict — with `mutmut`
+  (`[tool.mutmut]` in `pyproject.toml`), flipping one operator, condition, or literal
+  at a time and re-running the scoped test files. A surviving mutant means some
+  behavior in the kernel of trust has no test watching it; each one is closed with a
+  killing test or, where the mutation is behaviorally identical to the original
+  (dead code, an unreachable branch), recorded as equivalent with its reasoning in the
+  MR that ran the audit. `make mutants` is an audit, not a gate: it is not part of
+  `make check` and CI does not run it — mutation runs are slow and its job is to find
+  gaps for a human to close, not to fail a pipeline.
 
 ## 7. Workflow
 
