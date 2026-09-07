@@ -1,5 +1,5 @@
 # litmus — development entry points. All tooling config lives in pyproject.toml.
-.PHONY: install format lint fix typecheck test coverage audit docs check soak nightly hooks clean
+.PHONY: install format lint fix typecheck test coverage audit docs check soak nightly mutants hooks clean
 
 install:  ## Sync venv (incl. dev deps) and install git hooks
 	uv sync
@@ -53,9 +53,13 @@ soak:  ## Race gate — full suite SOAK_RUNS times; one green run proves nothing
 nightly:  ## The nightly soak as CI runs it (soak + rack suite RACK_REPEATS times); posts nothing
 	SOAK_RUNS=$(SOAK_RUNS) RACK_REPEATS=$(RACK_REPEATS) uv run python tools/nightly_soak.py --no-post
 
+mutants:  ## Mutation audit over the kernel of trust (verdict/base/lifecycle); not a gate, see STANDARDS.md §6
+	uv run mutmut run
+	uv run mutmut results
+
 hooks:  ## Point git at the shared hooks (auto-lint on commit)
 	git config core.hooksPath .githooks
 
 clean:
-	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak dist site
+	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak mutants dist site
 	find . -type d -name __pycache__ -exec rm -rf {} +
