@@ -66,15 +66,35 @@ rules and pyright strict — an unannotated def fails `make check`.
 - Names say what a thing is for the reader who arrives cold: no abbreviations that only
   make sense mid-session, no `mgr`/`util2`/`tmp` survivors.
 
-## 5. Docstrings and comments
+## 5. Docstrings and comments — written for the next reader
+
+The reader this section serves is the one who arrives cold, cannot ask the author, and
+has to decide whether the code in front of them is right. The framework is going public;
+that reader is soon a stranger.
 
 - Every public class and method gets a docstring stating its **contract** (what it
   guarantees, what it raises), not a paraphrase of its name.
 - Docstrings open with a one-line summary. Parameter documentation, when needed, follows
   as an indented Google-style `Args:` block after a blank line — `Args:` never stands in
   for the summary line.
-- Comments state constraints the code can't show ("shielded: a second cancel here would
-  orphan hardware state"). No narration, no changelog comments.
+- Every module under `src/` opens with a docstring naming what the module owns and where
+  it sits in the framework. The next reader arrives at a file, not at a class.
+- **Why over what.** A comment says why the code is shaped this way and what would go
+  wrong otherwise — the constraint, the trade-off, the failure it prevents ("shielded: a
+  second cancel here would orphan hardware state"). A comment that restates the next
+  line is noise and comes out on review. No changelog comments; git carries the history.
+- `examples/` is the one place narration is welcome: the examples exist to teach, and a
+  walkthrough serves that. Even there the reasoning leads and the narration carries it.
+- Tests document by name: the method name states the contract it pins (§6). A comment
+  carries the why only where the name cannot — the race being reproduced, the boundary
+  being probed on purpose.
+- **The review test.** A reader who did not write the change must be able to state, from
+  the diff alone, what each changed unit is for and why it is shaped that way. Where the
+  reviewer has to reconstruct that intent from the code, the intent goes into the code —
+  not into the MR thread, and not into a promise to comment later. An MR that fails this
+  test is held with revision requested, whatever else it carries. Presence of docstrings
+  is not yet enforced by ruff (the `D` rules land with the Phase 8 quality sweep, #109);
+  until then the reviewer is the gate.
 
 ## 6. Tests
 
