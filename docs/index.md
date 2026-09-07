@@ -11,6 +11,8 @@ a developer writes the suite that makes that possible.
   [idioms](idioms.md) and [contracts](contracts.md).
 - **Public surface:** [API stability](api-stability.md) is the policy;
   the [API reference](api.md) is generated from the public names' docstrings.
+- **Inspector contributors:** the [target specification](inspector.md) carries the
+  terminal workflow to build. The Python Inspector is not shipped yet.
 
 Build this site locally with `make docs`. A broken cross-reference fails the
 gate. A version tag publishes it to GitLab Pages.
