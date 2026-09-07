@@ -41,51 +41,6 @@ from litmus import (
     Verdict,
 )
 
-# --- Environment helpers -----------------------------------------------------------
-#
-# The same three helpers appear in every SSH-backed example rather than in a shared
-# module, so each file stays a complete, copy-out-and-run reference. They read
-# `utils.env`, not `os.environ`, so a self-test can inject a target without touching
-# the process, and they Fail with "did not reach a testable state" plus the variable
-# name, which turns a bench mistake into an instruction.
-
-
-def _env_text(utils: TestUtils, name: str) -> str | None:
-    """Return a trimmed env value, treating blank the same as unset."""
-    value = utils.env.get(name)
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
-
-
-def _require_env(utils: TestUtils, name: str) -> str:
-    """Return the env value or Fail the run with the variable to set."""
-    value = _env_text(utils, name)
-    if value is None:
-        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
-    return value
-
-
-def _env_port(utils: TestUtils, name: str) -> int:
-    """Return the env port, defaulting to 22, and reject values a dial would choke on."""
-    raw = _env_text(utils, name)
-    if raw is None:
-        return 22
-    try:
-        port = int(raw)
-    except ValueError:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        ) from None
-    if not 1 <= port <= 65535:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        )
-    return port
-
 
 class Gateway(LitmusTest):
     """Class-owned SSH hop that a DUT can borrow as `via`.
@@ -125,12 +80,15 @@ class Gateway(LitmusTest):
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Open the hop. A refused dial is Fail, not a contract banner."""
-        host = self._host or _require_env(utils, "GATEWAY_HOST")
-        username = self._username or _require_env(utils, "GATEWAY_USER")
+        # `utils.env`, never `os.environ`: the run's own view, injectable by the self-tests and
+        # published on the record. `require` Fails naming the variable to set; `port` defaults
+        # to 22 and rejects a typo; `text` treats blank as unset.
+        host = self._host or utils.env.require("GATEWAY_HOST")
+        username = self._username or utils.env.require("GATEWAY_USER")
         password = (
-            self._password if self._password is not None else _env_text(utils, "GATEWAY_PASSWORD")
+            self._password if self._password is not None else utils.env.text("GATEWAY_PASSWORD")
         )
-        port = self._port if self._port is not None else _env_port(utils, "GATEWAY_PORT")
+        port = self._port if self._port is not None else utils.env.port("GATEWAY_PORT")
         try:
             await utils.use_shell(
                 host=host,
@@ -206,10 +164,10 @@ class DutDevice(LitmusTest):
         them. A device that never appears is a Fail from configure, and no claim
         is asked to ping an address that does not exist.
         """
-        mac = self._mac or _require_env(utils, "DUT_MAC")
+        mac = self._mac or utils.env.require("DUT_MAC")
         if self._via_from_constructor is None:
-            gateway_host = _env_text(utils, "GATEWAY_HOST")
-            gateway_user = _env_text(utils, "GATEWAY_USER")
+            gateway_host = utils.env.text("GATEWAY_HOST")
+            gateway_user = utils.env.text("GATEWAY_USER")
             # The pair is all-or-nothing. A host without a user would dial as the
             # process's login and fail with a message about credentials; naming the
             # unset variable instead points the operator at the actual gap.
@@ -230,8 +188,8 @@ class DutDevice(LitmusTest):
                 await utils.use_shell(
                     host=gateway_host,
                     username=gateway_user,
-                    password=_env_text(utils, "GATEWAY_PASSWORD"),
-                    port=_env_port(utils, "GATEWAY_PORT"),
+                    password=utils.env.text("GATEWAY_PASSWORD"),
+                    port=utils.env.port("GATEWAY_PORT"),
                 )
         arp = utils.get_arp_resolver(mac=mac)
         try:
