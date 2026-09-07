@@ -19,6 +19,9 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- `litmus/shell-in-configure`, the tier-3 rule that flags `utils.use_shell(...)` with
+  arguments outside `configure()`, seeded in the fixture and listed in the rule table
+  with its tier-1 counterpart (issue #76).
 - `docs/hil/serial.md`: the design note for a serial/UART console transport as a
   `RemoteInterface` peer — prompt detection, timeouts, line discipline,
   exit-status recovery via a sentinel, output bounding, safe-state on abort, and
@@ -186,6 +189,14 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Changed
 
+- `use_shell` declares this node's exec route only while `configure()` is running:
+  a declaring call (`host`, `via`, `inherit=False`, `propagate=False`) from a test
+  method, `cleanup`, a survey, or an audit raises `ContractViolation` before the
+  router is touched, so the `exec routing:` line written after `configure` is the
+  route every command of the node ran under. The bare `use_shell()` read and
+  `get_shell` are unchanged. The Exec Routing Contract now states the window, what a
+  second declaration inside `configure` means, and who owns an opened shell
+  (issue #76).
 - The nightly soak draws and records a fresh Hypothesis seed for each pytest run,
   extending generated composition coverage while retaining a replay command in every
   run log. The ordinary gate and eight-run race soak keep their fixed seed
