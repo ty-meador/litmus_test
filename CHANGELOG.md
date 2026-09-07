@@ -19,6 +19,11 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- Inspector target specification review rulings (issue #89): Inspect and Failures
+  ship independently of a separately approved Run adapter; ancestor-configure replay
+  and suite reconstruction from saved evidence are prohibited. Relocated artifacts
+  preserve their full run-relative path, with explicit unavailable diagnostics instead
+  of basename substitution. Specification only; the Inspector remains unimplemented.
 - `make mutants`: a `mutmut` mutation audit over the kernel of trust (`verdict.py`,
   `base.py`, `lifecycle.py`), configured in `[tool.mutmut]` and kept out of `make check`.
   STANDARDS §6 records the standing rule: every surviving mutant gets a killing test or
