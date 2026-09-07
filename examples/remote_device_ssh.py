@@ -30,50 +30,6 @@ from typing import Any
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 
-# --- Environment helpers -----------------------------------------------------------
-#
-# Repeated in each SSH-backed example so every file is a complete reference on its
-# own. They read `utils.env` (injectable by self-tests) rather than `os.environ`, and
-# they Fail with "did not reach a testable state" plus the variable name so a bench
-# mistake reads as an instruction, not a traceback.
-
-
-def _env_text(utils: TestUtils, name: str) -> str | None:
-    """Return a trimmed env value, treating blank the same as unset."""
-    value = utils.env.get(name)
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
-
-
-def _require_env(utils: TestUtils, name: str) -> str:
-    """Return the env value or Fail the run with the variable to set."""
-    value = _env_text(utils, name)
-    if value is None:
-        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
-    return value
-
-
-def _env_port(utils: TestUtils, name: str) -> int:
-    """Return the env port, defaulting to 22, and reject values a dial would choke on."""
-    raw = _env_text(utils, name)
-    if raw is None:
-        return 22
-    try:
-        port = int(raw)
-    except ValueError:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        ) from None
-    if not 1 <= port <= 65535:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        )
-    return port
-
 
 class SshDevice(LitmusTest):
     """Share one SSH hop across this device's claims by declaring it in configure."""
@@ -113,14 +69,15 @@ class SshDevice(LitmusTest):
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Open the class-owned hop. A refused dial is Fail, not a contract banner."""
-        host = self._host or _require_env(utils, "SSH_HOST")
-        username = self._username or _require_env(utils, "SSH_USER")
+        # `utils.env`, never `os.environ`: the run's own view, injectable by the self-tests and
+        # published on the record. `require` Fails naming the variable to set; `port` defaults
+        # to 22 and rejects a typo; `text` treats blank as unset.
+        host = self._host or utils.env.require("SSH_HOST")
+        username = self._username or utils.env.require("SSH_USER")
         # `is not None`, not `or`: an explicit empty password is a choice, and only
         # an absent one should fall through to the environment.
-        password = (
-            self._password if self._password is not None else _env_text(utils, "SSH_PASSWORD")
-        )
-        port = self._port if self._port is not None else _env_port(utils, "SSH_PORT")
+        password = self._password if self._password is not None else utils.env.text("SSH_PASSWORD")
+        port = self._port if self._port is not None else utils.env.port("SSH_PORT")
         try:
             # This is the line the whole example is about. From here on,
             # `utils.exec` in this node and its descendants runs on `host`.

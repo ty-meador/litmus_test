@@ -50,7 +50,7 @@ from litmus.lifecycle import Phase, Slot, State, TimeoutEvidence
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.routing import Shell
 from litmus.run_data import JsonObject
-from litmus.utils import RunSignal, ScopedLogger, TestUtils
+from litmus.utils import RunEnv, RunSignal, ScopedLogger, TestUtils
 from litmus.verdict import PASS, Verdict
 
 try:
@@ -80,6 +80,7 @@ __all__ = [
     "NodeType",
     "OperatorInterrupt",
     "Phase",
+    "RunEnv",
     "RunResult",
     "RunSignal",
     "ScopedLogger",

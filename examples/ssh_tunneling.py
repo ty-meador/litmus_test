@@ -33,50 +33,6 @@ from typing import Any
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 
-# --- Environment helpers -----------------------------------------------------------
-#
-# Repeated in each SSH-backed example so every file is a complete reference on its
-# own. They read `utils.env` (injectable by self-tests) rather than `os.environ`, and
-# they Fail with "did not reach a testable state" plus the variable name so a bench
-# mistake reads as an instruction, not a traceback.
-
-
-def _env_text(utils: TestUtils, name: str) -> str | None:
-    """Return a trimmed env value, treating blank the same as unset."""
-    value = utils.env.get(name)
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
-
-
-def _require_env(utils: TestUtils, name: str) -> str:
-    """Return the env value or Fail the run with the variable to set."""
-    value = _env_text(utils, name)
-    if value is None:
-        raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
-    return value
-
-
-def _env_port(utils: TestUtils, name: str) -> int:
-    """Return the env port, defaulting to 22, and reject values a dial would choke on."""
-    raw = _env_text(utils, name)
-    if raw is None:
-        return 22
-    try:
-        port = int(raw)
-    except ValueError:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        ) from None
-    if not 1 <= port <= 65535:
-        raise TestFailure(
-            f"did not reach a testable state: {name} env var is not a valid port; "
-            f"set {name} to an integer 1-65535"
-        )
-    return port
-
 
 class TunneledDevice(LitmusTest):
     """Reach a DUT through a jump host without rebinding this node's `utils.exec`."""
@@ -130,25 +86,26 @@ class TunneledDevice(LitmusTest):
         name or address the jump can reach, which is often a private one the test
         host cannot. That is the reason the tunnel exists.
         """
-        jump_host = self._jump_host or _require_env(utils, "JUMP_HOST")
-        jump_username = self._jump_username or _require_env(utils, "JUMP_USER")
-        target_host = self._target_host or _require_env(utils, "TARGET_HOST")
-        target_username = self._target_username or _require_env(utils, "TARGET_USER")
+        # `utils.env`, never `os.environ`: the run's own view, injectable by the self-tests and
+        # published on the record. `require` Fails naming the variable to set; `port` defaults
+        # to 22 and rejects a typo; `text` treats blank as unset.
+        jump_host = self._jump_host or utils.env.require("JUMP_HOST")
+        jump_username = self._jump_username or utils.env.require("JUMP_USER")
+        target_host = self._target_host or utils.env.require("TARGET_HOST")
+        target_username = self._target_username or utils.env.require("TARGET_USER")
         jump_password = (
             self._jump_password
             if self._jump_password is not None
-            else _env_text(utils, "JUMP_PASSWORD")
+            else utils.env.text("JUMP_PASSWORD")
         )
         target_password = (
             self._target_password
             if self._target_password is not None
-            else _env_text(utils, "TARGET_PASSWORD")
+            else utils.env.text("TARGET_PASSWORD")
         )
-        jump_port = (
-            self._jump_port if self._jump_port is not None else _env_port(utils, "JUMP_PORT")
-        )
+        jump_port = self._jump_port if self._jump_port is not None else utils.env.port("JUMP_PORT")
         target_port = (
-            self._target_port if self._target_port is not None else _env_port(utils, "TARGET_PORT")
+            self._target_port if self._target_port is not None else utils.env.port("TARGET_PORT")
         )
         try:
             # First hop: a handle to the jump. `utils.exec` is untouched.

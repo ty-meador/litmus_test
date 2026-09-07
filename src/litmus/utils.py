@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -444,6 +444,80 @@ def _first_key(args: tuple[Any, ...], kwargs: Mapping[str, Any], operation: str)
 
 
 @final
+class RunEnv(Mapping[str, str]):
+    """The run environment: a read-only mapping with readers that Fail the run.
+
+    Contract:
+      - It is the filtered, immutable snapshot ``TestUtils.env`` publishes on every
+        ``RunResult``. ``get``, ``in``, ``[]``, and iteration behave as on any mapping.
+      - ``text(name)`` trims the value and treats blank as unset. A bench script that
+        exports ``TARGET_PASSWORD=""`` means "no password", not "the empty password".
+      - ``require(name)`` raises ``TestFailure`` naming the variable to set. Called from
+        ``configure``, that is the "did not reach a testable state" verdict: the run
+        Fails before any claim runs, and the message is the operator's instruction.
+      - ``port(name, default=22)`` parses an integer in 1-65535 and raises
+        ``TestFailure`` for anything else, so a bench typo is reported as the variable
+        rather than surfacing later as a transport error.
+    """
+
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Mapping[str, str]) -> None:
+        self._values: Mapping[str, str] = MappingProxyType(dict(values))
+
+    def __getitem__(self, name: str) -> str:
+        return self._values[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __repr__(self) -> str:
+        return f"RunEnv({dict(self._values)!r})"
+
+    def text(self, name: str) -> str | None:
+        """Return the trimmed value of ``name``, or ``None`` when it is unset or blank."""
+        value = self._values.get(name)
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    def require(self, name: str) -> str:
+        """Return the trimmed value of ``name``, or Fail the run naming the variable.
+
+        Raises:
+            TestFailure: ``name`` is unset or blank.
+        """
+        value = self.text(name)
+        if value is None:
+            raise TestFailure(f"did not reach a testable state: {name} env var not set; set {name}")
+        return value
+
+    def port(self, name: str, *, default: int = 22) -> int:
+        """Return ``name`` as a TCP port, or ``default`` when it is unset or blank.
+
+        Raises:
+            TestFailure: the value is not an integer in 1-65535.
+        """
+        raw = self.text(name)
+        if raw is None:
+            return default
+        try:
+            port = int(raw)
+        except ValueError:
+            port = 0
+        if not 1 <= port <= 65535:
+            raise TestFailure(
+                f"did not reach a testable state: {name} env var is not a valid port; "
+                f"set {name} to an integer 1-65535"
+            )
+        return port
+
+
+@final
 class TestUtils:
     """The single fully scoped service object passed to every lifecycle method.
 
@@ -515,7 +589,7 @@ class TestUtils:
         self._owns_timeline = False
         source_env = os.environ if env is None else env
         env_filter = _EnvFilter(allow=env_allow, deny=env_deny)
-        self._env = MappingProxyType(env_filter.apply(source_env, self._base_logger))
+        self._env = RunEnv(env_filter.apply(source_env, self._base_logger))
         self._env_filter_warning: str | None = None
         if (
             env_filter.mode is not None
@@ -555,12 +629,14 @@ class TestUtils:
         return self._ctx
 
     @property
-    def env(self) -> Mapping[str, str]:
+    def env(self) -> RunEnv:
         """Immutable snapshot of the run environment, as published in every ``RunResult``.
 
         This is the filtered view when the run declared ``env_allow`` or ``env_deny``;
         a variable the filter withheld is absent here too, so ``PHYSICAL_LOCATION`` and
-        ``LITMUS_ARTIFACT_ROOT`` must survive an allow list to keep their effect.
+        ``LITMUS_ARTIFACT_ROOT`` must survive an allow list to keep their effect. Beyond
+        the mapping, ``RunEnv.require``, ``text``, and ``port`` read a bench variable
+        and Fail the run naming it when it is missing or malformed.
         """
         return self._env
 
