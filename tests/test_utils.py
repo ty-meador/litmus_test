@@ -390,6 +390,8 @@ class TestUtilsExecNeverThrows:
         transport = MockTransport()
         utils = TestUtils()
         install_mock_connector(utils, transport)
+        # These cases are about exec settling; open the configure-only window by hand.
+        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
         await utils.use_shell(host="dut", username="root")
 
         await object.__getattribute__(utils, "_transports").cancel_in_flight()
@@ -406,6 +408,8 @@ class TestUtilsExecNeverThrows:
         transport.park("flash")
         utils = TestUtils()
         install_mock_connector(utils, transport)
+        # These cases are about exec settling; open the configure-only window by hand.
+        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
         await utils.use_shell(host="dut", username="root")
         task = asyncio.create_task(utils.exec("flash"))
         deadline = asyncio.get_running_loop().time() + 2
@@ -427,6 +431,8 @@ class TestUtilsExecNeverThrows:
         transport = MockTransport()
         utils = TestUtils()
         install_mock_connector(utils, transport)
+        # These cases are about exec settling; open the configure-only window by hand.
+        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
         shell = await utils.use_shell(host="dut", username="root")
 
         await transport.cancel_in_flight()

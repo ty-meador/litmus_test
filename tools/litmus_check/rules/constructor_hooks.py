@@ -14,10 +14,9 @@ Tier-1 counterpart: both registrars raise ``ContractViolation`` once the instanc
 frozen after the most-derived ``__init__`` returns. This rule moves that error from
 the first run to the editor.
 
-The legacy rule also policed ``utils.useShell()`` outside ``configure()``. The port's
-``use_shell`` carries no such runtime contract, and a tier-3 rule with no tier-1 or
-tier-2 counterpart would be the only guard — which section 3.4 forbids — so that
-half is deliberately not carried.
+The legacy rule also policed ``utils.useShell()`` outside ``configure()``. That half
+lives in ``litmus/shell-in-configure`` (``shell_in_configure.py``), added once
+``use_shell`` had the runtime contract section 3.4 requires a tier-3 rule to mirror.
 """
 
 from __future__ import annotations

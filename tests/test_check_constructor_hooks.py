@@ -1,8 +1,8 @@
 """``litmus/constructor-hooks``: ``use_survey`` and ``use_audit`` live in ``__init__``.
 
 The cases mirror the legacy language server's ``hook-outside-constructor`` suite for
-the two registrars the port carries; the ``useShell``-outside-``configure`` half has no
-runtime counterpart in the port and is not ported (see the rule's module docstring).
+the two registrars; the ``useShell``-outside-``configure`` half is
+``litmus/shell-in-configure`` and has its own suite.
 """
 
 import io
@@ -167,7 +167,8 @@ class TestConstructorHooksAtTheCommandLine:
             "litmus/pure-build-suite",
             "litmus/raise-test-failure",
             "litmus/retired-names",
+            "litmus/shell-in-configure",
             "litmus/unannotated-interface",
         ]
         assert all("seeded_suite.py" in line for line in lines[:-1])
-        assert lines[-1] == "Found 11 violations."
+        assert lines[-1] == "Found 12 violations."

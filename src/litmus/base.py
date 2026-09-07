@@ -1738,13 +1738,16 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     async def _configure_and_merge_context(self, utils: TestUtils) -> Mapping[str, Any]:
         """Keep configure and its required ctx merge inside one child boundary.
 
-        The context closes when configure settles, whether it returned or raised:
-        cleanup after a failed configure reads the context and may not write it either.
+        The context closes and the route-declaration window shuts when configure
+        settles, whether it returned or raised: cleanup after a failed configure reads
+        the context and the route and may not write either.
         """
+        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
         try:
             configured = await self.configure(utils)
             utils._merge_context(configured)  # pyright: ignore[reportPrivateUsage]
         finally:
+            utils._exit_configure()  # pyright: ignore[reportPrivateUsage]
             utils._freeze_context()  # pyright: ignore[reportPrivateUsage]
         return configured
 
