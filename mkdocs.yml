@@ -26,7 +26,6 @@ nav:
   - Overview: overview.md
   - Idioms: idioms.md
   - Contracts: contracts.md
-  - Serial/UART (design note): hil/serial.md
   - Inspector JSON: inspector-json.md
   - Inspector (target specification): inspector.md
   - Measurements: measurements.md
@@ -36,6 +35,10 @@ nav:
   - litmus-check: litmus-check.md
   - API stability: api-stability.md
   - API reference: api.md
+  - HIL interfaces:
+      - Overview: hil/index.md
+      - GPIO (design note): hil/gpio.md
+      - Serial/UART (design note): hil/serial.md
 
 plugins:
   - search
