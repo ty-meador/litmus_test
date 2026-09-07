@@ -35,7 +35,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import NoReturn, TextIO, final
+from typing import Any, NoReturn, TextIO, cast, final
 
 from litmus.base import LitmusTest
 from litmus.errors import LitmusError
@@ -156,8 +156,10 @@ class SuiteLoader:
         return name
 
     @staticmethod
-    def _defined_suites(module: ModuleType) -> dict[str, type[LitmusTest]]:
-        defined: dict[str, type[LitmusTest]] = {}
+    def _defined_suites(module: ModuleType) -> dict[str, type[LitmusTest[Any]]]:
+        # The CLI loads whatever suite the module defines, so it names the node type
+        # without committing to any one suite's context shape (issue #75).
+        defined: dict[str, type[LitmusTest[Any]]] = {}
         for attribute, value in vars(module).items():
             if (
                 not attribute.startswith("_")
@@ -171,11 +173,14 @@ class SuiteLoader:
 
     @staticmethod
     def _named(
-        module: ModuleType, defined: Mapping[str, type[LitmusTest]], class_name: str
-    ) -> type[LitmusTest]:
+        module: ModuleType, defined: Mapping[str, type[LitmusTest[Any]]], class_name: str
+    ) -> type[LitmusTest[Any]]:
         value = getattr(module, class_name, None)
         if isinstance(value, type) and issubclass(value, LitmusTest) and value is not LitmusTest:
-            return value
+            # The checks above are what prove the type. Narrowing a generic class
+            # leaves its parameter unsolved, so the CLI states what it already knows:
+            # a suite class of any context shape (issue #75).
+            return cast("type[LitmusTest[Any]]", value)
         names = ", ".join(defined) or "(none)"
         raise UsageError(
             f"{module.__name__}: no LitmusTest subclass named {class_name!r}; name one of: {names}"
