@@ -1,4 +1,10 @@
-"""Durable, per-node records for a run's authoritative chronology."""
+"""Durable, per-node records for a run's authoritative chronology.
+
+Writes and per-record flushes are synchronous so each logging call completes its
+record before the caller proceeds. Like a standard logging FileHandler, this can
+block the event loop on filesystem I/O; dispatching writes independently to worker
+threads would let later records overtake earlier ones and break the chronology.
+"""
 
 from __future__ import annotations
 
