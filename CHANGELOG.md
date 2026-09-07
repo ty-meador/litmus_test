@@ -44,6 +44,11 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
   the `via`-hop composition that reaches a remote console over SSH. Design only;
   no code change. Awaiting Ty's sign-off on the note before an implementation MR
   opens (issue #91).
+- `docs/hil/index.md` and `docs/hil/gpio.md`: the HIL interface design-note index
+  and the GPIO interface design note (issue #93), proposing a pin
+  direction/level/debounce contract, abort safe-state (every declared output
+  pin driven to its idle level), and a pin-settle error taxonomy. Design-only;
+  DRAFT pending Ty's signature, no code and no public-surface change.
 - `RunEnv`, the type of `utils.env`: still a read-only mapping, now with `require`,
   `text`, and `port` readers that Fail the run naming the bench variable to set. The
   SSH-backed examples use them in place of per-file helper functions.
