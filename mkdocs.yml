@@ -26,6 +26,7 @@ nav:
   - Overview: overview.md
   - Idioms: idioms.md
   - Contracts: contracts.md
+  - Serial/UART (design note): hil/serial.md
   - Inspector JSON: inspector-json.md
   - JUnit XML: junit-xml.md
   - litmus run: litmus-run.md
