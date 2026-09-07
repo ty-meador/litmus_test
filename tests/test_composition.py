@@ -167,6 +167,21 @@ class TestCompositionFactories:
         with pytest.raises(TypeError, match="must be defined with async def"):
             suite.test("lambda", lambda _utils: PASS)  # pyright: ignore[reportArgumentType, reportUnknownLambdaType]
 
+    def test_composed_nodes_own_a_timeline_unless_rolled_up(self) -> None:
+        suite = LitmusTest(name="rack")
+
+        async def claim(_utils: object) -> Verdict:
+            return PASS
+
+        child = suite.test("claim", claim)
+
+        # Rolling a node's records into its parent is the opt-in; the default is a
+        # timeline of its own, which is what the FT opens for that node.
+        assert suite.parallel("parallel", [child]).discrete_log_file is True
+        assert suite.sequence("sequence", [child]).discrete_log_file is True
+        rolled = suite.parallel("rolled", [child], discrete_log_file=False)
+        assert rolled.discrete_log_file is False
+
     async def test_internal_nodes_report_direct_build_as_framework_bugs(self) -> None:
         async def passes(_utils: object) -> Verdict:
             return PASS

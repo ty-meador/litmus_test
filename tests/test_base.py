@@ -28,6 +28,16 @@ class TestLitmusTestPublicSurface:
                 ) -> Verdict:
                     return PASS
 
+    def test_a_fresh_node_owns_a_timeline_and_has_nothing_to_report_yet(self) -> None:
+        node = LitmusTest(name="rack")
+
+        # The constructor's documented defaults: a node owns its timeline unless a
+        # composer rolls it up, and before a run there is no log path and no context,
+        # only the reserved measurements slot every run_data record carries.
+        assert node.discrete_log_file is True
+        assert node.log_path is None
+        assert node.run_data == {"measurements": []}
+
 
 class TestLitmusTestImmutability:
     def test_subclass_constructor_can_finish_before_instance_freezes(self) -> None:
@@ -46,10 +56,27 @@ class TestLitmusTestImmutability:
 
         assert device.name == "dut"
         assert device.serial == "abc123"
-        with pytest.raises(AttributeError, match="immutable after construction"):
+        with pytest.raises(AttributeError, match="Device is immutable after construction"):
             device.serial = "changed"
-        with pytest.raises(AttributeError, match="immutable after construction"):
+        with pytest.raises(AttributeError, match="Device is immutable after construction"):
             del device.serial
+
+    def test_construction_may_take_back_an_attribute_before_the_freeze(self) -> None:
+        class Device(LitmusTest):
+            def __init__(self, *, name: str) -> None:
+                super().__init__(name=name)
+                # Scratch state is a constructor's business; the freeze only applies
+                # once the most-derived constructor has returned.
+                self.scratch = object()
+                del self.scratch
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _claim(self, utils: object) -> Verdict:
+                return PASS
+
+        assert not hasattr(Device(name="dut"), "scratch")
 
     def test_framework_has_an_explicit_internal_escape_hatch(self) -> None:
         test = LitmusTest(name="evidence")
