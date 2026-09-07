@@ -111,7 +111,7 @@ def _fold(tree: _Tree, path: _Path = ("root",)) -> dict[_Path, _Expected]:
             subtree = _fold(child, child_path)
             folded.update(subtree)
             children.append(subtree[child_path])
-    folded[path] = max(children, key=lambda child: _SEVERITY[cast(State, child.state)])
+    folded[path] = max(children, key=lambda child: _SEVERITY[cast("State", child.state)])
     return folded
 
 
@@ -183,7 +183,6 @@ def _assert_evidence(tree: _Tree, result: RunResult, execution: _Execution) -> N
     declarations = dict(_walk(tree))
     summaries = _summaries(result.summary_tree)
     assert summaries.keys() == declarations.keys()
-    assert len(summaries) == len(declarations)
     assert len(execution.started) == len(set(execution.started))
     assert set(execution.started) == execution.results.keys(), (
         execution.started,
@@ -352,4 +351,4 @@ class TestCompositionProperties:
         for path, ctx in contexts.items():
             if path != ("root",):
                 assert "after run" not in ctx["visited"]
-        assert "after run" not in cast(list[str], result.run_data["visited"])
+        assert "after run" not in cast("list[str]", result.run_data["visited"])
