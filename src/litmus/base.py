@@ -333,12 +333,20 @@ class _LitmusTestMeta(type):
         return instance
 
 
-class LitmusTest(metaclass=_LitmusTestMeta):
+class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusTestMeta):
     """A claim about hardware and the procedure that produces its evidence.
 
     Instances accept configuration during construction and are immutable afterwards.
     Calling :meth:`main` consumes the instance: a second call raises
     :class:`ContractViolation`, preserving the first run as evidence.
+
+    ``CtxT`` is opt-in sugar (issue #75): a suite that narrows ``configure``'s return
+    to a local ``TypedDict`` and declares ``class MySuite(LitmusTest[MyCtx])`` gets
+    ``utils: TestUtils[MyCtx]`` in ``configure``, ``cleanup``, and any test method that
+    asks for it. Composition and internal plumbing (``via``, sequence/parallel
+    children, the leaf/sequence/parallel specializations) hold ``LitmusTest[Any]``
+    instead of the bare, defaulted alias: they compose nodes of any ``CtxT`` and must
+    not force every via-gateway or child onto one suite's context shape.
     """
 
     __slots__ = (
@@ -366,7 +374,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self,
         *,
         name: str,
-        via: LitmusTest | None = None,
+        via: LitmusTest[Any] | None = None,
         discrete_log_file: bool = True,
         fail_after: float | None = None,
         abort_after: float | None = None,
@@ -404,7 +412,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self._audits: list[AuditHook] = []
         self._fn: _TestFunction | None = None
         self._evidence_declared: tuple[str, ...] | None = None
-        self._children: tuple[LitmusTest, ...] | None = None
+        self._children: tuple[LitmusTest[Any], ...] | None = None
         self._ctx: Mapping[str, Any] = {}
         self._summary_tree: SummaryTreeNode | None = None
 
@@ -512,7 +520,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         fail_after: float | None = None,
         abort_after: float | None = None,
         **kwargs: object,
-    ) -> LitmusTest:
+    ) -> LitmusTest[Any]:
         """Create the leaf node: a name, a verdict method, and that method's arguments.
 
         The framework calls ``fn(utils, *args, **kwargs)``. A suite stamps out one leaf
@@ -552,12 +560,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     def parallel(
         self,
         name: str,
-        children: Sequence[LitmusTest],
+        children: Sequence[LitmusTest[Any]],
         *,
         discrete_log_file: bool = True,
         fail_after: float | None = None,
         abort_after: float | None = None,
-    ) -> LitmusTest:
+    ) -> LitmusTest[Any]:
         """Compose independent children under one structured-concurrency owner."""
         if not children:
             raise ContractViolation(
@@ -576,12 +584,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     def sequence(
         self,
         name: str,
-        children: Sequence[LitmusTest],
+        children: Sequence[LitmusTest[Any]],
         *,
         discrete_log_file: bool = True,
         fail_after: float | None = None,
         abort_after: float | None = None,
-    ) -> LitmusTest:
+    ) -> LitmusTest[Any]:
         """Compose dependent children that stop at the first non-pass verdict."""
         if not children:
             raise ContractViolation(
@@ -639,11 +647,15 @@ class LitmusTest(metaclass=_LitmusTestMeta):
             )
         self._audits.append(AuditHook(interval=interval, fn=fn))
 
-    async def configure(self, utils: TestUtils) -> Mapping[str, Any]:
-        """Prepare the test and return context for its suite and cleanup."""
-        return {}
+    async def configure(self, utils: TestUtils[CtxT]) -> CtxT:
+        """Prepare the test and return context for its suite and cleanup.
 
-    def build_suite(self) -> LitmusTest:
+        The default returns an empty mapping typed as ``CtxT`` for the unparameterized
+        case; the cast is the framework's, not a suite author's — see issue #75.
+        """
+        return cast(CtxT, {})
+
+    def build_suite(self) -> LitmusTest[Any]:
         """Return this node's authored composition.
 
         Subclasses provide a pure table of contents assembled with ``self.test()``,
@@ -655,7 +667,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         )
         raise ContractViolation(self.name, detail)
 
-    async def cleanup(self, utils: TestUtils) -> None:
+    async def cleanup(self, utils: TestUtils[CtxT]) -> None:
         """Restore state after the suite settles, regardless of its outcome."""
 
     @final
@@ -997,7 +1009,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
                 return await self._finish_result(result, utils)
 
             ran_test = False
-            suite: LitmusTest | None = None
+            suite: LitmusTest[Any] | None = None
             try:
                 # Hop first, teardown last. The test budget begins at configure,
                 # after the borrowed via and pre-configure survey are ready.
@@ -1492,7 +1504,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self,
         utils: TestUtils,
         run_abort: RunAbort,
-        children: tuple[LitmusTest, ...],
+        children: tuple[LitmusTest[Any], ...],
         *,
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
@@ -1571,7 +1583,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         self,
         utils: TestUtils,
         run_abort: RunAbort,
-        children: tuple[LitmusTest, ...],
+        children: tuple[LitmusTest[Any], ...],
         *,
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
@@ -1744,7 +1756,10 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         """
         utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
         try:
-            configured = await self.configure(utils)
+            # The framework calls every node's configure() through the same erased
+            # TestUtils; CtxT only exists for the suite author's own annotations, so
+            # the framework narrows here rather than asking user code to cast (#75).
+            configured = await self.configure(cast("TestUtils[CtxT]", utils))
             utils._merge_context(configured)  # pyright: ignore[reportPrivateUsage]
         finally:
             utils._exit_configure()  # pyright: ignore[reportPrivateUsage]
@@ -1856,7 +1871,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
     @final
     async def _run_suite_with_audits(
         self,
-        suite: LitmusTest,
+        suite: LitmusTest[Any],
         utils: TestUtils,
         run_abort: RunAbort,
         audit_signal: AuditSignal,
@@ -1938,7 +1953,12 @@ class LitmusTest(metaclass=_LitmusTestMeta):
         cleanup = asyncio.create_task(
             boundary.run(
                 Slot.CLEANUP,
-                _bounded_finalization(self.cleanup(utils), node=self.name, operation="cleanup"),
+                _bounded_finalization(
+                    # Same erased-TestUtils narrowing as _configure_and_merge_context (#75).
+                    self.cleanup(cast("TestUtils[CtxT]", utils)),
+                    node=self.name,
+                    operation="cleanup",
+                ),
             )
         )
         try:
@@ -2113,7 +2133,7 @@ class LitmusTest(metaclass=_LitmusTestMeta):
 
 
 @final
-class _Test(LitmusTest):
+class _Test(LitmusTest[Any]):
     """Internal leaf specialization created only by :meth:`LitmusTest.test`."""
 
     __slots__ = ()
@@ -2136,7 +2156,7 @@ class _Test(LitmusTest):
         self._fn = fn
         self._evidence_declared = evidence_declared
 
-    def build_suite(self) -> LitmusTest:
+    def build_suite(self) -> LitmusTest[Any]:
         """Satisfy the structural contract; leaf execution never composes a suite."""
         raise FrameworkContractViolation(
             self.name,
@@ -2145,7 +2165,7 @@ class _Test(LitmusTest):
 
 
 @final
-class _Parallel(LitmusTest):
+class _Parallel(LitmusTest[Any]):
     """Internal concurrent specialization created only by :meth:`LitmusTest.parallel`."""
 
     __slots__ = ()
@@ -2154,7 +2174,7 @@ class _Parallel(LitmusTest):
         self,
         *,
         name: str,
-        children: Sequence[LitmusTest],
+        children: Sequence[LitmusTest[Any]],
         discrete_log_file: bool,
         fail_after: float | None,
         abort_after: float | None,
@@ -2167,7 +2187,7 @@ class _Parallel(LitmusTest):
         )
         self._children = tuple(children)
 
-    def build_suite(self) -> LitmusTest:
+    def build_suite(self) -> LitmusTest[Any]:
         """Satisfy the structural contract; parallel execution owns its child tasks."""
         raise FrameworkContractViolation(
             self.name,
@@ -2176,7 +2196,7 @@ class _Parallel(LitmusTest):
 
 
 @final
-class _Sequence(LitmusTest):
+class _Sequence(LitmusTest[Any]):
     """Internal serial specialization created only by :meth:`LitmusTest.sequence`."""
 
     __slots__ = ()
@@ -2185,7 +2205,7 @@ class _Sequence(LitmusTest):
         self,
         *,
         name: str,
-        children: Sequence[LitmusTest],
+        children: Sequence[LitmusTest[Any]],
         discrete_log_file: bool,
         fail_after: float | None,
         abort_after: float | None,
@@ -2198,7 +2218,7 @@ class _Sequence(LitmusTest):
         )
         self._children = tuple(children)
 
-    def build_suite(self) -> LitmusTest:
+    def build_suite(self) -> LitmusTest[Any]:
         """Satisfy the structural contract; sequence execution owns child order."""
         raise FrameworkContractViolation(
             self.name,
