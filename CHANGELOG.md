@@ -19,6 +19,13 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- Optional context typing: `LitmusTest[CtxT]` and `TestUtils[CtxT]` carry a suite's own
+  `TypedDict` into `utils.ctx`, so a misspelled key is a pyright error at the author's
+  desk instead of a contract-violation Fail on the floor (issue #75). Opt-in and
+  defaulted: the
+  bare names still mean `Mapping[str, Any]`, composition and `via` stay shape-agnostic,
+  and the runtime context object is unchanged.
+
 - Internal Inspector timeline reader (issue #89): preserves valid JSON Lines in file
   order with explicit truncation, decoding, version, and availability diagnostics.
   Validates against the published timeline schema packaged with the installation;
