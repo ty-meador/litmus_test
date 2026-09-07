@@ -8,6 +8,9 @@ signed decisions on [#88](https://gitlab.com/Tyler-Meador/litmus_test/-/issues/8
 It specifies the terminal UI to build; **the Python Inspector is not shipped yet**.
 The [Floor Technician guide](floor-technician.md) remains the station page for reading
 today's evidence. The controls below describe the target, not commands available today.
+The [review rulings on !119](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/119#note_3796094775)
+set the implementation order: ship Inspect and Failures first. Run is a separate
+increment behind its own decision and does not gate saved-evidence inspection.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
@@ -48,7 +51,7 @@ The terminal has a tab bar, a tree or failure list above, and the highlighted no
 timeline below. This illustration shows the target arrangement, not a captured run:
 
 ```text
-  [ Inspect ]   Run   Failures
+  [ Inspect ]   Failures
   ---------------------------------------------------------
   rack  Aborted
     server-01  Pass
@@ -99,20 +102,26 @@ Show the selected leaf's `evidence` beside its claim and failure. For every name
 is neither zero nor a successful measurement. Do not present the reserved empty
 `run_data["measurements"]` slot as an implemented measurement or SPC feature.
 
-### Run — deliberate hardware execution
+### Run — a separate, decision-gated increment
 
-The signed target retains the legacy Run tab: move to a node and deliberately press
-Enter to request a new execution. Switching tabs or highlighting a node must never run
-it. In the legacy UI this tab appears only when the local suite can be rebuilt; a
-saved evidence directory alone does not provide that capability.
+If Run is approved and implemented, retain the legacy deliberate Enter interaction:
+move to a node and press Enter to request execution. Switching tabs or highlighting a
+node must never run it. Inspect and Failures ship without this capability; a saved
+evidence directory alone never makes Run available.
 
-**The Python runner/source boundary is unresolved under #89.** Version-1 results carry
-no suite factory or constructor arguments. The legacy `↑ctx` indicator and automatic
-ancestor-configure replay cannot be carried over as promises: the Python
-[instance-local context idiom](idioms.md#immutable-self-convention) forbids inherited
-ctx, and the framework owns configure and cleanup. A shared decision must establish how
-an authorized runnable suite is supplied before Run is enabled. This specification
-does not add that API or authorize reconstruction from arbitrary artifact contents.
+**Ancestor-configure replay is prohibited.** The legacy `↑ctx` behavior does not port,
+including behind a flag. The Python
+[instance-local context idiom](idioms.md#immutable-self-convention) keeps a device
+self-contained when it is removed from a rack and run at the bench. Replaying a parent's
+configure to make that device runnable would introduce the hidden dependency this
+contract prevents. The framework continues to own configure and cleanup.
+
+**The Run entry point still requires its own shared decision under #89.** The operator
+must supply a runnable suite through a sanctioned entry point; the Inspector holds an
+adapter to it. Never derive a runnable suite from `result.json`, artifact contents, or
+source discovered beside the run directory. Version-1 results carry no suite factory
+or constructor arguments. This specification establishes the boundary, not a new
+execution API.
 
 During an eventual live run, Tab remains disabled as in the legacy UI. Quitting a saved
 inspection is harmless; quitting live hardware execution is a different operation. Its
@@ -125,9 +134,10 @@ that Ctrl-C always exits immediately with nothing at stake does not apply to a l
 
 Preserve the flat list for finding failures buried inside a large rack, with up/down
 selection and the selected node's log below. This is a navigation projection of the
-same recorded tree, not a second verdict calculation. Retain the legacy runner-mode
-tab availability until the Run boundary is settled; saved inspection must still reach
-Fail and Aborted nodes through Inspect's arrow navigation.
+same recorded tree, not a second verdict calculation. Retain the legacy list's
+navigation controls, but make Failures available during saved inspection without a
+runnable suite. Both Fail and Aborted nodes remain reachable through Inspect's arrow
+navigation as well. Run's separate decision does not gate either saved-evidence view.
 
 ## The main workflow: diagnosing a failure
 
@@ -196,10 +206,22 @@ the [JSON version policy](inspector-json.md#published-schemas).
 An unavailable or unreadable capture produces a visible diagnostic containing the
 reference, while the log and tree remain usable. The saved files are never edited.
 Version 1 stores absolute `artifact_path` pointers, whereas tree log links are relative.
-Moved-run artifact resolution remains an implementation decision on #89: the reader
-must not silently substitute a different file with the same basename. The target is to
-open the referenced evidence under the selected run root; the relocation rule must be
-settled before claiming that portability for artifact modals.
+The reader resolves captures under the selected run root. For a moved run, try
+re-anchoring the recorded path's run-root-relative tail beneath the opened run root
+before declaring the capture unavailable. Preserve that full relative path: two nodes
+may capture different evidence with the same filename. Never search for or substitute
+a file merely because its basename matches.
+
+Re-anchoring requires an established original run root. If the reader cannot establish
+that mapping, or the mapped capture cannot be read under the opened root, show
+**artifact unavailable** with the recorded reference; do not guess a root or silently
+fall back to another run's evidence. The reader implementation must demonstrate that
+mapping and its unavailable cases in tests before claiming moved-run support.
+
+This is a reader rule. Saved pointers remain unchanged and absolute at version 1.
+Changing their stored representation to relative paths is a record-contract change
+under the [version policy](inspector-json.md#published-schemas), requiring Ty's decision
+before an implementation MR.
 
 ### Reading and comparing artifacts
 
@@ -221,7 +243,7 @@ recorded differences, not an automatic diagnosis of hardware truth.
 | Context | Key | Action |
 |---|---|---|
 | Saved inspection, including a modal | `q` / `Ctrl-C` | Quit without changing evidence or touching hardware. |
-| Main view | `Tab` | Cycle the available Inspect / Run / Failures tabs; disabled during a live run. |
+| Main view | `Tab` | Cycle Inspect / Failures; include Run only after its separate approved implementation. Disabled during a live run. |
 | Inspect tree | `↑` / `↓` | Move through the tree. |
 | Inspect tree | `←` / `→` | Previous / next Fail or Aborted node; skip passed and pending rows. |
 | Run tree, when enabled | `↑` / `↓`, then `Enter` | Select a node, then deliberately request execution. |
@@ -234,7 +256,7 @@ recorded differences, not an automatic diagnosis of hardware truth.
 ## Things that need careful reading
 
 - **An ancestor owns the log.** The owner arrow explains roll-up; it says nothing about
-  context inheritance. The legacy `↑ctx` replay claim is not a Python idiom.
+  context inheritance. The legacy `↑ctx` ancestor-configure replay is prohibited.
 - **An error appears in a passing test.** Survey errors are logged but do not decide
   the verdict. Read the state and the surrounding capture, not just the line's color.
 - **Many nodes are Aborted.** An integration halt or operator interruption can affect
@@ -256,9 +278,16 @@ must be testable independently of the terminal and driven by a recorded 70-DUT r
   specified keys, including the two-artifact index collision.
 - Preserve complete lines under truncation and distinguish unavailable evidence,
   malformed records, unsupported versions, and nodes that never ran.
-- Keep saved inspection independent of source and hardware. Settle entry-point
-  discovery, the Run adapter and termination interaction, and artifact relocation on
-  #89 before implementing those boundaries. None may weaken the runtime contracts.
+- Make Inspect and Failures usable from saved evidence without source or hardware;
+  neither waits for Run. Settle the saved-view command and discovery rule under #89.
+- Verify moved-run resolution preserves the complete run-relative path and remains
+  under the opened root. Exercise captures with identical basenames in different nodes,
+  an unestablished root mapping, and unavailable files; preserve the recorded reference
+  in every unavailable diagnostic and never substitute another capture.
+- Keep Run behind its own decision and increment. Its adapter accepts only an
+  operator-supplied suite through a sanctioned entry point, never reconstruction from
+  evidence or neighboring source. Ancestor-configure replay stays prohibited. Any live
+  execution must preserve bounded cleanup, evidence, and operator-interrupt Aborted.
 
 If the message, chronology, and captures do not establish a recovery category, keep the
 run directory and escalate with the selected node's path. The Inspector must make that
