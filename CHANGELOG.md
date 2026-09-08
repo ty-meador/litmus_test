@@ -19,6 +19,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector timeline containment (issue #89): reads recorded run-relative
+  log paths beneath the opened run, retains the complete path after relocation, and
+  reports unavailable references without reading another run's chronology. Timeline
+  and capture readers now share checked, cached packaged schemas. Screens, loading
+  on selection, root discovery, and the entry point remain separate increments.
 - Internal Inspector saved-tree model (issue #89): schema-validated result loading,
   declaration-order rows, shared Fail/Aborted navigation, and nearest-ancestor log
   ownership. Pending nodes never borrow chronology, duplicate names retain distinct

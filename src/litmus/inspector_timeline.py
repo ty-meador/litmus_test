@@ -7,15 +7,14 @@ filter can keep damage visible without treating it as a logged hardware failure.
 
 import asyncio
 import json
-from dataclasses import dataclass
-from importlib.metadata import distribution
-from pathlib import Path
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from litmus.inspector_json import JsonDecoder
+from litmus.inspector_json import JsonDecoder, RecordSchema
 from litmus.run_data import JsonObject
 
 
@@ -42,19 +41,56 @@ class TimelineDiagnostic:
 
 @dataclass(frozen=True, slots=True)
 class TimelineRead:
-    """A file's readable records and diagnostics in physical order, with its source path."""
+    """Chronology with its source path and, when supplied, the recorded relative reference.
 
-    path: Path
+    A reference that cannot resolve within the opened run has no source path. Its
+    unavailable diagnostic still retains the reference so a pane can name the missing
+    evidence without substituting another file.
+    """
+
+    path: Path | None
     rows: tuple[TimelineRecord | TimelineDiagnostic, ...]
+    reference: str | None = None
 
 
 class TimelineReader:
     """Read version-1 chronology using the schema shipped with this installation.
 
-    This internal Inspector component accepts an already selected timeline path. Tree
-    ownership, run-root containment, artifact resolution, and cursor state belong to
-    the caller; the reader follows no pointer and imports no suite source.
+    Use read_reference for a recorded run-relative log_path, or read for a path already
+    selected by a trusted caller. Tree ownership, artifact resolution, and cursor state
+    belong to the caller; the reader follows no artifact pointer and imports no source.
     """
+
+    async def read_reference(self, run_root: Path, reference: str) -> TimelineRead:
+        """Read a complete POSIX relative path only beneath the opened run directory.
+
+        Absolute, empty, traversing, escaping, missing and non-file targets return an
+        unavailable diagnostic. Resolution and reading share one worker boundary.
+        The original reference survives relocation and diagnostics; filenames are never
+        searched or reduced to basenames. Caller cancellation propagates as for read.
+        The operator's run_root may use symlinks or '..'; recorded references may not
+        traverse, and their resolved targets must remain inside that root.
+        """
+        return await asyncio.to_thread(self._read_reference, run_root, reference)
+
+    def _read_reference(self, run_root: Path, reference: str) -> TimelineRead:
+        try:
+            relative = PurePosixPath(reference)
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+                raise ValueError("log reference must be nonempty, relative and contain no '..'")
+            root = run_root.resolve(strict=True)
+            path = root.joinpath(*relative.parts).resolve(strict=True)
+            # A lexical prefix check alone admits symlinks into another run's evidence.
+            if not path.is_relative_to(root):
+                raise ValueError("resolved timeline escapes the opened run root")
+            if not path.is_file():
+                raise ValueError("timeline is not a regular file")
+        except (OSError, ValueError) as error:
+            diagnostic = TimelineDiagnostic(
+                None, "unavailable", f"log unavailable: {reference}: {error}"
+            )
+            return TimelineRead(None, (diagnostic,), reference)
+        return replace(self._read(path), reference=reference)
 
     async def read(self, path: Path) -> TimelineRead:
         """Return every valid record with explicit damage and availability diagnostics.
@@ -67,11 +103,7 @@ class TimelineReader:
         return await asyncio.to_thread(self._read, path)
 
     def _read(self, path: Path) -> TimelineRead:
-        # Build configuration packages the published file verbatim. Distribution data
-        # also resolves in editable installs, where litmus itself lives in src/.
-        schema_path = distribution("litmus").locate_file("litmus_data/timeline-v1.schema.json")
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        validator = Draft202012Validator(schema)
+        validator = RecordSchema("timeline").validator()
         rows: list[TimelineRecord | TimelineDiagnostic] = []
         try:
             # Decode bytes per physical line: a cut UTF-8 sequence in the tail must
