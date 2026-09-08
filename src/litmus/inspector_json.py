@@ -1,10 +1,40 @@
-"""Decode JSON consistently at the Inspector's saved-evidence reader boundaries."""
+"""Own strict JSON decoding and packaged schemas shared by the Inspector's readers."""
 
 import json
 import math
-from typing import cast
+from dataclasses import dataclass
+from functools import cache
+from importlib.metadata import distribution
+from typing import Literal, cast
+
+from jsonschema import Draft202012Validator
 
 from litmus.run_data import JsonObject, JsonValue
+
+
+@dataclass(frozen=True, slots=True)
+class RecordSchema:
+    """One published record contract, shared by readers of the same evidence kind.
+
+    Installation or schema defects raise; they must not be reported as damaged
+    operator evidence. Distribution data also resolves in editable installations.
+    """
+
+    kind: Literal["artifact", "result", "timeline"]
+
+    def validator(self) -> Draft202012Validator:
+        """Check and cache this contract's validator; call only within a reader's worker."""
+        return _validator(self.kind)
+
+
+@cache
+def _validator(kind: Literal["artifact", "result", "timeline"]) -> Draft202012Validator:
+    # Cache by record kind, never by reader identity: cursor changes must not retain
+    # a growing collection of reader instances merely to reuse three fixed schemas.
+    path = distribution("litmus").locate_file(f"litmus_data/{kind}-v1.schema.json")
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
 
 
 class JsonDecoder:

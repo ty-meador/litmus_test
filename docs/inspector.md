@@ -22,7 +22,15 @@ diagnostic. Malformed complete records, duplicate keys, non-finite numbers, and
 unsupported versions are explicit diagnostics, and later valid records remain readable.
 Missing or unreadable logs produce a file-level unavailable diagnostic. These are reader
 observations, never test verdicts. The timeline reader does not open artifact pointers
-or resolve tree ownership.
+or resolve tree ownership. Its `read_reference(run_root, reference)` boundary opens
+a recorded POSIX `log_path` only beneath the selected run directory, preserving the
+complete relative path after a move. Empty, absolute, traversing, missing, non-file,
+and symlink-escaping references produce unavailable diagnostics. The read retains the
+recorded reference and the resolved source path; a reference that cannot resolve has
+no source path. It never searches another directory for a matching basename. Timeline
+and capture readers share one checked, cached loader for the packaged schemas; evidence
+is read afresh on every call. The operator's selected run directory may itself use
+symlinks or `..`; the reader resolves that directory before containing recorded links.
 
 The internal capture reader (`litmus.inspector_artifacts.ArtifactReader`) now reads
 absolute pointers beneath an opened run root. An explicit, established original root
@@ -41,9 +49,9 @@ result through that validated result boundary. It resolves the operator's select
 before deriving the run root, so a symlink such as `latest/result.json` or a path with
 `..` opens the same saved evidence as its direct path. References inside saved records
 still obey the capture reader's traversal and containment checks.
-Its `InspectorTree` preserves every
-recorded node in declaration preorder, including pending descendants, and keeps full
-name components rather than splitting display breadcrumbs. Stable row indices keep
+Its `InspectorTree` preserves every recorded node in declaration preorder, including
+pending descendants, and keeps full name components rather than splitting display
+breadcrumbs. Stable row indices keep
 duplicate names distinct. Inspect selection and the Failures projection share the same
 rows: previous/next failure includes Fail and Aborted, skips Pass and pending, and does
 not wrap. The model retains failure causes, timeout fields, and additive evidence;
@@ -54,7 +62,7 @@ For an executed selection, the model identifies its own or nearest ancestor's re
 timeline link. A pending selection has no owner and must render **not run**. An owner
 identifies a recorded link, not proof the file is available: the model opens no timeline,
 and its caller must still enforce run-root containment and report unavailable files.
-Screens, timeline containment and loading on selection, original-root discovery, and the
+Screens, loading on selection, original-root discovery, and the
 entry point remain later increments under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
