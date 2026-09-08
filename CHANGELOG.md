@@ -21,7 +21,8 @@ of feature parity: the Python Inspector is still separate work.
 
 - Device API (CoAP/HTTP) interface design note (issue #97): typed
   request/response, status-as-data, retries as evidence, closed-session
-  abort, and a refusal to treat HTTP as `exec` with a URL. Design only;
+  abort, deny-by-default header values (`evidence_headers` opt-in),
+  and a refusal to treat HTTP as `exec` with a URL. Design only;
   no Device API implementation or public Python name is introduced.
   Awaiting Ty's signature on the note.
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
