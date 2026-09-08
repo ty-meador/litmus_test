@@ -19,6 +19,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Device API (CoAP/HTTP) interface design note (issue #97): typed
+  request/response, status-as-data, retries as evidence, closed-session
+  abort, and a refusal to treat HTTP as `exec` with a URL. Design only;
+  no Device API implementation or public Python name is introduced.
+  Awaiting Ty's signature on the note.
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
   `litmus/gated-pass` wraps an unconditional `return PASS` (derived from

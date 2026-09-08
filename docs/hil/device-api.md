@@ -66,12 +66,14 @@ request.
 - A provisional `DeviceRequest` carries `method` (GET, PUT, POST, DELETE;
   CoAP may add the methods its backend declares), `path` (appended to the
   declared base URL, never a second origin), `payload` (`bytes` or absent),
-  and protocol options (HTTP headers, CoAP options). Reject a non-`bytes`
-  payload, a path that is an absolute URL, a method the backend did not
-  declare, and a header or option name that is not a string, at the call
-  site, before the adapter is touched. Booleans are not integers; a `dict`
-  is not a JSON body. Encoding is the author's, recorded as the bytes
-  actually sent.
+  and protocol options (HTTP headers, CoAP options). PATCH is not in that
+  set; whether the first backend declares it as a non-idempotent sibling
+  of POST is a decision for Ty below, not a silent widening. Reject a
+  non-`bytes` payload, a path that is an absolute URL, a method the
+  backend did not declare, and a header or option name that is not a
+  string, at the call site, before the adapter is touched. Booleans are
+  not integers; a `dict` is not a JSON body. Encoding is the author's,
+  recorded as the bytes actually sent.
 - A provisional `DeviceResponse` carries `status` (HTTP status or CoAP
   code), protocol options (headers / CoAP options), and `body` (`bytes`).
   JSON parsing is a convenience on top of those bytes, not the contract:
@@ -390,6 +392,11 @@ implementation:
 6. Redirects default to do-not-follow; cross-host follow is refused.
    Shared sessions refuse conflicting ownership, same Group Isolation
    posture as signed PWM. Credentials never reach evidence.
+7. PATCH. The declared HTTP methods are GET, PUT, POST, DELETE. POST
+   refuses application retry unless opted in. PATCH is the same
+   double-stimulus. Include it in the first backend as a declared
+   non-idempotent method, or keep it undeclared (refused at the call
+   site) until a later note.
 
 The lifecycle, verdict, and evidence contracts above are constraints on
 that decision. If a required backend cannot satisfy them, the finding
