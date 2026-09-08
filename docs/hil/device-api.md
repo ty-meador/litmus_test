@@ -294,7 +294,7 @@ an empty body. An unconfirmed close is not an idle session.
 
 The pattern is the one `RemoteInterface` / `MockTransport` / `SshInterface`
 already proves, and that signed GPIO/PWM reuse: `DeviceApiInterface` is
-the ABC; `HttpInterface` and `CoapInterface` are real backends; 
+the ABC; `HttpInterface` and `CoapInterface` are real backends;
 `MockDeviceApi` is the test double. Self-tests exercise mock and real
 against a shared contract suite so a bug in either backend is caught by
 the same assertions.
