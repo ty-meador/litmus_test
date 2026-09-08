@@ -425,7 +425,9 @@ class TestHttpSpecific:
             server.close()
             await server.wait_closed()
 
-    async def test_token_is_redacted_from_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_header_values_are_withheld_unless_opted_in(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         caplog.set_level(logging.INFO, logger="litmus")
         server = await asyncio.start_server(
             lambda reader, writer: _http_client(reader, writer, _echo_router),
@@ -439,14 +441,53 @@ class TestHttpSpecific:
         )
         await backend.connect()
         try:
-            await backend.request(DeviceRequest(method="GET", path="/whoami"))
+            await backend.request(
+                DeviceRequest(
+                    method="GET",
+                    path="/whoami",
+                    headers={
+                        "X-Device-Token": "dut-bearer-xyz",
+                        "X-Auth-Token": "another-secret",
+                        "Api-Key": "key-should-not-leak",
+                        "X-Station": "west-bench",
+                        "Accept": "application/json",
+                    },
+                    evidence_headers=frozenset({"Accept", "X-Station"}),
+                )
+            )
         finally:
             await backend.disconnect()
             server.close()
             await server.wait_closed()
         combined = "\n".join(record.getMessage() for record in caplog.records)
-        assert "super-secret-token" not in combined
+        for secret in (
+            "super-secret-token",
+            "dut-bearer-xyz",
+            "another-secret",
+            "key-should-not-leak",
+        ):
+            assert secret not in combined
+        assert "application/json" in combined
+        assert "west-bench" in combined
         assert "<redacted>" in combined
+
+    async def test_evidence_headers_rejects_a_bare_str(self, mock_api: MockDeviceApi) -> None:
+        with pytest.raises(TypeError, match="set of header names"):
+            await mock_api.request(
+                DeviceRequest(
+                    method="GET",
+                    path="/whoami",
+                    evidence_headers="Accept",  # type: ignore[arg-type]
+                )
+            )
+        with pytest.raises(TypeError, match="names must be str"):
+            await mock_api.request(
+                DeviceRequest(
+                    method="GET",
+                    path="/whoami",
+                    evidence_headers=frozenset({1}),  # type: ignore[arg-type]
+                )
+            )
 
 
 class TestGetHttpLifecycle:
@@ -541,7 +582,7 @@ class TestValidationAndHalt:
         while not backend.has_in_flight:
             assert asyncio.get_running_loop().time() < deadline
             await asyncio.sleep(0)
-        with pytest.raises(TypeError, match="one in-flight"):
+        with pytest.raises(ValueError, match="one in-flight"):
             await backend.request(DeviceRequest(method="GET", path="/whoami"))
         await backend.cancel_in_flight()
         with contextlib.suppress(DeviceApiOperationFailure, ConnectionError):
