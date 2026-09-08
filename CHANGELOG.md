@@ -19,6 +19,13 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- Device API (CoAP/HTTP) implementation (issue #119, signed contract #97):
+  `DeviceApi`, `DeviceRequest`, `DeviceResponse`, and
+  `DeviceApiOperationFailure` on the public surface; `TestUtils.get_http` and
+  `get_coap` open a session. HTTP 4xx/5xx is data. Retries default to zero and
+  each attempt is evidenced. Abort closes the session. Mock, HTTP/1.1, and
+  CoAP CON/ACK backends share one contract suite. Core install unchanged
+  (stdlib asyncio).
 - PWM interface design note (issue #94), signed by Ty in
   [!125](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/125#note_3800005090)
   on 2026-09-08: representable frequency/duty transfers, bounded linear duty
