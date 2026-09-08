@@ -67,15 +67,18 @@ request.
   CoAP may add the methods its backend declares), `path` (appended to the
   declared base URL, never a second origin), `payload` (`bytes` or absent),
   protocol options (HTTP headers, CoAP options), and `evidence_headers`
-  (the set of header or option names whose *values* may appear in the
-  attempt log; default empty). PATCH is not in that method set; whether
-  the first backend declares it as a non-idempotent sibling of POST is a
-  decision for Ty below, not a silent widening. Reject a non-`bytes`
-  payload, a path that is an absolute URL, a method the backend did not
-  declare, and a header or option name that is not a string, at the call
-  site, before the adapter is touched. Booleans are not integers; a
-  `dict` is not a JSON body. Encoding is the author's, recorded as the
-  bytes actually sent.
+  (the set of *request* header or option names whose *values* may appear
+  in the attempt log; default empty). For HTTP the name is the field
+  name, matched case-insensitively. For CoAP the name is the registered
+  option name (`Uri-Path`, `Content-Format`); an option number is not a
+  name and is refused at the call site. PATCH is not in that method set;
+  whether the first backend declares it as a non-idempotent sibling of
+  POST is a decision for Ty below, not a silent widening. Reject a
+  non-`bytes` payload, a path that is an absolute URL, a method the
+  backend did not declare, and a header or option name that is not a
+  string, at the call site, before the adapter is touched. Booleans are
+  not integers; a `dict` is not a JSON body. Encoding is the author's,
+  recorded as the bytes actually sent.
 - A provisional `DeviceResponse` carries `status` (HTTP status or CoAP
   code), protocol options (headers / CoAP options), and `body` (`bytes`).
   JSON parsing is a convenience on top of those bytes, not the contract:
@@ -96,9 +99,13 @@ request.
   this admission rule.
 - Each operation records the requested method, path, payload length,
   request-header *names*, whether the adapter confirmed a response, the
-  status if one arrived, and the body length. Header *values* stay out of
-  that record unless the author listed the name in `evidence_headers`.
-  An unconfirmed request never becomes the last-successful response in a
+  status if one arrived, and the body length. Request-header *values*
+  stay out of that record unless the author listed the name in
+  `evidence_headers`. Response protocol options — HTTP response headers,
+  CoAP response options — are not in that list. Their values are never
+  recorded by the framework; carrying one into evidence is the author's
+  act, the same as a body. `evidence_headers` does not govern them. An
+  unconfirmed request never becomes the last-successful response in a
   cache the next test method reads as truth. Unknown is explicit.
 
 **Developer obligation:** Declare the scheme, base URL, and protocol
@@ -230,10 +237,18 @@ authored.
   the `DeviceRequest`. Default is empty: the safe case costs the author
   no thought. A secret-name allowlist cannot deliver "never" —
   `X-Device-Token`, `Api-Key`, and the next DUT's favorite all miss it.
-  Matching is case-insensitive. Opting `Authorization` in is the author's
-  leak to stop, not a framework rewrite. Response bodies still go to
-  evidence when the author puts them there; secrets in a body are the
-  author's leak to stop, not a framework rewrite of the payload.
+  Matching is case-insensitive for HTTP field names. For CoAP, the name
+  is the registered option name; an option number is not a name and is
+  refused at the call site — a guess that silently matches nothing would
+  look like a working redaction. Opting `Authorization` in is the
+  author's leak to stop, not a framework rewrite. Response protocol
+  option values are never recorded by the framework. `evidence_headers`
+  is a request-side opt-in; it does not cover `Set-Cookie`,
+  `WWW-Authenticate`, or a CoAP response option. Carrying a response
+  option into evidence is the author's act, the same as a body.
+  Response bodies still go to evidence when the author puts them there;
+  secrets in a body are the author's leak to stop, not a framework
+  rewrite of the payload.
 - TLS / DTLS verification is on by default. Skipping it is a lab-only
   declaration analogous to SSH `skip_host_verification`, logged as such
   at bring-up.
@@ -246,15 +261,19 @@ authored.
   protocol into CAN.
 
 **Developer obligation:** Do not follow redirects in suite code to dodge
-the handle policy. Do not log tokens. Do not opt a secret header into
-`evidence_headers` unless the Floor Technician is meant to read that
-value. Do not ask the framework for a `perform_action` sugar that hides
-the poll.
+the handle policy. Do not log tokens. Do not opt a secret request header
+into `evidence_headers` unless the Floor Technician is meant to read
+that value. Do not treat `evidence_headers` as covering response
+headers or CoAP response options; those values never enter the attempt
+log, and putting one in a verdict is the author's act. Do not ask the
+framework for a `perform_action` sugar that hides the poll.
 
 **Consequence:** A redirect cannot launder a second origin into a record
 that still names the declared base URL. An attempt log cannot carry a
 bearer token off the bench unless the author opted that header in. A
-K2 action poll is visible as the requests it actually made.
+`Set-Cookie` or `WWW-Authenticate` cannot walk into the attempt log
+because `evidence_headers` was assumed to cover the response. A K2
+action poll is visible as the requests it actually made.
 
 ## Lifecycle and hook ownership: unchanged
 
@@ -319,8 +338,10 @@ before the adapter is touched; one in-flight request; status-as-data
 (4xx is a response, not an exception); retries default to zero and each
 declared attempt is evidenced; non-idempotent retry refused unless opted
 in; `cancel_in_flight` stops the retry loop; redirects do not follow
-cross-host; header values never appear in evidence unless the author
-opted that name into `evidence_headers`; partial `configure()`
+cross-host; request-header values never appear in evidence unless the
+author opted that name into `evidence_headers`; a CoAP option number is
+refused as an `evidence_headers` name; response option values never
+appear in the attempt log; partial `configure()`
 cannot orphan a session; node cuts leave a sibling's in-flight request
 untouched; repeated `cancel_in_flight` cannot replay a POST; unconfirmed
 close produces only unconfirmed evidence. `MockDeviceApi` schedules
@@ -357,7 +378,8 @@ close attempts use that scoped logger to distinguish requested,
 responded, interrupted, and unconfirmed outcomes. Attempt index and
 status belong in that log even when the body does not. Request-header
 names belong there too; their values do not, unless the author listed
-that name in `evidence_headers`.
+that name in `evidence_headers`. Response option values do not belong
+there at all.
 
 ## What the Floor Technician sees
 
@@ -407,11 +429,14 @@ implementation:
    wait for it and does not replace it.
 6. Redirects default to do-not-follow; cross-host follow is refused.
    Shared sessions refuse conflicting ownership, same Group Isolation
-   posture as signed PWM. Attempt logs keep header names and withhold
-   every value unless the author lists that name in `evidence_headers`
-   (default empty). A secret-name allowlist cannot keep
-   `X-Device-Token` out of an artifact. Opting `Authorization` in is
-   the author's leak.
+   posture as signed PWM. Attempt logs keep request-header names and
+   withhold every value unless the author lists that name in
+   `evidence_headers` (default empty). A secret-name allowlist cannot
+   keep `X-Device-Token` out of an artifact. Opting `Authorization` in
+   is the author's leak. For CoAP the name is the registered option
+   name, not an option number. Response option values are never
+   recorded by the framework; carrying one into evidence is the
+   author's act, the same as a body.
 7. PATCH. The declared HTTP methods are GET, PUT, POST, DELETE. POST
    refuses application retry unless opted in. PATCH is the same
    double-stimulus. Include it in the first backend as a declared
