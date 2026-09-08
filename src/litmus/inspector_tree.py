@@ -123,11 +123,12 @@ class TreeReader:
     async def read(self, path: Path) -> InspectorTree | ArtifactDiagnostic:
         """Return a tree or an explicit result diagnostic; never manufacture a missing run.
 
-        The selected file's parent is the opened run root. Schema validation, decoding,
-        and contained file I/O belong to ``ArtifactReader`` and run in its worker.
+        The resolved selected file's parent is the opened run root. Operator selections
+        may use symlinks or ``..``; references inside saved records remain constrained
+        by ``ArtifactReader``, which owns schema validation and contained file I/O.
         No suite source is discovered, imported, or executed by this reader.
         """
-        path = await asyncio.to_thread(path.absolute)
+        path = await asyncio.to_thread(path.resolve)
         content = await ArtifactReader(path.parent).read(str(path), kind="result")
         if isinstance(content, ArtifactDiagnostic):
             return content
@@ -137,11 +138,11 @@ class TreeReader:
 def _rows(root: JsonObject) -> tuple[TreeRow, ...]:
     """Flatten the validated tree, carrying its actual ancestors rather than breadcrumbs."""
     rows: list[TreeRow] = []
-    pending: list[tuple[JsonObject, int | None, tuple[str, ...], int | None]] = [
+    frontier: list[tuple[JsonObject, int | None, tuple[str, ...], int | None]] = [
         (root, None, (), None)
     ]
-    while pending:
-        record, parent, ancestors, owner = pending.pop()
+    while frontier:
+        record, parent, ancestors, owner = frontier.pop()
         index = len(rows)
         names = (*ancestors, cast(str, record["name"]))
         if record["state"] is None:
@@ -152,5 +153,5 @@ def _rows(root: JsonObject) -> tuple[TreeRow, ...]:
             owner = index
         rows.append(TreeRow(index, parent, names, record, owner))
         children = cast(list[JsonObject], record["children"])
-        pending.extend((child, index, names, owner) for child in reversed(children))
+        frontier.extend((child, index, names, owner) for child in reversed(children))
     return tuple(rows)
