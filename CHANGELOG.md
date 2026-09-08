@@ -15,7 +15,7 @@ merged behavior using today's API names, with links to the MRs that established 
 they are not six published versions. Subsequent entries include the hardening and
 refinement merged through [!108](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/108)
 on 2026-09-06. The TypeScript repositories remain behavioral references, not a promise
-of feature parity: the Python Inspector and editor adapter are still separate work.
+of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
@@ -26,6 +26,12 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
   each attempt is evidenced. Abort closes the session. Mock, HTTP/1.1, and
   CoAP CON/ACK backends share one contract suite. Core install unchanged
   (stdlib asyncio).
+- `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
+  registry. Every `--list-rules` finding is a diagnostic on the open buffer;
+  `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
+  contiguous, call-free guards, otherwise an `if False:` scaffold that cannot
+  pass) and `litmus/method-reference` lifts a trivial lambda to the method
+  reference. Core install unchanged (issue #78).
 - PWM interface design note (issue #94), signed by Ty in
   [!125](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/125#note_3800005090)
   on 2026-09-08: representable frequency/duty transfers, bounded linear duty
