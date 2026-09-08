@@ -51,10 +51,10 @@ before deriving the run root, so a symlink such as `latest/result.json` or a pat
 still obey the capture reader's traversal and containment checks.
 Its `InspectorTree` preserves every recorded node in declaration preorder, including
 pending descendants, and keeps full name components rather than splitting display
-breadcrumbs. Stable row indices keep
-duplicate names distinct. Inspect selection and the Failures projection share the same
-rows: previous/next failure includes Fail and Aborted, skips Pass and pending, and does
-not wrap. The model retains failure causes, timeout fields, and additive evidence;
+breadcrumbs. Stable row indices keep duplicate names distinct. Inspect selection and
+the Failures projection share the same rows: previous/next failure includes Fail and
+Aborted, skips Pass and pending, and does not wrap. The model retains failure causes,
+timeout fields, and additive evidence;
 declared readings absent from evidence are exposed by name, while null and zero remain
 present observations.
 
@@ -62,8 +62,21 @@ For an executed selection, the model identifies its own or nearest ancestor's re
 timeline link. A pending selection has no owner and must render **not run**. An owner
 identifies a recorded link, not proof the file is available: the model opens no timeline,
 and its caller must still enforce run-root containment and report unavailable files.
-Screens, loading on selection, original-root discovery, and the
-entry point remain later increments under #89. No saved inspection runs suite code.
+
+The internal selection model (`litmus.inspector_selection.InspectorSelection`) joins
+that tree to contained timeline loading for both Inspect and Failures. Its caller supplies
+the validated tree and the opened directory containing that same result, then navigates
+through the selection model. Selection clears the previous chronology before I/O, keeps
+the claim and its recorded owner together, and reads only through `read_reference`.
+Every request has its own identity: a delayed load cannot overwrite a later selection,
+even if the cursor returned to the same row. Pending rows render **not run**; executed
+rows with no owner or an unreadable file render **log unavailable**. Complete records,
+their scopes, partial reads, and decoding diagnostics remain intact. Reselection reads
+evidence afresh. Cancellation and reader defects propagate to the caller and return only
+the affected current load to idle; they never restore an earlier log or become verdicts.
+
+Screens, original-root discovery, and the entry point remain later increments under #89.
+No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
