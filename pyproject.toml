@@ -48,6 +48,8 @@ packages = ["src/litmus", "tools/litmus_check"]
 # The Inspector validates against the published contract, including outside a checkout.
 [tool.hatch.build.targets.wheel.force-include]
 "docs/schema/timeline-v1.schema.json" = "litmus_data/timeline-v1.schema.json"
+"docs/schema/artifact-v1.schema.json" = "litmus_data/artifact-v1.schema.json"
+"docs/schema/result-v1.schema.json" = "litmus_data/result-v1.schema.json"
 
 # ---------------------------------------------------------------------------
 # Tooling — single source of truth. Run via `make`; do not override locally.
@@ -121,8 +123,8 @@ output = ".coverage/cobertura.xml"
 # tools/coverage_floor.py after the suite runs. Ratchet-only, like fail_under.
 [tool.litmus.coverage.floors]
 "src/litmus/verdict.py" = 100.0
-"src/litmus/base.py" = 94.0
-"src/litmus/lifecycle.py" = 98.6
+"src/litmus/base.py" = 94.4
+"src/litmus/lifecycle.py" = 98.8
 "src/litmus/executor.py" = 92.8
 "src/litmus/timeline.py" = 100.0
 
