@@ -1,10 +1,11 @@
 """Mechanical fixes for the two rules that have one.
 
 ``litmus/gated-pass`` wraps an unconditional ``return PASS`` in an explicit
-predicate (derived from preceding ``if ...: raise`` guards when those exist).
-``litmus/method-reference`` lifts a trivial ``lambda`` to the method reference
-it forwards to. Neither rule's diagnostic is silenced by guessing: a shape we
-cannot rewrite is left for the author.
+predicate (derived from preceding ``if ...: raise`` guards when those exist
+and are safe to invert). A shape we cannot rewrite gets a fail-closed
+scaffold — never a truthy placeholder that would silence the rule and still
+return PASS. ``litmus/method-reference`` lifts a trivial ``lambda`` to the
+method reference it forwards to.
 """
 
 from __future__ import annotations
@@ -92,8 +93,15 @@ class GatedPassFix(CodeFix):
         statements = _statement_list(parent)
         if statements is None:
             return None
-        guards = _preceding_guards(statements, return_node)
+        guards = _contiguous_guards(statements, return_node)
         if not guards:
+            return None
+        if any(_contains_call(guard.test) for guard in guards):
+            return None
+        loaded: set[str] = set()
+        for guard in guards:
+            loaded |= _loaded_names(guard.test)
+        if loaded & _names_bound_from(statements, guards[0]):
             return None
         predicate = " and ".join(_negate(guard.test) for guard in guards)
         first = guards[0]
@@ -104,6 +112,12 @@ class GatedPassFix(CodeFix):
         indent = line_indent(source, first_span[0])
         inner = inner_indent(line_indent(source, return_span[0]))
         pass_expr = ast.unparse(return_node.value)
+        # Inserted above the contiguous guard block, not in place of the return:
+        # the pass predicate is then the first statement of the shape the rule
+        # teaches, and the original raises stay as the named failure modes.
+        # Insertion above a non-contiguous statement is how a name bound
+        # between guard and return became a NameError, and how a call in a
+        # guard test ran twice — those shapes fall back instead of guessing.
         insert = TextEdit(
             first_span[0],
             first_span[1],
@@ -144,8 +158,11 @@ class GatedPassFix(CodeFix):
         raise_stmt = _raise_testfailure(
             inner, indent, _FALLBACK_MSG, _FALLBACK_EXPECTED, _FALLBACK_ACTUAL
         )
+        # `False` cannot be mistaken for a passing device. `...` (Ellipsis) is
+        # truthy, so a leftover `if ...:` scaffold returned PASS unconditionally
+        # and silenced the rule that was meant to catch that.
         new_text = (
-            f"if ...:  # what does a passing device look like?\n"
+            f"if False:  # what does a passing device look like?\n"
             f"{inner}return {pass_expr}\n"
             f"{indent}{raise_stmt}"
         )
@@ -200,14 +217,54 @@ def _statement_list(parent: ast.AST | None) -> list[ast.stmt] | None:
     return None
 
 
-def _preceding_guards(statements: list[ast.stmt], return_node: ast.Return) -> list[ast.If]:
+def _contiguous_guards(statements: list[ast.stmt], return_node: ast.Return) -> list[ast.If]:
+    """Pure ``if ...: raise`` statements sitting flush against ``return_node``.
+
+    Leading setup before the first such guard is ignored. A non-guard between
+    two guards, or between a guard and the return, is not a subset we invert:
+    that is how a name bound in between was read before it existed.
+    """
     guards: list[ast.If] = []
     for statement in statements:
         if statement is return_node:
             break
         if isinstance(statement, ast.If) and _is_pure_raise_guard(statement):
             guards.append(statement)
+            continue
+        if guards:
+            return []
     return guards
+
+
+def _contains_call(node: ast.AST) -> bool:
+    return any(isinstance(child, ast.Call) for child in ast.walk(node))
+
+
+def _loaded_names(node: ast.AST) -> set[str]:
+    return {
+        child.id
+        for child in ast.walk(node)
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+    }
+
+
+def _bound_names(node: ast.AST) -> set[str]:
+    return {
+        child.id
+        for child in ast.walk(node)
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+    }
+
+
+def _names_bound_from(statements: list[ast.stmt], start: ast.stmt) -> set[str]:
+    names: set[str] = set()
+    seen = False
+    for statement in statements:
+        if statement is start:
+            seen = True
+        if seen:
+            names |= _bound_names(statement)
+    return names
 
 
 def _is_pure_raise_guard(statement: ast.stmt) -> bool:
@@ -226,7 +283,7 @@ def _negate(expr: ast.expr) -> str:
         if flipped is not None:
             negated = ast.Compare(left=expr.left, ops=[flipped()], comparators=expr.comparators)
             return ast.unparse(negated)
-    if isinstance(expr, ast.Name | ast.Attribute | ast.Subscript | ast.Call | ast.Constant):
+    if isinstance(expr, ast.Name | ast.Attribute | ast.Subscript | ast.Constant):
         return f"not {ast.unparse(expr)}"
     return f"not ({ast.unparse(expr)})"
 
