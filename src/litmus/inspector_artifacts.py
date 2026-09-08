@@ -7,17 +7,13 @@ pointer numbering, modal state, or any hardware execution.
 """
 
 import asyncio
-import json
 from dataclasses import dataclass
-from functools import cache
-from importlib.metadata import distribution
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from litmus.inspector_json import JsonDecoder
+from litmus.inspector_json import JsonDecoder, RecordSchema
 from litmus.run_data import JsonObject
 
 type RecordKind = Literal["artifact", "result"]
@@ -74,7 +70,7 @@ class ArtifactReader:
         return await asyncio.to_thread(self._read, reference, kind)
 
     def _read(self, reference: str, kind: RecordKind) -> ArtifactContent | ArtifactDiagnostic:
-        validator = _validator(kind)
+        validator = RecordSchema(kind).validator()
         try:
             root = self.run_root.resolve(strict=True)
             recorded = PurePosixPath(reference)
@@ -116,12 +112,3 @@ class ArtifactReader:
         except RecursionError as error:
             return ArtifactDiagnostic(reference, "invalid-record", str(error))
         return ArtifactContent(reference, path, data)
-
-
-@cache
-def _validator(kind: RecordKind) -> Draft202012Validator:
-    """Compile each packaged contract once, in the worker, rather than per modal selection."""
-    path = distribution("litmus").locate_file(f"litmus_data/{kind}-v1.schema.json")
-    schema = json.loads(path.read_text(encoding="utf-8"))
-    Draft202012Validator.check_schema(schema)
-    return Draft202012Validator(schema)
