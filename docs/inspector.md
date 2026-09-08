@@ -21,9 +21,22 @@ a trailing newline; an unfinished final object or UTF-8 sequence produces a trun
 diagnostic. Malformed complete records, duplicate keys, non-finite numbers, and
 unsupported versions are explicit diagnostics, and later valid records remain readable.
 Missing or unreadable logs produce a file-level unavailable diagnostic. These are reader
-observations, never test verdicts. The reader does not open artifact pointers or resolve
-tree ownership; screens, root containment and relocation, and the entry point remain
-later increments under #89.
+observations, never test verdicts. The timeline reader does not open artifact pointers
+or resolve tree ownership.
+
+The internal capture reader (`litmus.inspector_artifacts.ArtifactReader`) now reads
+absolute pointers beneath an opened run root. An explicit, established original root
+enables relocation while preserving the full relative tail; without that mapping a
+pointer outside the opened root is unavailable. The reader checks resolved containment,
+refuses non-file targets, and never falls back to the original run or a basename match.
+It validates the artifact envelope or root result against its packaged version-1 schema,
+retaining additive fields and explicit null observations. Missing files, malformed JSON,
+and unsupported versions are diagnostics that retain the recorded reference. JSON parsing
+is shared with the timeline reader, so duplicate keys and non-finite values are refused
+consistently. The original-root mapping remains an input to this internal component;
+establishing it from saved records belongs to the later saved-run loader. Screens, tree
+ownership, timeline containment, root discovery, and the entry point remain later
+increments under #89.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
@@ -212,8 +225,8 @@ Retain numbering when paging or filtering so a digit never silently changes its 
 The modal groups captures by `artifact_type` and labels each with its name and timestamp.
 Show the persisted content, including an explicit null observation; nothing in the
 viewer recomputes a verdict. The root `run-result` pointer opens `result.json`, whose
-shape differs from a point-in-time artifact envelope. The envelope's version must also
-be checked when its decoder is implemented, with its published schema as required by
+shape differs from a point-in-time artifact envelope. The capture reader checks the
+envelope's own version and published schema as required by
 the [JSON version policy](inspector-json.md#published-schemas).
 
 An unavailable or unreadable capture produces a visible diagnostic containing the
