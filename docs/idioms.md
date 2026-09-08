@@ -686,8 +686,9 @@ exception. Catch `DeviceApiOperationFailure` when the transfer itself did not
 complete (timeout, refused connection) and model it as a `TestFailure`.
 
 Retries default to zero. Each declared attempt is logged. POST refuses retry
-unless `retry_non_idempotent=True`. Abort closes the session; it does not
-invent a shutdown PUT.
+unless `retry_non_idempotent=True`. Attempt logs keep header names and withhold
+every value unless the author lists that name in `evidence_headers`. Abort
+closes the session; it does not invent a shutdown PUT.
 
 ```python
 api = await utils.get_http(base_url="https://dut.local")

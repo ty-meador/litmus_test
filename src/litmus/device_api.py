@@ -14,10 +14,10 @@ import logging
 import math
 import ssl
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, final
+from typing import Final, Literal, cast, final
 from urllib.parse import urljoin, urlsplit
 
 from litmus.errors import DeviceApiOperationFailure
@@ -28,9 +28,6 @@ type DeviceMethod = Literal["GET", "PUT", "POST", "DELETE"]
 
 _METHODS: Final[frozenset[str]] = frozenset({"GET", "PUT", "POST", "DELETE"})
 _NON_IDEMPOTENT: Final[frozenset[str]] = frozenset({"POST"})
-_SECRET_HEADERS: Final[frozenset[str]] = frozenset(
-    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"}
-)
 _HTTP_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 _COAP_SCHEMES: Final[frozenset[str]] = frozenset({"coap"})
 _DEFAULT_PORTS: Final[dict[str, int]] = {
@@ -100,11 +97,27 @@ def _freeze_headers(headers: Mapping[str, str] | None) -> Mapping[str, str]:
     return MappingProxyType(frozen)
 
 
-def _redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
-    return {
-        key: "<redacted>" if key.lower() in _SECRET_HEADERS else value
-        for key, value in headers.items()
-    }
+def _evidence_header_names(names: object) -> frozenset[str]:
+    """Lowercased names whose values the author opted into the attempt log."""
+    if isinstance(names, str) or not isinstance(names, Iterable):
+        raise TypeError("evidence_headers must be a set of header names, not a single str")
+    raw_items = list(cast(Iterable[object], names))
+    frozen: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, str):
+            raise TypeError("evidence_headers names must be str")
+        frozen.add(item.lower())
+    return frozenset(frozen)
+
+
+def _redact_headers(headers: Mapping[str, str], *, reveal: frozenset[str]) -> dict[str, str]:
+    """Keep header names; withhold values unless the author opted that name in.
+
+    A secret-name allowlist cannot deliver "credentials never reach evidence":
+    ``X-Device-Token``, ``Api-Key``, and the next DUT's favorite all miss it.
+    Names still tell the Floor Technician that Authorization was sent.
+    """
+    return {key: value if key.lower() in reveal else "<redacted>" for key, value in headers.items()}
 
 
 def _redact_url(url: str) -> str:
@@ -125,7 +138,8 @@ class DeviceRequest:
 
     Path is relative to the handle's base URL. Payload is the bytes actually
     sent — a dict is not a JSON body. ``retries`` counts extra application-level
-    attempts after the first; the default is zero.
+    attempts after the first; the default is zero. Attempt logs withhold every
+    header value unless the name is in ``evidence_headers``.
     """
 
     method: DeviceMethod
@@ -136,6 +150,7 @@ class DeviceRequest:
     retry_delay: float = 0.05
     retry_non_idempotent: bool = False
     timeout: float | None = None
+    evidence_headers: frozenset[str] = frozenset()
 
 
 @final
@@ -270,14 +285,17 @@ class DeviceApiInterface(ABC):
             else _require_finite_seconds("timeout", req.timeout)
         )
         if retries and method in _NON_IDEMPOTENT and not req.retry_non_idempotent:
+            # Author-contract, same class as the in-flight refusal below: the
+            # types are fine, the usage is not. ValueError for both, not TypeError.
             raise ValueError(f"{method} refuses application retry unless retry_non_idempotent=True")
         delay = 0.0 if retries == 0 else _require_finite_seconds("retry_delay", req.retry_delay)
+        reveal = _evidence_header_names(req.evidence_headers)
         last_error: DeviceApiOperationFailure | None = None
         for attempt in range(retries + 1):
             if not self._connected:  # pragma: no cover - cancel races the retry loop
                 break
             if self._in_flight:
-                raise TypeError("one in-flight request per handle; wait or cancel")
+                raise ValueError("one in-flight request per handle; wait or cancel")
             if attempt > 0:
                 self._logger.warning(
                     "device-api retry %s/%s %s %s — waiting %ss",
@@ -297,7 +315,7 @@ class DeviceApiInterface(ABC):
                 attempt,
                 method,
                 path,
-                _redact_headers(headers),
+                _redact_headers(headers, reveal=reveal),
                 0 if payload is None else len(payload),
             )
             try:

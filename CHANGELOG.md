@@ -24,8 +24,10 @@ of feature parity: the Python Inspector is still separate work.
   `DeviceApiOperationFailure` on the public surface; `TestUtils.get_http` and
   `get_coap` open a session. HTTP 4xx/5xx is data. Retries default to zero and
   each attempt is evidenced. Abort closes the session. Mock, HTTP/1.1, and
-  CoAP CON/ACK backends share one contract suite. Core install unchanged
-  (stdlib asyncio).
+  CoAP CON/ACK backends share one contract suite. Attempt logs withhold every
+  header value unless the author opts that name into `evidence_headers` — a
+  secret-name allowlist cannot keep credentials out of artifacts. Core install
+  unchanged (stdlib asyncio).
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
   `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
