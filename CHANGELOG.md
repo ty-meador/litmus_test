@@ -19,6 +19,14 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector saved-tree model (issue #89): schema-validated result loading,
+  declaration-order rows, shared Fail/Aborted navigation, and nearest-ancestor log
+  ownership. Pending nodes never borrow chronology, duplicate names retain distinct
+  indices, and missing declared readings remain named. Operator selections resolve
+  symlinks and `..` before establishing the run root, without relaxing recorded-reference
+  containment. Tested from a moved 70-DUT
+  result without live suite execution; terminal screens and timeline loading remain
+  later increments.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without
