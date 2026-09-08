@@ -39,6 +39,7 @@ nav:
       - Overview: hil/index.md
       - GPIO (design note): hil/gpio.md
       - PWM (design note): hil/pwm.md
+      - I2C/SPI (draft design note): hil/i2c-spi.md
       - Serial/UART (design note): hil/serial.md
 
 plugins:
