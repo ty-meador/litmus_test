@@ -1,6 +1,5 @@
 """The Inspector preserves readable chronology without repairing damaged evidence."""
 
-import asyncio
 import json
 from importlib.metadata import distribution
 from pathlib import Path
@@ -10,6 +9,7 @@ import pytest
 
 from litmus import PASS, Artifact, LitmusTest, TestFailure, TestUtils, Verdict
 from litmus.inspector_timeline import TimelineDiagnostic, TimelineReader, TimelineRecord
+from litmus.inspector_tree import InspectorTree, TreeReader
 from litmus.run_data import JsonObject, JsonValue
 
 
@@ -173,8 +173,8 @@ class TestTimelineReader:
         assert diagnostic.line_number is None
         assert str(path) in diagnostic.message
 
-    async def test_reads_every_timeline_of_a_recorded_seventy_dut_rack(
-        self, tmp_path: Path
+    async def test_reads_every_timeline_from_a_moved_seventy_dut_saved_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class Dut(LitmusTest):
             def build_suite(self) -> LitmusTest:
@@ -193,18 +193,39 @@ class TestTimelineReader:
             def build_suite(self) -> LitmusTest:
                 return self.parallel("devices", [Dut(name=f"dut-{i:02d}") for i in range(70)])
 
-        await Rack(name="rack").run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
-        paths = await asyncio.to_thread(lambda: sorted(tmp_path.rglob("timeline.jsonl")))
-        assert len(paths) == 72
+        suite = Rack(name="rack")
+        await suite.run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path / "original")})
+        assert suite.log_path is not None
+        original = suite.log_path.parent.parent
+        moved = tmp_path / "moved"
+        original.rename(moved)
+
+        def refuse_run(*args: object, **kwargs: object) -> None:
+            pytest.fail("saved timeline inspection must not execute suite code")
+
+        monkeypatch.setattr(LitmusTest, "run", refuse_run)
+        tree = await TreeReader().read(moved / "result.json")
+        assert isinstance(tree, InspectorTree)
+        references = [
+            cast(str, row.record["log_path"])
+            for row in tree.rows
+            if row.record["log_path"] is not None
+        ]
+        assert len(references) == 72
         captures: list[JsonObject] = []
-        for path in paths:
-            result = await TimelineReader().read(path)
+        for reference in references:
+            path = moved / reference
+            before = path.read_bytes()
+            result = await TimelineReader().read_reference(moved, reference)
+            assert result.reference == reference
+            assert result.path == path
             expected = [
                 cast(JsonObject, json.loads(line)) for line in path.read_bytes().splitlines()
             ]
             assert result.rows == tuple(
                 TimelineRecord(i, record) for i, record in enumerate(expected, 1)
             )
+            assert path.read_bytes() == before
             captures.extend(
                 record for record in expected if record.get("artifact_name") == "voltage"
             )
