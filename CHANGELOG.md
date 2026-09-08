@@ -19,6 +19,12 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- PWM interface design note (issue #94), signed by Ty in
+  [!125](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/125#note_3800005090)
+  on 2026-09-08: representable frequency/duty transfers, bounded linear duty
+  ramps, exclusive channel ownership, and disabled-output termination with
+  explicit unconfirmed outcomes. Design only; no PWM implementation or public
+  Python name is introduced.
 - Optional context typing: `LitmusTest[CtxT]` and `TestUtils[CtxT]` carry a suite's own
   `TypedDict` into `utils.ctx`, so a misspelled key is a pyright error at the author's
   desk instead of a contract-violation Fail on the floor (issue #75). Opt-in and
