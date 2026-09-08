@@ -34,9 +34,24 @@ retaining additive fields and explicit null observations. Missing files, malform
 and unsupported versions are diagnostics that retain the recorded reference. JSON parsing
 is shared with the timeline reader, so duplicate keys and non-finite values are refused
 consistently. The original-root mapping remains an input to this internal component;
-establishing it from saved records belongs to the later saved-run loader. Screens, tree
-ownership, timeline containment, root discovery, and the entry point remain later
-increments under #89.
+establishing it from saved records belongs to the later saved-run loader.
+
+The internal tree reader (`litmus.inspector_tree.TreeReader`) now opens a selected
+result through that validated result boundary. Its `InspectorTree` preserves every
+recorded node in declaration preorder, including pending descendants, and keeps full
+name components rather than splitting display breadcrumbs. Stable row indices keep
+duplicate names distinct. Inspect selection and the Failures projection share the same
+rows: previous/next failure includes Fail and Aborted, skips Pass and pending, and does
+not wrap. The model retains failure causes, timeout fields, and additive evidence;
+declared readings absent from evidence are exposed by name, while null and zero remain
+present observations.
+
+For an executed selection, the model identifies its own or nearest ancestor's recorded
+timeline link. A pending selection has no owner and must render **not run**. An owner
+identifies a recorded link, not proof the file is available: the model opens no timeline,
+and its caller must still enforce run-root containment and report unavailable files.
+Screens, timeline containment and loading on selection, original-root discovery, and the
+entry point remain later increments under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
