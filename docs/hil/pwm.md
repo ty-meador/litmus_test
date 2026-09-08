@@ -1,19 +1,20 @@
 # Design note: PWM interface contract
 
-Status: DRAFT — awaiting Ty's signature on #94
+Status: SIGNED — Ty approved this note in !125 on 2026-09-08; recorded on #94
 
 PWM controls a repeating output through its frequency and duty cycle. This note
-proposes the transfer, ramp, timing, and disabled-output obligations that make
+states the transfer, ramp, timing, and disabled-output obligations that make
 that control fit Litmus's existing lifecycle. The [three HIL rulings](index.md#the-three-rulings)
-govern it. Approval to draft #94 does not sign the obligations below; no PWM
-implementation may precede Ty's signature on this note.
+govern it. [Ty's approval of the actual note](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/125#note_3800005090)
+signs the obligations below. Implementation requires its own approved issue
+and Zavala's review under [API stability](../api-stability.md).
 
 All names below (`PwmInterface`, `PwmChannel`, `PwmOperationFailure`,
 `MockPwm`, and the method names) are provisional. This note adds no public
 Python name and changes no stored record. The legacy framework and language
 server supply no PWM behavior to carry forward; the migration context is the
-preserved lifecycle and evidence contracts, with a new hardware contract for
-Ty to judge.
+preserved lifecycle and evidence contracts, with a signed hardware contract
+for a later implementation.
 
 ## The PWM Transfer Contract
 
@@ -215,9 +216,10 @@ an independent sibling unchanged, and unavailable disable produces only
 unconfirmed evidence. Real-backend tests must verify output behavior through
 independent observation; mock acknowledgements cannot establish it.
 
-## Decisions for Ty on #94
+## Signed decisions recorded on #94
 
-The draft asks for a ruling on these concrete obligations before implementation:
+Ty approved these obligations with the note in !125 on 2026-09-08. The signature
+is also recorded on [#94](https://gitlab.com/Tyler-Meador/litmus_test/-/issues/94):
 
 1. Explicit frequency/duty pairs with refusal of unrepresentable requests,
    rather than implicit rounding; fixed polarity and declared disabled behavior.
