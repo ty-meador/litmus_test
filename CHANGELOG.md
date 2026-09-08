@@ -19,6 +19,11 @@ of feature parity: the Python Inspector and editor adapter are still separate wo
 
 ### Added
 
+- `docs/hil/i2c-spi.md`: the design note for I2C and SPI transaction
+  contracts — atomic transfers, I2C NACK/arbitration, SPI chip-select and
+  mode, and a released bus as the abort safe-state. Design only; no code
+  change. Awaiting Ty's sign-off on the note before an implementation MR
+  opens (issue #96).
 - PWM interface design note (issue #94), signed by Ty in
   [!125](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/125#note_3800005090)
   on 2026-09-08: representable frequency/duty transfers, bounded linear duty
