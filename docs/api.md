@@ -13,6 +13,10 @@ the module a name is defined in is an implementation detail. The policy is
 ::: litmus.BeforeEachContext
 ::: litmus.BeforeEachHook
 ::: litmus.ContractViolation
+::: litmus.DeviceApi
+::: litmus.DeviceApiOperationFailure
+::: litmus.DeviceRequest
+::: litmus.DeviceResponse
 ::: litmus.EvidenceViolation
 ::: litmus.ExecResult
 ::: litmus.ExternalIntegrationFailure
