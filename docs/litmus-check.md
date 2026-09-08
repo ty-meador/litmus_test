@@ -85,11 +85,32 @@ needs — enclosing function, method, and class, and a static answer to "is this
 A rule's `code` is a contract with suite authors' `--ignore` flags; rename it only with
 a note in the changelog of the MR that does so.
 
+## Editor — the pylsp adapter
+
+The same registry the CLI runs is a `python-lsp-server` plugin. Install the extra so
+the core package stays dependency-light:
+
+```sh
+uv pip install 'litmus[pylsp]'
+# or, from a checkout: uv sync --extra pylsp
+```
+
+`python-lsp-server` discovers the plugin via the `pylsp` entry point. Every rule in
+`litmus-check --list-rules` is published as a diagnostic on the open buffer (unsaved
+contents included). Two rules offer a quick-fix:
+
+| Code | Action |
+|---|---|
+| `litmus/gated-pass` | Wrap the `return PASS` in an explicit pass predicate. Preceding `if ...: raise` guards are inverted into that predicate only when they sit flush against the return, load no name bound at the insertion point, and contain no call. Every other shape gets `if False:` plus a `TestFailure` raise — a leftover scaffold cannot return PASS. |
+| `litmus/method-reference` | Replace a trivial `lambda` (`lambda u: self._claim(u)`) with the method reference. A lambda that carries extra logic is left alone — that logic belongs in a real method. |
+
+Disable the plugin in pylsp config with `plugins.litmus_check.enabled: false`.
+
 ## What this tier is not
 
 - It is not a type checker. Suites are held to the same annotation standard as the
   framework (STANDARDS.md §2); `litmus/unannotated-interface` makes the interface
   explicit, and pyright strict remains the authority on whether those types agree.
-- It is not the language server. The CLI landed first; a pylsp adapter over the same
-  registry is the planned follow-on.
+- It is not a second checker. The editor plugin is the CLI's registry with an LSP
+  surface; a finding in the editor is the same finding `litmus-check` would print.
 - It is not a guard. See the table above.

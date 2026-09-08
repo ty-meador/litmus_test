@@ -11,6 +11,11 @@ dependencies = [
     "jsonschema>=4.23",
 ]
 
+[project.optional-dependencies]
+pylsp = [
+    "python-lsp-server>=1.12",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.4",
@@ -23,11 +28,15 @@ dev = [
     "mkdocs>=1.6.1",
     "mkdocstrings[python]>=1.0.6",
     "mutmut>=3.7.0",
+    "python-lsp-server>=1.12",
 ]
 
 [project.scripts]
 litmus = "litmus.cli:main"
 litmus-check = "litmus_check.cli:main"
+
+[project.entry-points.pylsp]
+litmus_check = "litmus_check.pylsp_plugin"
 
 [build-system]
 requires = ["hatchling"]
