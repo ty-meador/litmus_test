@@ -124,7 +124,8 @@ class TestGatedPassWrapsTheReturn:
 
         assert action.title.startswith("Wrap return PASS")
         result = action.apply(source)
-        assert "if ...:  # what does a passing device look like?" in result
+        assert "if False:  # what does a passing device look like?" in result
+        assert "if ...:" not in result
         assert "return PASS" in result
         assert "raise TestFailure(" in result
 
@@ -142,7 +143,7 @@ class TestGatedPassWrapsTheReturn:
         result = action.apply(source)
         assert "from litmus import PASS, TestFailure" in result
 
-    def test_the_fallback_no_longer_fires_gated_pass(self) -> None:
+    def test_fallback_cannot_return_pass_unconditionally(self) -> None:
         source, action = _action(
             """
             from litmus import PASS, TestFailure
@@ -159,7 +160,71 @@ class TestGatedPassWrapsTheReturn:
             if item.code == "litmus/gated-pass"
         ]
 
+        assert "if False:" in result
+        assert "if ...:" not in result
+        assert "raise TestFailure(" in result
         assert leftover == []
+
+    def test_binding_between_guard_and_return_falls_back(self) -> None:
+        source, action = _action(
+            """
+            from litmus import PASS, TestFailure
+
+            async def claim(utils):
+                if not utils.ctx["ready"]:
+                    raise TestFailure("not ready", "ready", "not ready")
+                result = utils.exec("status")
+                if result.exit_code != 0:
+                    raise TestFailure("bad status", "0", "nonzero")
+                return PASS
+            """,
+            "litmus/gated-pass",
+        )
+        result = action.apply(source)
+        assign_at = result.index("result = utils.exec")
+
+        assert action.title.startswith("Wrap return PASS")
+        assert "if False:" in result
+        assert "result.exit_code == 0" not in result
+        assert "result" not in result[:assign_at]
+
+    def test_walrus_in_a_guard_test_falls_back(self) -> None:
+        source, action = _action(
+            """
+            from litmus import PASS, TestFailure
+
+            async def claim(utils):
+                if (code := utils.ctx["exit_code"]) != 0:
+                    raise TestFailure("non-zero exit")
+                if code > 10:
+                    raise TestFailure("too high")
+                return PASS
+            """,
+            "litmus/gated-pass",
+        )
+        result = action.apply(source)
+
+        assert action.title.startswith("Wrap return PASS")
+        assert "if False:" in result
+        assert "code == 0" not in result
+
+    def test_call_in_a_guard_test_falls_back(self) -> None:
+        source, action = _action(
+            """
+            from litmus import PASS, TestFailure
+
+            async def claim(utils):
+                if utils.exec("reset").exit_code != 0:
+                    raise TestFailure("reset failed", "0", "nonzero")
+                return PASS
+            """,
+            "litmus/gated-pass",
+        )
+        result = action.apply(source)
+
+        assert action.title.startswith("Wrap return PASS")
+        assert result.count("utils.exec") == 1
+        assert "if False:" in result
 
 
 class TestMethodReferenceLiftsTheLambda:
@@ -257,3 +322,34 @@ class TestActionsStayOnTheSelection:
         actions = LitmusLsp().code_actions(_SUITE, text, LspRange(0, 0, 0, 0))
 
         assert actions == ()
+
+
+class TestActionsAreNotPreferred:
+    def test_gated_pass_is_not_preferred(self) -> None:
+        _source, action = _action(
+            """
+            from litmus import PASS, TestFailure
+
+            async def claim(utils):
+                if utils.ctx["exit_code"] != 0:
+                    raise TestFailure("non-zero exit")
+                return PASS
+            """,
+            "litmus/gated-pass",
+        )
+
+        assert action.is_preferred is False
+        assert action.to_lsp("file:///suite.py")["isPreferred"] is False
+
+    def test_method_reference_is_not_preferred(self) -> None:
+        _source, action = _action(
+            """
+            class Suite(LitmusTest):
+                def build_suite(self) -> LitmusTest:
+                    return self.test("x", lambda: self._run())
+            """,
+            "litmus/method-reference",
+        )
+
+        assert action.is_preferred is False
+        assert action.to_lsp("file:///suite.py")["isPreferred"] is False

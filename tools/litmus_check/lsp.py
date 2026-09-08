@@ -160,13 +160,18 @@ class LspDiagnostic:
 
 @dataclass(frozen=True, slots=True)
 class LspCodeAction:
-    """A quick-fix attached to one diagnostic."""
+    """A quick-fix attached to one diagnostic.
+
+    ``is_preferred`` stays false: the author chooses. A preferred fix is the
+    shape an editor applies without being asked, and these rewrites change
+    control flow.
+    """
 
     title: str
     diagnostic: LspDiagnostic
     edits: tuple[TextEdit, ...]
     kind: str = QUICKFIX
-    is_preferred: bool = True
+    is_preferred: bool = False
 
     def apply(self, source: str) -> str:
         """Return ``source`` with this action's edits applied."""
