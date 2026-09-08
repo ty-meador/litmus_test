@@ -66,14 +66,16 @@ request.
 - A provisional `DeviceRequest` carries `method` (GET, PUT, POST, DELETE;
   CoAP may add the methods its backend declares), `path` (appended to the
   declared base URL, never a second origin), `payload` (`bytes` or absent),
-  and protocol options (HTTP headers, CoAP options). PATCH is not in that
-  set; whether the first backend declares it as a non-idempotent sibling
-  of POST is a decision for Ty below, not a silent widening. Reject a
-  non-`bytes` payload, a path that is an absolute URL, a method the
-  backend did not declare, and a header or option name that is not a
-  string, at the call site, before the adapter is touched. Booleans are
-  not integers; a `dict` is not a JSON body. Encoding is the author's,
-  recorded as the bytes actually sent.
+  protocol options (HTTP headers, CoAP options), and `evidence_headers`
+  (the set of header or option names whose *values* may appear in the
+  attempt log; default empty). PATCH is not in that method set; whether
+  the first backend declares it as a non-idempotent sibling of POST is a
+  decision for Ty below, not a silent widening. Reject a non-`bytes`
+  payload, a path that is an absolute URL, a method the backend did not
+  declare, and a header or option name that is not a string, at the call
+  site, before the adapter is touched. Booleans are not integers; a
+  `dict` is not a JSON body. Encoding is the author's, recorded as the
+  bytes actually sent.
 - A provisional `DeviceResponse` carries `status` (HTTP status or CoAP
   code), protocol options (headers / CoAP options), and `body` (`bytes`).
   JSON parsing is a convenience on top of those bytes, not the contract:
@@ -93,10 +95,11 @@ request.
   the next lifecycle phase. Framework termination takes precedence over
   this admission rule.
 - Each operation records the requested method, path, payload length,
-  whether the adapter confirmed a response, the status if one arrived, and
-  the body length. An unconfirmed request never becomes the last-successful
-  response in a cache the next test method reads as truth. Unknown is
-  explicit.
+  request-header *names*, whether the adapter confirmed a response, the
+  status if one arrived, and the body length. Header *values* stay out of
+  that record unless the author listed the name in `evidence_headers`.
+  An unconfirmed request never becomes the last-successful response in a
+  cache the next test method reads as truth. Unknown is explicit.
 
 **Developer obligation:** Declare the scheme, base URL, and protocol
 parameters in `configure()`. Obtain the framework-managed handle through
@@ -220,10 +223,17 @@ authored.
 - Authentication material (Bearer tokens, basic passwords, client
   certificates, CoAP DTLS PSKs) is declared in `configure()` and never
   reaches evidence. Provenance names the credential *path* or slot, never
-  the value — the same containment SSH already proves. Response bodies
-  still go to evidence when the author puts them there; secrets in a
-  body are the author's leak to stop, not a framework rewrite of the
-  payload.
+  the value — the same containment SSH already proves. URL userinfo in
+  the declared base URL is withheld the same way.
+- Attempt logs keep every request-header *name* and withhold every
+  *value* unless the author lists that name in `evidence_headers` on
+  the `DeviceRequest`. Default is empty: the safe case costs the author
+  no thought. A secret-name allowlist cannot deliver "never" —
+  `X-Device-Token`, `Api-Key`, and the next DUT's favorite all miss it.
+  Matching is case-insensitive. Opting `Authorization` in is the author's
+  leak to stop, not a framework rewrite. Response bodies still go to
+  evidence when the author puts them there; secrets in a body are the
+  author's leak to stop, not a framework rewrite of the payload.
 - TLS / DTLS verification is on by default. Skipping it is a lab-only
   declaration analogous to SSH `skip_host_verification`, logged as such
   at bring-up.
@@ -236,12 +246,15 @@ authored.
   protocol into CAN.
 
 **Developer obligation:** Do not follow redirects in suite code to dodge
-the handle policy. Do not log tokens. Do not ask the framework for a
-`perform_action` sugar that hides the poll.
+the handle policy. Do not log tokens. Do not opt a secret header into
+`evidence_headers` unless the Floor Technician is meant to read that
+value. Do not ask the framework for a `perform_action` sugar that hides
+the poll.
 
 **Consequence:** A redirect cannot launder a second origin into a record
-that still names the declared base URL. A K2 action poll is visible as
-the requests it actually made.
+that still names the declared base URL. An attempt log cannot carry a
+bearer token off the bench unless the author opted that header in. A
+K2 action poll is visible as the requests it actually made.
 
 ## Lifecycle and hook ownership: unchanged
 
@@ -306,7 +319,8 @@ before the adapter is touched; one in-flight request; status-as-data
 (4xx is a response, not an exception); retries default to zero and each
 declared attempt is evidenced; non-idempotent retry refused unless opted
 in; `cancel_in_flight` stops the retry loop; redirects do not follow
-cross-host; credentials never appear in evidence; partial `configure()`
+cross-host; header values never appear in evidence unless the author
+opted that name into `evidence_headers`; partial `configure()`
 cannot orphan a session; node cuts leave a sibling's in-flight request
 untouched; repeated `cancel_in_flight` cannot replay a POST; unconfirmed
 close produces only unconfirmed evidence. `MockDeviceApi` schedules
@@ -341,7 +355,9 @@ policy, verification posture, ceilings — is logged through `utils.logger`
 at configuration time. Requests, retries, operational failures, and
 close attempts use that scoped logger to distinguish requested,
 responded, interrupted, and unconfirmed outcomes. Attempt index and
-status belong in that log even when the body does not.
+status belong in that log even when the body does not. Request-header
+names belong there too; their values do not, unless the author listed
+that name in `evidence_headers`.
 
 ## What the Floor Technician sees
 
@@ -391,7 +407,11 @@ implementation:
    wait for it and does not replace it.
 6. Redirects default to do-not-follow; cross-host follow is refused.
    Shared sessions refuse conflicting ownership, same Group Isolation
-   posture as signed PWM. Credentials never reach evidence.
+   posture as signed PWM. Attempt logs keep header names and withhold
+   every value unless the author lists that name in `evidence_headers`
+   (default empty). A secret-name allowlist cannot keep
+   `X-Device-Token` out of an artifact. Opting `Authorization` in is
+   the author's leak.
 7. PATCH. The declared HTTP methods are GET, PUT, POST, DELETE. POST
    refuses application retry unless opted in. PATCH is the same
    double-stimulus. Include it in the first backend as a declared
