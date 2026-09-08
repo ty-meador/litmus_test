@@ -21,9 +21,10 @@ of feature parity: the Python Inspector is still separate work.
 
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
-  `litmus/gated-pass` wraps an unconditional `return PASS` and
-  `litmus/method-reference` lifts a trivial lambda to the method reference.
-  Core install unchanged (issue #78).
+  `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
+  contiguous, call-free guards, otherwise an `if False:` scaffold that cannot
+  pass) and `litmus/method-reference` lifts a trivial lambda to the method
+  reference. Core install unchanged (issue #78).
 - PWM interface design note (issue #94), signed by Ty in
   [!125](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/125#note_3800005090)
   on 2026-09-08: representable frequency/duty transfers, bounded linear duty
