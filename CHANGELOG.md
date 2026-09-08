@@ -19,6 +19,12 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector capture reader (issue #89): reads schema-validated artifact
+  envelopes and root results beneath the opened run, preserves full relative paths
+  under an explicit relocation mapping, and reports unavailable evidence without
+  substituting captures from the original run. Publishes the existing version-1
+  artifact envelope schema; shared strict JSON parsing keeps both Inspector readers
+  consistent. Root discovery, screens, and the entry point remain later work.
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
   `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
