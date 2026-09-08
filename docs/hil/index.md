@@ -39,18 +39,19 @@ once, so each note can cite them instead of repeating them.
 | Interface | Note | Issue | Status |
 |---|---|---|---|
 | GPIO | [gpio.md](gpio.md) | #93 | SIGNED 2026-09-07 |
-| PWM | `pwm.md` | #94 | DRAFT — lands in its own MR |
+| PWM | [pwm.md](pwm.md) | #94 | SIGNED 2026-09-08 |
 | CAN bus | `can.md` | #95 | DRAFT — lands in its own MR |
 | I2C / SPI | `i2c-spi.md` | #96 | DRAFT — lands in its own MR |
 | Device API (CoAP/HTTP) | `device-api.md` | #97 | DRAFT — lands in its own MR |
 | Serial (UART) | [serial.md](serial.md) | #91 | DRAFT — landed in its own MR |
 
-Each of the four notes not yet present links only once its own MR merges: each
-of #94-#97 opens as an independent, single-file MR carrying just its own note
-(so `mkdocs --strict` passes standalone on that branch), and this page is not
-touched again to turn its filename into a link until that file exists on
-`main` — otherwise this page itself would carry a broken link on every branch
-but the one that adds the target.
+Each remaining note (#95-#97) links only once its own MR merges. Each opens as
+an independent MR carrying its note and the required `mkdocs.yml` navigation
+entry, so the docs checks pass standalone on that branch. This follows the
+[scope ruling on #94](https://gitlab.com/Tyler-Meador/litmus_test/-/issues/94#note_3799932288).
+This page turns a filename into a link only after the file exists on `main`;
+otherwise it would carry a broken link on every branch but the one that adds
+the target.
 
 Serial/UART is Cayde's vertical (ruled by Ty as both a local peer of SSH and the
 same transport reached through a `via` hop). It is listed here for navigation
