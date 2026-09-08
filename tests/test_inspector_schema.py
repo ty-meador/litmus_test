@@ -32,6 +32,7 @@ from litmus.results import NodeType
 SCHEMA_DIR = Path(__file__).resolve().parents[1] / "docs" / "schema"
 RESULT_SCHEMA = SCHEMA_DIR / "result-v1.schema.json"
 TIMELINE_SCHEMA = SCHEMA_DIR / "timeline-v1.schema.json"
+ARTIFACT_SCHEMA = SCHEMA_DIR / "artifact-v1.schema.json"
 
 type Json = dict[str, Any]
 
@@ -116,14 +117,15 @@ class TestPublishedSchemas:
     def test_schema_files_are_valid_2020_12_documents(self) -> None:
         result = _load(RESULT_SCHEMA)
         timeline = _load(TIMELINE_SCHEMA)
-        for schema in (result, timeline):
+        artifact = _load(ARTIFACT_SCHEMA)
+        for schema in (result, timeline, artifact):
             Draft202012Validator.check_schema(schema)
             assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
             assert schema["properties"]["format_version"] == {
                 "const": 1,
                 "description": schema["properties"]["format_version"]["description"],
             }
-        assert result["$id"] != timeline["$id"]
+        assert len({result["$id"], timeline["$id"], artifact["$id"]}) == 3
 
     def test_closing_keeps_the_objects_the_policy_leaves_open(self) -> None:
         closed = _closed(_load(RESULT_SCHEMA))
@@ -188,6 +190,10 @@ class TestEmittedRecordsValidate:
             _assert_valid(timeline_validator, record)
         pointers = {r["artifact_type"] for r in records if "artifact_type" in r}
         assert pointers == {"survey", "run-result"}
+        artifact_validator = _validator(ARTIFACT_SCHEMA, closed=True)
+        for record in records:
+            if record.get("artifact_type") == "survey":
+                _assert_valid(artifact_validator, _load(Path(record["artifact_path"])))
 
     @pytest.mark.parametrize(
         "failure",

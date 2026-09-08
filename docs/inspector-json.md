@@ -162,6 +162,7 @@ vocabulary (ruling on issue #111, 2026-09-06). From 1.0.0 rule 2 applies as writ
 |---|---|---|
 | Result | [`docs/schema/result-v1.schema.json`](schema/result-v1.schema.json) | JSON Schema 2020-12 |
 | Timeline | [`docs/schema/timeline-v1.schema.json`](schema/timeline-v1.schema.json) | JSON Schema 2020-12 |
+| Artifact envelope | [`docs/schema/artifact-v1.schema.json`](schema/artifact-v1.schema.json) | JSON Schema 2020-12 |
 
 The published files are the consumer contract, and they are open: framework-owned
 objects do not forbid additional properties, so a consumer validating with the file
@@ -172,9 +173,13 @@ names), and `run_data` (suite evidence beyond the reserved `measurements` slot).
 
 `tests/test_inspector_schema.py` validates every emitted `result.json` and every emitted
 timeline line against these files on each gate run, first as published and then with
-every framework-owned object closed. The artifact envelope carries its `format_version`
-under the same policy; its schema is published when an Inspector consumes the envelope
-rather than the pointer.
+every framework-owned object closed. It also validates emitted point-in-time captures
+against the artifact-envelope schema with the envelope closed. That schema describes
+the existing `Artifact.to_json()` shape: `format_version`, `name`, `type`, `timestamp`,
+and `data`. The observation may be any JSON value, including explicit null. Additive
+envelope fields remain acceptable to consumers; the payload is never closed. The
+internal Inspector capture reader consumes this envelope under the same version policy.
+The root `run-result` pointer instead uses the result schema; it is not an envelope.
 
 ## Summary tree node
 
