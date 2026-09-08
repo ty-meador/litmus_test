@@ -38,6 +38,7 @@ nav:
   - HIL interfaces:
       - Overview: hil/index.md
       - GPIO (design note): hil/gpio.md
+      - PWM (draft design note): hil/pwm.md
       - Serial/UART (design note): hil/serial.md
 
 plugins:
