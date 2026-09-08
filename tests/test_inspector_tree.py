@@ -51,6 +51,31 @@ def _save(root: Path, node: JsonObject) -> Path:
 
 
 class TestInspectorTree:
+    @pytest.mark.parametrize("selection", ["absolute", "relative", "symlink", "parent"])
+    async def test_operator_path_spellings_open_the_same_saved_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str
+    ) -> None:
+        run_root = tmp_path / "recorded"
+        run_root.mkdir()
+        path = _save(run_root, _node("rack"))
+        original = path.read_bytes()
+        latest = tmp_path / "latest"
+        latest.symlink_to(run_root, target_is_directory=True)
+        monkeypatch.chdir(tmp_path)
+        selections = {
+            "absolute": path,
+            "relative": Path("recorded/result.json"),
+            "symlink": latest / "result.json",
+            "parent": run_root / ".." / "recorded" / "result.json",
+        }
+
+        tree = await TreeReader().read(selections[selection])
+
+        assert isinstance(tree, InspectorTree)
+        assert tree.result == json.loads(original)
+        assert tree.selected.ancestor_names == ("rack",)
+        assert path.read_bytes() == original
+
     async def test_declaration_order_name_components_and_duplicate_names_stay_distinct(
         self, tmp_path: Path
     ) -> None:

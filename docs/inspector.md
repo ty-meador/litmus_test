@@ -37,7 +37,11 @@ consistently. The original-root mapping remains an input to this internal compon
 establishing it from saved records belongs to the later saved-run loader.
 
 The internal tree reader (`litmus.inspector_tree.TreeReader`) now opens a selected
-result through that validated result boundary. Its `InspectorTree` preserves every
+result through that validated result boundary. It resolves the operator's selection
+before deriving the run root, so a symlink such as `latest/result.json` or a path with
+`..` opens the same saved evidence as its direct path. References inside saved records
+still obey the capture reader's traversal and containment checks.
+Its `InspectorTree` preserves every
 recorded node in declaration preorder, including pending descendants, and keeps full
 name components rather than splitting display breadcrumbs. Stable row indices keep
 duplicate names distinct. Inspect selection and the Failures projection share the same
