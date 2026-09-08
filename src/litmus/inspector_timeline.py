@@ -7,16 +7,16 @@ filter can keep damage visible without treating it as a logged hardware failure.
 
 import asyncio
 import json
-import math
 from dataclasses import dataclass
 from importlib.metadata import distribution
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from litmus.run_data import JsonObject, JsonValue
+from litmus.inspector_json import JsonDecoder
+from litmus.run_data import JsonObject
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,15 +89,7 @@ class TimelineReader:
         self, line: bytes, number: int, validator: Draft202012Validator
     ) -> TimelineRecord | TimelineDiagnostic:
         try:
-            data = cast(
-                JsonValue,
-                json.loads(
-                    line.decode("utf-8"),
-                    object_pairs_hook=_unique_object,
-                    parse_constant=_reject_constant,
-                    parse_float=_finite_float,
-                ),
-            )
+            data = JsonDecoder().decode(line)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             if not line.endswith(b"\n"):
                 return TimelineDiagnostic(
@@ -123,24 +115,3 @@ class TimelineReader:
         except ValidationError as error:
             return TimelineDiagnostic(number, "invalid-record", error.message)
         return TimelineRecord(number, data)
-
-
-def _unique_object(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
-    """Refuse ambiguous evidence instead of silently keeping the last duplicate key."""
-    result: JsonObject = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key!r}")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> JsonValue:
-    raise ValueError(f"non-JSON numeric constant: {value}")
-
-
-def _finite_float(value: str) -> float:
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"non-finite JSON number: {value}")
-    return number
