@@ -6,7 +6,6 @@ searches the station or infers a mapping from directory names. Missing provenanc
 the tree and chronology available, with an explicit diagnostic instead of guessed evidence.
 """
 
-import asyncio
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -18,7 +17,7 @@ from litmus.inspector_timeline import (
     TimelineReader,
     TimelineRecord,
 )
-from litmus.inspector_tree import InspectorTree
+from litmus.inspector_tree import InspectorTree, TreeReader
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,40 +56,45 @@ class SavedRunReader:
         diagnostic. I/O uses worker boundaries; cancellation and reader defects propagate.
         No suite code is discovered or executed, and no saved file is changed.
         """
-        reference = str(path)
-        try:
-            path = await asyncio.to_thread(path.resolve)
-        except (OSError, ValueError) as error:
-            return ArtifactDiagnostic(reference, "unavailable", f"result unavailable: {error}")
-        content = await ArtifactReader(path.parent).read(str(path), kind="result")
-        if isinstance(content, ArtifactDiagnostic):
-            return content
-        tree = InspectorTree(content.data)
-        link = cast(str | None, tree.rows[0].record["log_path"])
+        selected = await TreeReader().read_selected(path)
+        if isinstance(selected, ArtifactDiagnostic):
+            return selected
+        tree = selected.tree
+        # The freshly opened tree selects its root. Use its ownership decision:
+        # a pending root's damaged link cannot supply chronology or relocate captures.
+        owner = tree.log_owner
+        link = None if owner is None else cast(str, owner.record["log_path"])
         timeline = None
         origin: PurePosixPath | OriginDiagnostic = OriginDiagnostic(
             link, "original run root unavailable: root has no recorded timeline"
         )
         if link is not None:
-            timeline = await TimelineReader().read_reference(path.parent, link)
+            timeline = await TimelineReader().read_reference(selected.run_root, link)
             origin = _origin(tree, timeline)
         recorded_root = origin if isinstance(origin, PurePosixPath) else None
         return SavedRun(
-            path.parent, tree, timeline, origin, ArtifactReader(path.parent, recorded_root)
+            selected.run_root,
+            tree,
+            timeline,
+            origin,
+            ArtifactReader(selected.run_root, recorded_root),
         )
 
 
 def _origin(tree: InspectorTree, timeline: TimelineRead) -> PurePosixPath | OriginDiagnostic:
     """Require one final root publication; damage cannot conceal a conflicting pointer."""
+    scope = list(tree.rows[0].ancestor_names)
+    if tree.result["ancestor_names"] != scope:
+        return OriginDiagnostic(
+            timeline.reference,
+            "original run root unavailable: result ancestor_names disagree with the tree root",
+        )
     unavailable = OriginDiagnostic(
         timeline.reference,
         "original run root unavailable: expected one final root-scoped result publication "
         "in an undamaged timeline",
     )
     if not timeline.rows or any(isinstance(row, TimelineDiagnostic) for row in timeline.rows):
-        return unavailable
-    scope = list(tree.rows[0].ancestor_names)
-    if tree.result["ancestor_names"] != scope:
         return unavailable
     publications = [
         row

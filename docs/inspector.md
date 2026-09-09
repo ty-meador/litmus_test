@@ -49,6 +49,9 @@ result through that validated result boundary. It resolves the operator's select
 before deriving the run root, so a symlink such as `latest/result.json` or a path with
 `..` opens the same saved evidence as its direct path. References inside saved records
 still obey the capture reader's traversal and containment checks.
+`read_selected()` retains the resolved run directory alongside the validated tree;
+`read()` returns just that tree through the same selection boundary. Unresolvable
+operator paths produce unavailable diagnostics in either form.
 Its `InspectorTree` preserves every recorded node in declaration preorder, including
 pending descendants, and keeps full name components rather than splitting display
 breadcrumbs. Stable row indices keep duplicate names distinct. Inspect selection and
@@ -76,10 +79,14 @@ the affected current load to idle; they never restore an earlier log or become v
 
 The internal saved-run loader (`litmus.inspector_run.SavedRunReader`) now opens a
 validated result, its contained root timeline, and a capture reader for that same run.
+It uses `TreeReader.read_selected()` so selection errors and the resolved run boundary
+have one owner. The tree's chronology ownership also governs this opening: a pending
+root supplies no timeline or relocation origin, even if a damaged record gives it a link.
 It establishes the original root only from one final root-scoped pointer with
 `artifact_type="run-result"`, `artifact_name="result"`, and an absolute,
 non-traversing path to `result.json`. The result's ancestor names must agree with its
-tree root; full name components are compared without splitting breadcrumbs. A missing,
+tree root; full name components are compared without splitting breadcrumbs, and a
+disagreement names the result defect instead of directing the technician to the log. A missing,
 damaged, ambiguous, or misplaced publication leaves the original root explicitly
 unavailable while preserving the saved tree and timeline diagnostics. Complete records
 without a trailing newline remain readable. The loader never guesses from a basename
