@@ -91,7 +91,34 @@ class TestSavedRunReader:
 
         assert isinstance(saved, SavedRun)
         assert isinstance(saved.origin, OriginDiagnostic)
+        assert saved.origin.message == (
+            "original run root unavailable: result ancestor_names disagree with the tree root"
+        )
         assert saved.tree.result == result
+
+    async def test_pending_root_with_a_recorded_link_cannot_supply_chronology_or_origin(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = _save(tmp_path)
+        result = cast(JsonObject, json.loads(path.read_text()))
+        cast(JsonObject, result["summary_tree"])["state"] = None
+        path.write_text(json.dumps(result))
+
+        async def forbidden(self: TimelineReader, run_root: Path, reference: str) -> None:
+            pytest.fail("a pending root cannot select a timeline even when its file exists")
+
+        monkeypatch.setattr(TimelineReader, "read_reference", forbidden)
+        saved = await SavedRunReader().read(path)
+
+        assert isinstance(saved, SavedRun)
+        assert saved.tree.log_owner is None
+        assert saved.tree.result == result
+        assert saved.root_timeline is None
+        assert isinstance(saved.origin, OriginDiagnostic)
+        assert saved.origin.reference is None
+        loaded = await saved.artifacts.read("/original/run/result.json", kind="result")
+        assert isinstance(loaded, ArtifactDiagnostic)
+        assert loaded.kind == "unavailable"
 
     @pytest.mark.parametrize("selection", ["symlink-loop", "null-byte"])
     async def test_unresolvable_operator_selection_is_an_unavailable_result(

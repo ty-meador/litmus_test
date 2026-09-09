@@ -23,6 +23,9 @@ of feature parity: the Python Inspector is still separate work.
   from one final root-scoped result publication, then relocates captures through the
   existing contained reader. Missing, damaged, ambiguous, or misplaced publication
   evidence preserves the tree and chronology with an explicit unavailable mapping.
+  Operator selections share the tree reader's resolution and diagnostic boundary;
+  a pending root cannot supply chronology or relocation from a damaged recorded link.
+  Disagreement between result and tree roots names the result defect explicitly.
   Tested against a moved 70-DUT run without suite execution or evidence changes;
   screens, latest-run discovery, and the entry point remain later increments.
 - Internal Inspector selection model (issue #89): Inspect and Failures navigation
