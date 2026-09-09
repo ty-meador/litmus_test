@@ -117,22 +117,51 @@ class InspectorTree:
                 return
 
 
+@dataclass(frozen=True, slots=True)
+class SelectedTree:
+    """A validated tree and the resolved directory containing its selected result.
+
+    Keep these together so evidence readers use the boundary that validated the tree,
+    rather than resolving the operator's selection again after a symlink might move.
+    """
+
+    run_root: Path
+    tree: InspectorTree
+
+
 class TreeReader:
     """Open a selected saved result using the existing versioned result-file boundary."""
 
     async def read(self, path: Path) -> InspectorTree | ArtifactDiagnostic:
         """Return a tree or an explicit result diagnostic; never manufacture a missing run.
 
+        Call ``read_selected`` when opening timelines or captures as well: it retains
+        the resolved run directory alongside the tree, through this same boundary.
+        """
+        selected = await self.read_selected(path)
+        if isinstance(selected, ArtifactDiagnostic):
+            return selected
+        return selected.tree
+
+    async def read_selected(self, path: Path) -> SelectedTree | ArtifactDiagnostic:
+        """Validate one operator selection and retain the run boundary it establishes.
+
         The resolved selected file's parent is the opened run root. Operator selections
         may use symlinks or ``..``; references inside saved records remain constrained
         by ``ArtifactReader``, which owns schema validation and contained file I/O.
+        Unresolvable selections return unavailable diagnostics with the original input;
+        cancellation and unexpected reader defects propagate rather than becoming data.
         No suite source is discovered, imported, or executed by this reader.
         """
-        path = await asyncio.to_thread(path.resolve)
+        reference = str(path)
+        try:
+            path = await asyncio.to_thread(path.resolve)
+        except (OSError, ValueError) as error:
+            return ArtifactDiagnostic(reference, "unavailable", f"result unavailable: {error}")
         content = await ArtifactReader(path.parent).read(str(path), kind="result")
         if isinstance(content, ArtifactDiagnostic):
             return content
-        return InspectorTree(content.data)
+        return SelectedTree(path.parent, InspectorTree(content.data))
 
 
 def _rows(root: JsonObject) -> tuple[TreeRow, ...]:
