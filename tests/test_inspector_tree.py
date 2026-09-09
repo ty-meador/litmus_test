@@ -1,5 +1,6 @@
 """Saved tree navigation preserves the claims and their evidence ownership."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -7,7 +8,8 @@ import pytest
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
 from litmus.inspector_artifacts import ArtifactDiagnostic
-from litmus.inspector_tree import InspectorTree, TreeReader
+from litmus.inspector_run import SavedRunReader
+from litmus.inspector_tree import InspectorTree, SelectedTree, TreeReader
 from litmus.run_data import JsonObject, JsonValue
 
 
@@ -51,6 +53,58 @@ def _save(root: Path, node: JsonObject) -> Path:
 
 
 class TestInspectorTree:
+    @pytest.mark.parametrize("reader_type", [TreeReader, SavedRunReader])
+    async def test_selection_io_failure_is_diagnosed_by_both_readers(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        reader_type: type[TreeReader] | type[SavedRunReader],
+    ) -> None:
+        path = tmp_path / "result.json"
+
+        def denied(self: Path) -> Path:
+            raise PermissionError("selection denied")
+
+        monkeypatch.setattr(Path, "resolve", denied)
+        loaded = await reader_type().read(path)
+
+        assert isinstance(loaded, ArtifactDiagnostic)
+        assert loaded.reference == str(path)
+        assert loaded.kind == "unavailable"
+        assert "selection denied" in loaded.message
+
+    @pytest.mark.parametrize("reader_type", [TreeReader, SavedRunReader])
+    @pytest.mark.parametrize("error_type", [asyncio.CancelledError, RuntimeError])
+    async def test_selection_cancellation_and_defects_propagate_from_both_readers(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        reader_type: type[TreeReader] | type[SavedRunReader],
+        error_type: type[BaseException],
+    ) -> None:
+        def interrupted(self: Path) -> Path:
+            raise error_type("selection interrupted")
+
+        monkeypatch.setattr(Path, "resolve", interrupted)
+
+        with pytest.raises(error_type, match="selection interrupted"):
+            await reader_type().read(tmp_path / "result.json")
+
+    @pytest.mark.parametrize("selection", ["symlink-loop", "null-byte"])
+    async def test_unresolvable_operator_selection_is_an_unavailable_result(
+        self, tmp_path: Path, selection: str
+    ) -> None:
+        path = tmp_path / "bad\x00name"
+        if selection == "symlink-loop":
+            path = tmp_path / "loop"
+            path.symlink_to(path)
+
+        loaded = await TreeReader().read(path)
+
+        assert isinstance(loaded, ArtifactDiagnostic)
+        assert loaded.kind == "unavailable"
+        assert loaded.reference == str(path)
+
     @pytest.mark.parametrize("selection", ["absolute", "relative", "symlink", "parent"])
     async def test_operator_path_spellings_open_the_same_saved_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str
@@ -75,6 +129,11 @@ class TestInspectorTree:
         assert tree.result == json.loads(original)
         assert tree.selected.ancestor_names == ("rack",)
         assert path.read_bytes() == original
+
+        selected = await TreeReader().read_selected(selections[selection])
+        assert isinstance(selected, SelectedTree)
+        assert selected.run_root == run_root
+        assert selected.tree.result == tree.result
 
     async def test_declaration_order_name_components_and_duplicate_names_stay_distinct(
         self, tmp_path: Path
