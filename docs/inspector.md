@@ -114,8 +114,27 @@ completed selection read gets a fresh presentation model; selection/load state r
 owned by `InspectorSelection`. The moved 70-DUT test exercises this composition without
 executing suite code or changing saved bytes.
 
-Screens, artifact modal/diff controls, latest-run discovery, and the entry point remain
-later increments under #89. No saved inspection runs suite code.
+The internal artifact navigation model
+(`litmus.inspector_artifact_navigation.ArtifactNavigation`) now groups the complete
+timeline's numbered pointers by recorded type. Types follow first appearance; captures
+within a type retain chronology order. Opening selects exactly the requested number,
+including one above nine or hidden by a filter; an invalid number is rejected instead
+of opening another capture. Single-view type navigation wraps and selects the new
+type's first capture, while capture navigation clamps at either end.
+
+Diff selection requires at least two captures of the same type. It starts with the
+single-view capture on the left and the first other capture on the right. The bracket
+actions cycle the left target and the arrow actions cycle the right target within that
+type. When a move reaches the other target, the two sides swap; they never collapse
+onto one capture. Leaving diff restores the original single-view selection. Targets
+retain their timeline number, full pointer record, recorded reference, and decoding
+kind for the existing contained capture reader. Empty paths remain selectable and
+produce that reader's unavailable diagnostic. A moved 70-DUT test opens null and named
+captures and the root result without suite execution or saved-byte changes.
+
+This model selects targets only. Async modal loading, content paging and diff rendering,
+terminal screens, latest-run discovery, and the entry point remain later increments
+under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
