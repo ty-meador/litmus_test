@@ -19,12 +19,22 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector artifact navigation (issue #89): opens the requested numbered
+  capture, groups by recorded type in first-appearance order, and preserves chronology
+  order within each type. Comparison targets stay distinct; a collision swaps the
+  two sides, including for a two-capture group. Targets retain their original pointer
+  and decoding kind for the existing contained reader. A moved 70-DUT proof reads
+  captures and the root result without suite execution or evidence changes. Modal
+  loading, content paging/diff rendering, terminal screens, latest-run discovery, and
+  the entry point remain later work.
 - Internal Inspector timeline presentation (issue #89): tail-first paging, errors-only
   filtering that keeps decoding and availability diagnostics, and stable capture
   numbers across the complete loaded chronology. Paging, filtering, and resizing never
   change a number's target or edit the saved records. A moved 70-DUT proof resolves
   numbered captures through the existing contained reader without suite execution.
-  Terminal screens, artifact modal/diff controls, and the entry point remain later work.
+  Artifact target navigation is now implemented as described above. Modal loading,
+  content paging/diff rendering, terminal screens, latest-run discovery, and the entry
+  point remain later work.
 - Internal Inspector saved-run loader (issue #89): establishes an original run root
   from one final root-scoped result publication, then relocates captures through the
   existing contained reader. Missing, damaged, ambiguous, or misplaced publication
