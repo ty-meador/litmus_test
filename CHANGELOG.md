@@ -19,6 +19,12 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector timeline presentation (issue #89): tail-first paging, errors-only
+  filtering that keeps decoding and availability diagnostics, and stable capture
+  numbers across the complete loaded chronology. Paging, filtering, and resizing never
+  change a number's target or edit the saved records. A moved 70-DUT proof resolves
+  numbered captures through the existing contained reader without suite execution.
+  Terminal screens, artifact modal/diff controls, and the entry point remain later work.
 - Internal Inspector saved-run loader (issue #89): establishes an original run root
   from one final root-scoped result publication, then relocates captures through the
   existing contained reader. Missing, damaged, ambiguous, or misplaced publication
