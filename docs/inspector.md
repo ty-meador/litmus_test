@@ -42,7 +42,7 @@ retaining additive fields and explicit null observations. Missing files, malform
 and unsupported versions are diagnostics that retain the recorded reference. JSON parsing
 is shared with the timeline reader, so duplicate keys and non-finite values are refused
 consistently. The original-root mapping remains an input to this internal component;
-establishing it from saved records belongs to the later saved-run loader.
+the saved-run loader establishes it from publication evidence.
 
 The internal tree reader (`litmus.inspector_tree.TreeReader`) now opens a selected
 result through that validated result boundary. It resolves the operator's selection
@@ -74,7 +74,20 @@ their scopes, partial reads, and decoding diagnostics remain intact. Reselection
 evidence afresh. Cancellation and reader defects propagate to the caller and return only
 the affected current load to idle; they never restore an earlier log or become verdicts.
 
-Screens, original-root discovery, and the entry point remain later increments under #89.
+The internal saved-run loader (`litmus.inspector_run.SavedRunReader`) now opens a
+validated result, its contained root timeline, and a capture reader for that same run.
+It establishes the original root only from one final root-scoped pointer with
+`artifact_type="run-result"`, `artifact_name="result"`, and an absolute,
+non-traversing path to `result.json`. The result's ancestor names must agree with its
+tree root; full name components are compared without splitting breadcrumbs. A missing,
+damaged, ambiguous, or misplaced publication leaves the original root explicitly
+unavailable while preserving the saved tree and timeline diagnostics. Complete records
+without a trailing newline remain readable. The loader never guesses from a basename
+or timestamp, reads the original station, or edits saved pointers. Reopening reads the
+evidence afresh. Without a mapping, captures already beneath the opened root remain
+readable, but pointers outside it cannot relocate.
+
+Screens, latest-run discovery, and the entry point remain later increments under #89.
 No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
