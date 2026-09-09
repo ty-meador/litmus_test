@@ -19,17 +19,26 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector saved-run loader (issue #89): establishes an original run root
+  from one final root-scoped result publication, then relocates captures through the
+  existing contained reader. Missing, damaged, ambiguous, or misplaced publication
+  evidence preserves the tree and chronology with an explicit unavailable mapping.
+  Operator selections share the tree reader's resolution and diagnostic boundary;
+  a pending root cannot supply chronology or relocation from a damaged recorded link.
+  Disagreement between result and tree roots names the result defect explicitly.
+  Tested against a moved 70-DUT run without suite execution or evidence changes;
+  screens, latest-run discovery, and the entry point remain later increments.
 - Internal Inspector selection model (issue #89): Inspect and Failures navigation
   loads the selected node's contained timeline, clearing the previous chronology
   before I/O. Each load has its own identity, so delayed completion cannot replace
   a newer selection's evidence. Pending nodes render not run; missing logs remain
   explicitly unavailable. Tested from a moved 70-DUT result without suite execution;
-  screens, original-root discovery, and the entry point remain later increments.
+  screens and the entry point remain later increments.
 - Internal Inspector timeline containment (issue #89): reads recorded run-relative
   log paths beneath the opened run, retains the complete path after relocation, and
   reports unavailable references without reading another run's chronology. Timeline
-  and capture readers now share checked, cached packaged schemas. Screens, root
-  discovery, and the entry point remain separate increments.
+  and capture readers now share checked, cached packaged schemas. Screens and the
+  entry point remain separate increments.
 - Internal Inspector saved-tree model (issue #89): schema-validated result loading,
   declaration-order rows, shared Fail/Aborted navigation, and nearest-ancestor log
   ownership. Pending nodes never borrow chronology, duplicate names retain distinct
@@ -42,7 +51,7 @@ of feature parity: the Python Inspector is still separate work.
   under an explicit relocation mapping, and reports unavailable evidence without
   substituting captures from the original run. Publishes the existing version-1
   artifact envelope schema; shared strict JSON parsing keeps both Inspector readers
-  consistent. Root discovery, screens, and the entry point remain later work.
+  consistent. Screens and the entry point remain later work.
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
   `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
