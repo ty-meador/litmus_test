@@ -54,9 +54,8 @@ pending descendants, and keeps full name components rather than splitting displa
 breadcrumbs. Stable row indices keep duplicate names distinct. Inspect selection and
 the Failures projection share the same rows: previous/next failure includes Fail and
 Aborted, skips Pass and pending, and does not wrap. The model retains failure causes,
-timeout fields, and additive evidence;
-declared readings absent from evidence are exposed by name, while null and zero remain
-present observations.
+timeout fields, and additive evidence; declared readings absent from evidence are
+exposed by name, while null and zero remain present observations.
 
 For an executed selection, the model identifies its own or nearest ancestor's recorded
 timeline link. A pending selection has no owner and must render **not run**. An owner
