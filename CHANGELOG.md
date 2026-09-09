@@ -19,19 +19,24 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector selection model (issue #89): Inspect and Failures navigation
+  loads the selected node's contained timeline, clearing the previous chronology
+  before I/O. Each load has its own identity, so delayed completion cannot replace
+  a newer selection's evidence. Pending nodes render not run; missing logs remain
+  explicitly unavailable. Tested from a moved 70-DUT result without suite execution;
+  screens, original-root discovery, and the entry point remain later increments.
 - Internal Inspector timeline containment (issue #89): reads recorded run-relative
   log paths beneath the opened run, retains the complete path after relocation, and
   reports unavailable references without reading another run's chronology. Timeline
-  and capture readers now share checked, cached packaged schemas. Screens, loading
-  on selection, root discovery, and the entry point remain separate increments.
+  and capture readers now share checked, cached packaged schemas. Screens, root
+  discovery, and the entry point remain separate increments.
 - Internal Inspector saved-tree model (issue #89): schema-validated result loading,
   declaration-order rows, shared Fail/Aborted navigation, and nearest-ancestor log
   ownership. Pending nodes never borrow chronology, duplicate names retain distinct
   indices, and missing declared readings remain named. Operator selections resolve
   symlinks and `..` before establishing the run root, without relaxing recorded-reference
-  containment. Tested from a moved 70-DUT
-  result without live suite execution; terminal screens and timeline loading remain
-  later increments.
+  containment. Tested from a moved 70-DUT result without live suite execution;
+  terminal screens remain a later increment.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without
