@@ -94,8 +94,28 @@ or timestamp, reads the original station, or edits saved pointers. Reopening rea
 evidence afresh. Without a mapping, captures already beneath the opened root remain
 readable, but pointers outside it cannot relocate.
 
-Screens, latest-run discovery, and the entry point remain later increments under #89.
-No saved inspection runs suite code.
+The internal timeline presentation model (`litmus.inspector_timeline_view.TimelineView`)
+pages a completed selection's chronology without changing its recorded data. It opens
+at the tail with filtering off; toggling errors returns to the first page. The filter
+retains Python `error` and `critical` records (case-insensitively) and every reader
+diagnostic. Custom levels have no inferred severity and remain in the full view.
+Each page retains physical line numbers, scopes, timestamps, and additive fields.
+Resizing changes the number of records per page and clamps the current page; an empty
+projection has one empty page. The terminal supplies that size after reserving its
+header and controls. This model counts records, not wrapped terminal lines.
+
+Structured pointers receive one-based numbers across the complete loaded chronology,
+before paging or filtering. Lookup keeps the same target even when its row is hidden;
+message text never supplies a path. An empty recorded path remains numbered so the
+capture reader can diagnose it. All numbers remain addressable, including those above
+the `1`–`9` direct shortcuts. The returned record supplies the pointer fields to the
+saved run's capture reader, including the distinct `run-result` decoding kind. A new
+completed selection read gets a fresh presentation model; selection/load state remains
+owned by `InspectorSelection`. The moved 70-DUT test exercises this composition without
+executing suite code or changing saved bytes.
+
+Screens, artifact modal/diff controls, latest-run discovery, and the entry point remain
+later increments under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
