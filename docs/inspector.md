@@ -162,8 +162,12 @@ together, `d` enters and leaves the comparison. It renders the modal model only:
 capture as its lines, a comparison as two aligned columns with differing rows
 highlighted, a diagnostic as the reader's words with the recorded reference.
 
-Latest-run discovery and the entry point remain later increments under #89. No saved
-inspection runs suite code.
+The entry point is `litmus inspect [PATH]` (`litmus.cli`): PATH is a run directory or
+its `result.json`; without PATH the most recently modified `result.json` under the
+artifact root opens (`LITMUS_ARTIFACT_ROOT`, default `artifacts/`; `--artifact-root DIR`
+overrides), the legacy discovery rule carried over. Nothing under the root, or a
+selection that is not a saved version-1 run, is refused with the reader's diagnostic on
+stderr and exit status 3. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
@@ -188,15 +192,19 @@ unsupported versions explicitly rather than guessing their meaning.
 
 ## Opening a run
 
-The entry point opens a selected `result.json` and treats its containing directory as
-the run root. The legacy convenience of opening the most recent run is a target; the
-Python command spelling and discovery rule remain to be settled under #89. The legacy
+`litmus inspect PATH` opens a selected `result.json`, or the `result.json` inside a
+selected run directory, and treats its containing directory as the run root. `litmus
+inspect` alone opens the most recently modified `result.json` under the artifact root
+(`LITMUS_ARTIFACT_ROOT`, default `artifacts/`; `--artifact-root DIR` overrides), the
+legacy convenience carried over by Ty's ruling of 2026-09-09 on #89. The legacy
 `npm run inspect` command and `summary-tree.artifact` input are not Python interfaces.
 
 If no result is available, explain that there is no saved tree to inspect. Do not start
-a test to manufacture one. Absence of `result.json` is not a verdict: an invocation may
-have failed before a run, or a process may have ended before result publication. Preserve
-any surviving timeline evidence for diagnosis.
+a test to manufacture one: `litmus inspect` with nothing under the root exits 3 saying
+so, and a selection that is not a saved version-1 run exits 3 with the reader's
+diagnostic, never another file opened in its place. Absence of `result.json` is not a
+verdict: an invocation may have failed before a run, or a process may have ended before
+result publication. Preserve any surviving timeline evidence for diagnosis.
 
 ## The screen layout
 
@@ -420,8 +428,9 @@ recorded differences, not an automatic diagnosis of hardware truth.
 
 ## Implementation acceptance
 
-The screen implementation follows this document in a later increment. Its view model
-must be testable independently of the terminal and driven by a recorded 70-DUT rack:
+The screen implementation (`litmus.inspector_app`) and the entry point (`litmus
+inspect`) follow this document. The view model is testable independently of the
+terminal and driven by a recorded 70-DUT rack:
 
 - Reconstruct tree order, peer states, pending descendants, failure causes, timeout
   evidence, and missing declared readings from version-1 records alone.
@@ -432,7 +441,8 @@ must be testable independently of the terminal and driven by a recorded 70-DUT r
 - Preserve complete lines under truncation and distinguish unavailable evidence,
   malformed records, unsupported versions, and nodes that never ran.
 - Make Inspect and Failures usable from saved evidence without source or hardware;
-  neither waits for Run. Settle the saved-view command and discovery rule under #89.
+  neither waits for Run. The saved-view command and discovery rule are the ones under
+  "Opening a run".
 - Verify moved-run resolution preserves the complete run-relative path and remains
   under the opened root. Exercise captures with identical basenames in different nodes,
   an unestablished root mapping, and unavailable files; preserve the recorded reference
