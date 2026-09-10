@@ -10,13 +10,22 @@ output.
 the author starts from a shape that already clears ``litmus-check`` and pyright
 strict. The files are the single source for that shape (``docs/litmus-new.md``).
 
+``litmus inspect [PATH]`` opens a saved run in the Inspector, the Floor Technician's
+surface (``docs/inspector.md``). ``PATH`` is a run directory or its ``result.json``;
+without it the most recently modified ``result.json`` under the artifact root opens,
+the legacy discovery rule carried over by Ty's ruling of 2026-09-09 (issue #89). No
+saved inspection runs suite code: what is not a saved version-1 run is refused with
+the reader's diagnostic.
+
 Exit status is the station contract (``docs/litmus-run.md``):
 
-- ``0`` — the root settled ``Pass``, or ``litmus new`` wrote the files.
+- ``0`` — the root settled ``Pass``, ``litmus new`` wrote the files, or the Inspector
+  was closed.
 - ``1`` — the root settled ``Fail``.
 - ``2`` — the root settled ``Aborted``.
 - ``3`` — usage error: the invocation was wrong, the suite could not be loaded,
-  selected, or constructed, or ``litmus new`` could not write. No run took place.
+  selected, or constructed, ``litmus new`` could not write, or ``litmus inspect``
+  found nothing to open. No run took place.
 
 The exit contract and the ``--json`` record are public; this module's path and its
 classes are not (``docs/api-stability.md``).
@@ -39,6 +48,9 @@ from typing import Any, NoReturn, TextIO, cast, final
 
 from litmus.base import LitmusTest
 from litmus.errors import LitmusError
+from litmus.inspector_app import InspectorApp
+from litmus.inspector_artifacts import ArtifactDiagnostic
+from litmus.inspector_run import SavedRunReader
 from litmus.junit import JunitXml
 from litmus.lifecycle import State
 from litmus.results import RunResult
@@ -56,6 +68,8 @@ _EXIT_BY_STATE: Mapping[State, int] = {
 }
 _SELECTOR = "::"
 _ARTIFACT_ROOT_VARIABLE = "LITMUS_ARTIFACT_ROOT"
+_DEFAULT_ARTIFACT_ROOT = "artifacts"
+_RESULT_FILE = "result.json"
 
 
 class UsageError(Exception):
@@ -188,14 +202,45 @@ class SuiteLoader:
 
 
 @final
+class SavedRunLocator:
+    """Resolve ``litmus inspect [PATH]`` to the one ``result.json`` it opens.
+
+    ``PATH`` is a run directory or its ``result.json``; a directory selects the
+    ``result.json`` inside it. Without ``PATH`` the most recently modified
+    ``result.json`` under the artifact root is chosen, the legacy discovery rule (Ty's
+    ruling of 2026-09-09 on issue #89). Nothing is validated here: the saved-run reader
+    owns that boundary, so an absent or damaged selection becomes its diagnostic rather
+    than a guess at some other run. With nothing under the root there is no saved tree
+    to inspect, and the answer says so instead of starting a run to manufacture one.
+    """
+
+    def locate(self, path: str | None, *, artifact_root: Path) -> Path:
+        """Return the ``result.json`` to open, or raise ``UsageError`` naming the root."""
+        if path is not None:
+            selected = Path(path)
+            return selected / _RESULT_FILE if selected.is_dir() else selected
+        candidates = [
+            candidate for candidate in artifact_root.rglob(_RESULT_FILE) if candidate.is_file()
+        ]
+        if not candidates:
+            raise UsageError(
+                f"no saved run under {artifact_root}: nothing to inspect; run a suite first, "
+                f"or give a run directory or its {_RESULT_FILE}"
+            )
+        return max(candidates, key=lambda candidate: candidate.stat().st_mtime)
+
+
+@final
 class LitmusCommand:
-    """Parse arguments, dispatch ``run`` or ``new``, return the exit status.
+    """Parse arguments, dispatch ``run``, ``new``, or ``inspect``, return the exit status.
 
     The command holds no state between runs; construct it with the streams to write
     to and call :meth:`run` with the argument vector. Tests drive it exactly the way
     the console script does. For ``run``, the verdict line and the run log go to
     ``stderr``; only the ``--json`` record goes to ``stdout``, so a station can
-    capture it alone. For ``new``, the written paths go to ``stdout``.
+    capture it alone. For ``new``, the written paths go to ``stdout``. For ``inspect``,
+    the terminal belongs to the Inspector until it is closed; a refusal goes to
+    ``stderr`` and nothing is opened.
     """
 
     def __init__(self, stdout: TextIO | None = None, stderr: TextIO | None = None) -> None:
@@ -211,10 +256,26 @@ class LitmusCommand:
             prefix = f"litmus {args.command}"
             if args.command == "new":
                 return self._new(args)
+            if args.command == "inspect":
+                return self._inspect(args)
             return self._run_suite(args)
         except UsageError as exc:
             self._stderr.write(f"{prefix}: error: {exc}\n")
             return EXIT_USAGE
+
+    def _inspect(self, args: argparse.Namespace) -> int:
+        """Open the selected or latest saved run in the Inspector; run no suite code."""
+        root = args.artifact_root
+        if root is None:
+            root = os.environ.get(_ARTIFACT_ROOT_VARIABLE, _DEFAULT_ARTIFACT_ROOT)
+        selected = SavedRunLocator().locate(args.path, artifact_root=Path(root))
+        saved = asyncio.run(SavedRunReader().read(selected))
+        if isinstance(saved, ArtifactDiagnostic):
+            # The reader's words are the refusal: what was selected, and why it is not
+            # a saved version-1 run. No other file is opened in its place.
+            raise UsageError(f"{saved.reference}: {saved.message}")
+        InspectorApp(saved).run()
+        return EXIT_PASS
 
     def _run_suite(self, args: argparse.Namespace) -> int:
         """Load, construct, and run the suite ``args.target`` selects."""
@@ -241,8 +302,9 @@ class LitmusCommand:
         parser = _Parser(
             prog="litmus",
             description=(
-                "Run a Litmus suite, or write a gated-PASS suite. Exit 0 Pass "
-                "(or files written), 1 Fail, 2 Aborted, 3 usage error."
+                "Run a Litmus suite, write a gated-PASS suite, or inspect a saved run. "
+                "Exit 0 Pass (or files written, or the Inspector closed), 1 Fail, "
+                "2 Aborted, 3 usage error."
             ),
         )
         commands = parser.add_subparsers(dest="command", required=True, metavar="command")
@@ -294,6 +356,30 @@ class LitmusCommand:
             "--force",
             action="store_true",
             help="overwrite existing files instead of refusing",
+        )
+        inspect_parser = commands.add_parser(
+            "inspect",
+            help="open a saved run in the Inspector",
+            description=(
+                "Open PATH, a run directory or its result.json, in the Inspector. Without "
+                "PATH, open the most recently modified result.json under the artifact "
+                "root. No suite code runs; anything that is not a saved version-1 run is "
+                "refused with the reader's diagnostic."
+            ),
+        )
+        inspect_parser.add_argument(
+            "path",
+            metavar="PATH",
+            nargs="?",
+            help="run directory or its result.json (default: the latest run under the root)",
+        )
+        inspect_parser.add_argument(
+            "--artifact-root",
+            metavar="DIR",
+            help=(
+                f"where the latest run is looked for; overrides {_ARTIFACT_ROOT_VARIABLE} "
+                f"(default: {_DEFAULT_ARTIFACT_ROOT})"
+            ),
         )
         return parser
 
