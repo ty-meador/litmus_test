@@ -19,14 +19,21 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Internal Inspector artifact modal model (issue #89): loads the selected capture,
+  or the two sides of a comparison, through the contained capture reader and pages
+  the result. A capture is printed in its recorded key order; an unavailable or
+  undecodable one shows the reader's diagnostic with the recorded reference and is
+  never replaced by another file. A comparison aligns the two captures row by row so
+  one page cursor moves both sides together; a singleton type stays single without a
+  reload; a delayed read never replaces a newer selection. `tests/inspector_rack.py`
+  now records the shared 70-DUT run every Inspector test opens. Terminal screens,
+  latest-run discovery, and the entry point remain later work.
 - Internal Inspector artifact navigation (issue #89): opens the requested numbered
   capture, groups by recorded type in first-appearance order, and preserves chronology
   order within each type. Comparison targets stay distinct; a collision swaps the
   two sides, including for a two-capture group. Targets retain their original pointer
   and decoding kind for the existing contained reader. A moved 70-DUT proof reads
-  captures and the root result without suite execution or evidence changes. Modal
-  loading, content paging/diff rendering, terminal screens, latest-run discovery, and
-  the entry point remain later work.
+  captures and the root result without suite execution or evidence changes.
 - Device API (CoAP/HTTP) implementation (issue #119, signed contract #97):
   `DeviceApi`, `DeviceRequest`, `DeviceResponse`, and
   `DeviceApiOperationFailure` on the public surface; `TestUtils.get_http` and
