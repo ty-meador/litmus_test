@@ -54,7 +54,7 @@ LOG_HEADER_LINES = 2
 """The owner line and the page line that precede the chronology in the log pane."""
 
 
-def row_text(row: TreeRow, *, selected: bool) -> Text:
+def _row_text(row: TreeRow, *, selected: bool) -> Text:
     """Render one tree row: cursor, depth, name, state, and any reading not taken."""
     label, style = _STATE_STYLES[row.state]
     text = Text("> " if selected else "  ")
@@ -69,14 +69,14 @@ def row_text(row: TreeRow, *, selected: bool) -> Text:
     return text
 
 
-def window(count: int, selected: int, height: int) -> range:
+def _window(count: int, selected: int, height: int) -> range:
     """The rows that fit around the selection when the tree is taller than the pane."""
     height = max(1, height)
     start = min(max(0, selected - height // 2), max(0, count - height))
     return range(start, min(count, start + height))
 
 
-def log_header(view: SelectionView, timeline: TimelineView | None) -> tuple[Text, Text]:
+def _log_header(view: SelectionView, timeline: TimelineView | None) -> tuple[Text, Text]:
     """The two lines above the chronology: whose log this is, and where the page is."""
     owner = Text("log: ")
     if view.status == "ready" and view.owner is not None:
@@ -99,7 +99,7 @@ def log_header(view: SelectionView, timeline: TimelineView | None) -> tuple[Text
     return owner, page
 
 
-def log_row_text(row: TimelineEntry | TimelineDiagnostic) -> Text:
+def _log_row_text(row: TimelineEntry | TimelineDiagnostic) -> Text:
     """Render one chronology row, marking captures by number and damage in place."""
     if isinstance(row, TimelineDiagnostic):
         # Damage stays where the reader found it, never hidden or filled in. The line
@@ -225,9 +225,9 @@ class InspectorApp(App[None]):
             tabs.append(f" {label} ", style="reverse" if self.tab == name else "")
             tabs.append("  ")
         tree_lines = self._tree_lines(view)
-        log_lines = [*log_header(view, self.timeline_view)]
+        log_lines = [*_log_header(view, self.timeline_view)]
         if self.timeline_view is not None:
-            log_lines.extend(log_row_text(row) for row in self.timeline_view.rows)
+            log_lines.extend(_log_row_text(row) for row in self.timeline_view.rows)
         self.tree_lines = tuple(line.plain for line in tree_lines)
         self.log_lines = tuple(line.plain for line in log_lines)
         self.query_one("#tabs", Static).update(tabs)
@@ -245,8 +245,8 @@ class InspectorApp(App[None]):
             position = selected
         height = self.query_one("#tree", Static).size.height
         return [
-            row_text(rows[index], selected=rows[index].index == selected)
-            for index in window(len(rows), position, height)
+            _row_text(rows[index], selected=rows[index].index == selected)
+            for index in _window(len(rows), position, height)
         ]
 
     def _sync_timeline_view(self, view: SelectionView) -> None:
@@ -348,14 +348,14 @@ class ArtifactScreen(ModalScreen[None]):
 
     def redraw(self) -> None:
         """Render the title and body from the modal model; nothing is decided here."""
-        title = modal_title(self.modal)
-        body = modal_body(self.modal, self.query_one("#modal-body", Static).size.width)
+        title = _modal_title(self.modal)
+        body = _modal_body(self.modal, self.query_one("#modal-body", Static).size.width)
         self.modal_lines = (*title.plain.split("\n"), *(line.plain for line in body))
         self.query_one("#modal-title", Static).update(title)
         self.query_one("#modal-body", Static).update(Text("\n").join(body))
 
 
-def modal_title(modal: ArtifactModal) -> Text:
+def _modal_title(modal: ArtifactModal) -> Text:
     """Two lines: where the selection sits among types and captures, and the page."""
     navigation = modal.navigation
     types = navigation.types
@@ -381,7 +381,7 @@ def modal_title(modal: ArtifactModal) -> Text:
     return title
 
 
-def modal_body(modal: ArtifactModal, width: int) -> list[Text]:
+def _modal_body(modal: ArtifactModal, width: int) -> list[Text]:
     """The current page: one capture's lines, or two aligned columns of a comparison."""
     if modal.status != "ready":
         return [Text("loading", style="dim")]

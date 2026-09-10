@@ -13,9 +13,9 @@ from tests.inspector_rack import device_row, record_seventy_dut_run, saved_bytes
 from litmus.inspector_artifact_view import (
     ArtifactModal,
     DiffRow,
+    _render_lines,  # pyright: ignore[reportPrivateUsage]
     align,
     diff_rows,
-    render_lines,
     single_rows,
 )
 from litmus.inspector_artifacts import ArtifactContent, ArtifactDiagnostic, ArtifactReader
@@ -295,7 +295,7 @@ class TestArtifactModal:
     def test_render_keeps_recorded_key_order_and_unicode(self) -> None:
         content = ArtifactContent("ref", Path("ref"), {"z": "°C", "a": [1, None]})
 
-        assert render_lines(content) == (
+        assert _render_lines(content) == (
             "{",
             '  "z": "°C",',
             '  "a": [',

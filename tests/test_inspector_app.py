@@ -18,12 +18,12 @@ from tests.inspector_rack import (
 from litmus.inspector_app import (
     ArtifactScreen,
     InspectorApp,
-    log_header,
-    log_row_text,
-    modal_body,
-    modal_title,
-    row_text,
-    window,
+    _log_header,  # pyright: ignore[reportPrivateUsage]
+    _log_row_text,  # pyright: ignore[reportPrivateUsage]
+    _modal_body,  # pyright: ignore[reportPrivateUsage]
+    _modal_title,  # pyright: ignore[reportPrivateUsage]
+    _row_text,  # pyright: ignore[reportPrivateUsage]
+    _window,  # pyright: ignore[reportPrivateUsage]
 )
 from litmus.inspector_artifact_view import ArtifactModal
 from litmus.inspector_artifacts import ArtifactReader
@@ -284,8 +284,8 @@ class TestRendering:
             log_owner_index=4,
         )
 
-        assert row_text(row, selected=True).plain == ">     volts  Fail  not taken: missing"
-        assert row_text(row, selected=False).plain == "      volts  Fail  not taken: missing"
+        assert _row_text(row, selected=True).plain == ">     volts  Fail  not taken: missing"
+        assert _row_text(row, selected=False).plain == "      volts  Fail  not taken: missing"
 
     def test_log_rows_number_captures_and_keep_damage_in_place(self) -> None:
         record = TimelineRecord(
@@ -297,13 +297,13 @@ class TestRendering:
                 "artifact_path": "/run/rail.json",
             },
         )
-        entry = log_row_text(TimelineEntry(record, 3)).plain
+        entry = _log_row_text(TimelineEntry(record, 3)).plain
         assert entry.startswith("[3] 2026-09-09T21:00:00Z warning  measurement: rail")
-        assert log_row_text(TimelineEntry(record, None)).plain.startswith("    2026-09-09")
-        damage = log_row_text(TimelineDiagnostic(12, "truncated", "unfinished record")).plain
+        assert _log_row_text(TimelineEntry(record, None)).plain.startswith("    2026-09-09")
+        damage = _log_row_text(TimelineDiagnostic(12, "truncated", "unfinished record")).plain
         assert damage == "--- truncated at line 12: unfinished record ---"
         assert (
-            log_row_text(TimelineDiagnostic(None, "unavailable", "gone")).plain
+            _log_row_text(TimelineDiagnostic(None, "unavailable", "gone")).plain
             == "--- unavailable: gone ---"
         )
 
@@ -320,7 +320,7 @@ class TestRendering:
     def test_window_keeps_the_selection_visible(
         self, count: int, selected: int, height: int, expected: range
     ) -> None:
-        assert window(count, selected, height) == expected
+        assert _window(count, selected, height) == expected
 
     async def test_the_mixed_recording_is_what_the_screen_tests_assume(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -349,13 +349,13 @@ class TestLogHeader:
             log_owner_index=None,
         )
 
-        owner, page = log_header(SelectionView(row, None, "loading"), None)
+        owner, page = _log_header(SelectionView(row, None, "loading"), None)
         assert (owner.plain, page.plain) == ("log: loading", "")
-        owner, page = log_header(SelectionView(row, None, "not-run"), None)
+        owner, page = _log_header(SelectionView(row, None, "not-run"), None)
         assert (owner.plain, page.plain) == ("log: not run: the node never executed", "")
-        owner, page = log_header(SelectionView(row, None, "unavailable", None, "gone"), None)
+        owner, page = _log_header(SelectionView(row, None, "unavailable", None, "gone"), None)
         assert (owner.plain, page.plain) == ("log: unavailable: gone", "")
-        owner, page = log_header(SelectionView(row, None, "idle"), None)
+        owner, page = _log_header(SelectionView(row, None, "idle"), None)
         assert (owner.plain, page.plain) == ("log: idle: no chronology", "")
 
 
@@ -504,18 +504,18 @@ class TestModalRendering:
         view = TimelineView(TimelineRead(None, (pointer,)), page_size=1)
         modal = ArtifactModal(view, ArtifactReader(root), initial_number=1, page_size=4)
 
-        assert modal_title(modal).plain.split("\n") == [
+        assert _modal_title(modal).plain.split("\n") == [
             "type 1/1: survey   loading",
             "page 1/1   b back  [ ] type  ← → capture  n p page  d diff",
         ]
-        assert [line.plain for line in modal_body(modal, 80)] == ["loading"]
+        assert [line.plain for line in _modal_body(modal, 80)] == ["loading"]
 
         await modal.open()
 
-        assert modal_title(modal).plain.startswith(
+        assert _modal_title(modal).plain.startswith(
             "type 1/1: survey   capture 1/1   [1] reading (survey) 2026-09-09T18:00:00Z"
         )
-        assert [line.plain for line in modal_body(modal, 80)] == [
+        assert [line.plain for line in _modal_body(modal, 80)] == [
             "{",
             '  "data": {',
             '    "v": 12.1',
@@ -545,7 +545,7 @@ class TestModalRendering:
         assert modal.left is not None
         diagnostic = modal.left.diagnostic
         assert diagnostic is not None
-        body = modal_body(modal, 80)
+        body = _modal_body(modal, 80)
         assert [line.plain for line in body] == [
             f"unavailable: {diagnostic.message}",
             f"recorded reference: {missing}",
