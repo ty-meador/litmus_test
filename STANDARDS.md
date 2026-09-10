@@ -109,9 +109,13 @@ that reader is soon a stranger.
   the diff alone, what each changed unit is for and why it is shaped that way. Where the
   reviewer has to reconstruct that intent from the code, the intent goes into the code —
   not into the MR thread, and not into a promise to comment later. An MR that fails this
-  test is held with revision requested, whatever else it carries. Presence of docstrings
-  is not yet enforced by ruff (the `D` rules land with the Phase 8 quality sweep, #109);
-  until then the reviewer is the gate.
+  test is held with revision requested, whatever else it carries.
+- **What the gate checks.** ruff's `D` rules (Google convention) run in `make check`:
+  every public module, class, function, and method under `src/` and `tools/` carries a
+  docstring, shaped as above. `pyproject.toml` is the source of truth for the exact set;
+  the exemptions there say why each exists (magic methods, `__init__`, the D1 coverage
+  rules for test modules, `tests/` and the stub `litmus new` writes). The gate checks presence and shape; whether the words state the
+  contract is still the reviewer's call.
 
 ## 6. Tests
 
