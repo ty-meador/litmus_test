@@ -19,6 +19,9 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Package metadata for discovery (issue #103): keywords, trove classifiers, and project
+  URLs (docs site, source, issue tracker, changelog) in `pyproject.toml`, with the README
+  already the long description. The name stays as it is until #9 rules at 1.0.0.
 - `litmus-check` rule `litmus/measurement-name-unique` (issue #132, raised by the #109
   sweep): two `measure(...)` calls, either spelling, with the same literal name inside one
   `configure` or test method are reported at the second call. The tier-1 duplicate-name
