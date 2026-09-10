@@ -1,5 +1,7 @@
-"""The PASS verdict must be non-forgeable by every route a suite could reach for, and
-the evidence it carries must be a detached, read-only copy (issue #118)."""
+"""The PASS verdict must be non-forgeable by every route a suite could reach for.
+
+The evidence it carries must be a detached, read-only copy (issue #118).
+"""
 
 import copy
 import pickle

@@ -495,6 +495,12 @@ class ChildBoundary:
                 which is what a standalone bench run of a single node wants.
             logger: Where swallowed errors and bug banners go. A scoped adapter keeps
                 framework signals in the node's evidence trail. Defaults to `litmus`.
+            audit_signal: The audit halt this node inherits from its authored suite, so
+                a failing audit stops the work beneath that node without becoming a
+                run-wide abort. `None` when no audit is registered above it.
+            time_budget_clocks: The declared time budgets this node runs under, outermost
+                first, consulted to name which deadline fired. Empty when no ancestor
+                declared one.
             evidence_contract: What this node's verdict may and must carry. Defaults
                 to no declaration and no reserved keys.
         """
