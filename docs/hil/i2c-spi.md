@@ -1,14 +1,15 @@
 # Design note: I2C/SPI interface contract
 
-Status: DRAFT — awaiting Ty's signature on #96
+Status: SIGNED — Ty approved this note in !129 on 2026-09-09; recorded on #96
 
 I2C and SPI carry register transactions, not command strings. This note
-proposes the transfer, addressing, arbitration, timing, and released-bus
+states the transfer, addressing, arbitration, timing, and released-bus
 obligations that make both buses fit Litmus's existing lifecycle. They are
 two interfaces under one contract shape, not one type with a protocol flag.
-The [three HIL rulings](index.md#the-three-rulings) govern both. Approval to
-draft #96 does not sign the obligations below; no I2C or SPI implementation
-may precede Ty's signature on this note.
+The [three HIL rulings](index.md#the-three-rulings) govern both.
+[Ty's approval of the actual note](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/129#note_3812483928)
+signs the obligations below. Implementation requires its own approved issue
+and Zavala's review under [API stability](../api-stability.md).
 
 All names below (`I2cInterface`, `SpiInterface`, `I2cAddress`, `SpiMode`,
 `BusArbitrationFailure`, `BusOperationFailure`, `MockI2c`, `MockSpi`, and
@@ -305,7 +306,7 @@ unconfirmed release never leaves a success line behind. That is the
 load-bearing line: a technician reaching into a rack trusts a record that
 says the bus is free.
 
-## Decisions for Ty on #96
+## Signed decisions recorded on #96
 
 The draft asks for a ruling on these concrete obligations before
 implementation:
