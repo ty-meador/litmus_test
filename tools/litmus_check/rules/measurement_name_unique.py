@@ -38,6 +38,7 @@ class MeasurementNameUniqueRule(Rule):
     summary = "a measurement name is recorded once per node"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Walk each method of each suite class on its own; a name is unique per node."""
         for klass in module.litmus_classes():
             for member in klass.body:
                 if isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):
