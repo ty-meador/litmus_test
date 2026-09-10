@@ -23,12 +23,45 @@ of feature parity: the Python Inspector is still separate work.
   typed frames, immutable acceptance filters, bus-off as an operational
   condition, and silence as the abort safe-state. Design only; no code
   change. Signed by Ty in !128 on 2026-09-09; recorded on issue #95.
+- Internal Inspector timeline presentation (issue #89): tail-first paging, errors-only
+  filtering that keeps decoding and availability diagnostics, and stable capture
+  numbers across the complete loaded chronology. Paging, filtering, and resizing never
+  change a number's target or edit the saved records. A moved 70-DUT proof resolves
+  numbered captures through the existing contained reader without suite execution.
+  Terminal screens, artifact modal/diff controls, and the entry point remain later work.
+- Internal Inspector saved-run loader (issue #89): establishes an original run root
+  from one final root-scoped result publication, then relocates captures through the
+  existing contained reader. Missing, damaged, ambiguous, or misplaced publication
+  evidence preserves the tree and chronology with an explicit unavailable mapping.
+  Operator selections share the tree reader's resolution and diagnostic boundary;
+  a pending root cannot supply chronology or relocation from a damaged recorded link.
+  Disagreement between result and tree roots names the result defect explicitly.
+  Tested against a moved 70-DUT run without suite execution or evidence changes;
+  screens, latest-run discovery, and the entry point remain later increments.
+- Internal Inspector selection model (issue #89): Inspect and Failures navigation
+  loads the selected node's contained timeline, clearing the previous chronology
+  before I/O. Each load has its own identity, so delayed completion cannot replace
+  a newer selection's evidence. Pending nodes render not run; missing logs remain
+  explicitly unavailable. Tested from a moved 70-DUT result without suite execution;
+  screens and the entry point remain later increments.
+- Internal Inspector timeline containment (issue #89): reads recorded run-relative
+  log paths beneath the opened run, retains the complete path after relocation, and
+  reports unavailable references without reading another run's chronology. Timeline
+  and capture readers now share checked, cached packaged schemas. Screens and the
+  entry point remain separate increments.
+- Internal Inspector saved-tree model (issue #89): schema-validated result loading,
+  declaration-order rows, shared Fail/Aborted navigation, and nearest-ancestor log
+  ownership. Pending nodes never borrow chronology, duplicate names retain distinct
+  indices, and missing declared readings remain named. Operator selections resolve
+  symlinks and `..` before establishing the run root, without relaxing recorded-reference
+  containment. Tested from a moved 70-DUT result without live suite execution;
+  terminal screens remain a later increment.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without
   substituting captures from the original run. Publishes the existing version-1
   artifact envelope schema; shared strict JSON parsing keeps both Inspector readers
-  consistent. Root discovery, screens, and the entry point remain later work.
+  consistent. Screens and the entry point remain later work.
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
   `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
