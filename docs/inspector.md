@@ -144,8 +144,18 @@ A delayed read never replaces a newer selection, in the pattern of the selection
 The shared 70-DUT recording in `tests/inspector_rack.py` proves the composition without
 suite execution or saved-byte changes.
 
-Terminal screens, latest-run discovery, and the entry point remain later increments
-under #89. No saved inspection runs suite code.
+The main view (`litmus.inspector_app.InspectorApp`) is the first terminal screen,
+built on Textual by Ty's ruling of 2026-09-09. It renders the tab row, the tree, and
+the chronology pane from the models above and forwards the quick-reference keys, one
+model call per key: Inspect and Failures share one cursor, the chronology loads on
+cursor movement without Enter and names its owner when the node's records rolled up,
+arrows jump between Fail and Aborted rows without wrapping, `n`/`p` page, and `f`
+filters to errors while a truncation marker stays in place. The plain text of every
+redraw is kept on the app so the self-tests drive it against the recorded runs in
+`tests/inspector_rack.py` and a screenshot can be read back against this guide.
+
+The artifact modal screen, latest-run discovery, and the entry point remain later
+increments under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
