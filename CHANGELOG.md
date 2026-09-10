@@ -363,6 +363,14 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- The lifecycle seam inside the framework (issue #126, Ty's ruling of 2026-09-10,
+  raised by the #109 sweep): the half of `TestUtils` that `base.py` drives, the run
+  bracket, the context phases, transport teardown, timeline ownership, measurement
+  sealing, and router inheritance, now lives on a package-internal `NodeRuntime` the
+  lifecycle reaches through `node_runtime(utils)` by plain names; `TestUtils` holds
+  one and reads its state on the author's behalf. Thirty-five `reportPrivateUsage`
+  suppressions in `base.py` are gone. No public name, signature, or behavior changed.
+
 - `use_shell` declares this node's exec route only while `configure()` is running:
   a declaring call (`host`, `via`, `inherit=False`, `propagate=False`) from a test
   method, `cleanup`, a survey, or an audit raises `ContractViolation` before the
