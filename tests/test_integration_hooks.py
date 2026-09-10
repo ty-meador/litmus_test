@@ -46,169 +46,6 @@ class HookedSuite(LitmusTest):
         raise AssertionError("health case received the wrong scope")
 
 
-async def test_root_registration_dispatches_fractally_around_every_node() -> None:
-    calls: list[tuple[str, str]] = []
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        calls.append(("before", ctx.bread_crumbs))
-
-    async def after_each(ctx: AfterEachContext) -> None:
-        assert ctx.result.state is State.PASS
-        calls.append(("after", ctx.bread_crumbs))
-
-    result = await HookedSuite(name="rack").run(
-        before_each=before_each,
-        after_each=after_each,
-    )
-
-    assert result.state is State.PASS
-    assert calls == [
-        ("before", "rack"),
-        ("before", "rack/claims"),
-        ("before", "rack/claims/identity"),
-        ("after", "rack/claims/identity"),
-        ("before", "rack/claims/health"),
-        ("after", "rack/claims/health"),
-        ("after", "rack/claims"),
-        ("after", "rack"),
-    ]
-
-
-async def test_context_is_narrow_at_runtime_and_after_each_receives_the_result() -> None:
-    observed: list[BeforeEachContext | AfterEachContext] = []
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        observed.append(ctx)
-
-    async def after_each(ctx: AfterEachContext) -> None:
-        observed.append(ctx)
-
-    result = await HookedSuite(name="rack").run(
-        env={"STATION_ID": "west-04"},
-        before_each=before_each,
-        after_each=after_each,
-    )
-
-    assert observed
-    for ctx in observed:
-        assert not hasattr(ctx, "exec")
-        assert not hasattr(ctx, "get_shell")
-        assert not hasattr(ctx, "capture_artifact")
-        assert ctx.env["STATION_ID"] == "west-04"
-        assert ctx.logger.extra is not None
-        assert ctx.logger.extra.get("litmus_scope") == ctx.ancestor_names
-    after_contexts = [ctx for ctx in observed if isinstance(ctx, AfterEachContext)]
-    assert after_contexts[-1].result is result
-
-
-@pytest.mark.parametrize(
-    ("hook_name", "allow_unpaired_hooks", "warning_count"),
-    [
-        ("before_each", False, 1),
-        ("after_each", False, 1),
-        ("before_each", True, 0),
-        ("after_each", True, 0),
-    ],
-)
-async def test_unpaired_registration_warns_once_unless_allowed(
-    hook_name: str,
-    allow_unpaired_hooks: bool,
-    warning_count: int,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    async def hook(ctx: BeforeEachContext | AfterEachContext) -> None:
-        del ctx
-
-    kwargs: dict[str, Any] = {
-        hook_name: hook,
-        "allow_unpaired_hooks": allow_unpaired_hooks,
-    }
-    with caplog.at_level("WARNING", logger="litmus"):
-        result = await HookedSuite(name="rack").run(**kwargs)
-
-    assert result.state is State.PASS
-    warnings = [
-        record for record in caplog.records if "UNPAIRED INTEGRATION HOOK" in record.getMessage()
-    ]
-    assert len(warnings) == warning_count
-
-
-async def test_sync_hook_is_rejected_before_lifecycle_execution() -> None:
-    lifecycle_started = False
-
-    class GuardedSuite(HookedSuite):
-        async def configure(self, utils: TestUtils) -> dict[str, object]:
-            nonlocal lifecycle_started
-            lifecycle_started = True
-            return {}
-
-    def sync_hook(ctx: BeforeEachContext) -> None:
-        del ctx
-
-    result = await GuardedSuite(name="rack").run(
-        before_each=sync_hook,  # pyright: ignore[reportArgumentType]
-        allow_unpaired_hooks=True,
-    )
-
-    assert not lifecycle_started
-    assert result.state is State.ABORTED
-    assert isinstance(result.failure, ExternalIntegrationFailure)
-    assert isinstance(result.failure.cause, TypeError)
-    assert str(result.failure.cause) == (
-        "before_each hook must return an awaitable; "
-        "define it with async def so the call returns a coroutine"
-    )
-
-
-async def test_lambda_may_return_an_async_integration_call() -> None:
-    calls: list[tuple[str, str]] = []
-
-    async def record(kind: str, ctx: BeforeEachContext | AfterEachContext) -> None:
-        calls.append((kind, ctx.bread_crumbs))
-
-    # Lambdas are deliberate here: the public idiom forwards an async integration call.
-    before_each: BeforeEachHook = lambda ctx: record("before", ctx)  # noqa: E731
-    after_each: AfterEachHook = lambda ctx: record("after", ctx)  # noqa: E731
-    result = await HookedSuite(name="rack").run(
-        before_each=before_each,
-        after_each=after_each,
-    )
-
-    assert result.state is State.PASS
-    assert calls[0] == ("before", "rack")
-    assert calls[-1] == ("after", "rack")
-
-
-@pytest.mark.parametrize(
-    "failing_node",
-    ["rack", "rack/claims", "rack/claims/identity", "rack/claims/health"],
-)
-async def test_after_each_balances_every_before_each_that_throws(failing_node: str) -> None:
-    started: list[str] = []
-    finished: list[str] = []
-    cause = RuntimeError(f"shop-floor start rejected {failing_node}")
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        started.append(ctx.bread_crumbs)
-        if ctx.bread_crumbs == failing_node:
-            raise cause
-
-    async def after_each(ctx: AfterEachContext) -> None:
-        finished.append(ctx.bread_crumbs)
-
-    result = await HookedSuite(name="rack").run(
-        before_each=before_each,
-        after_each=after_each,
-    )
-
-    assert result.state is State.ABORTED
-    assert isinstance(result.failure, ExternalIntegrationFailure)
-    assert result.failure.hook == "before_each"
-    assert result.failure.cause is cause
-    assert set(finished) == set(started)
-    assert len(finished) == len(started)
-
-
 class ParallelHookedSuite(LitmusTest):
     """The same visible tree under a parallel parent, where a halt races its siblings."""
 
@@ -228,202 +65,11 @@ class ParallelHookedSuite(LitmusTest):
         return PASS
 
 
-@pytest.mark.parametrize(
-    "failing_node",
-    ["rack", "rack/claims", "rack/claims/identity", "rack/claims/health"],
-)
-async def test_parallel_after_each_balances_every_before_each_that_throws(
-    failing_node: str,
-) -> None:
-    """A sibling's halt must not strip the throwing node of its own finished row."""
-    started: list[str] = []
-    finished: list[str] = []
-    cause = RuntimeError(f"shop-floor start rejected {failing_node}")
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        started.append(ctx.bread_crumbs)
-        if ctx.bread_crumbs == failing_node:
-            raise cause
-
-    async def after_each(ctx: AfterEachContext) -> None:
-        finished.append(ctx.bread_crumbs)
-
-    result = await ParallelHookedSuite(name="rack").run(
-        before_each=before_each,
-        after_each=after_each,
-    )
-
-    assert result.state is State.ABORTED
-    assert isinstance(result.failure, ExternalIntegrationFailure)
-    assert result.failure.hook == "before_each"
-    assert result.failure.cause is cause
-    assert failing_node in finished
-    assert set(finished) == set(started)
-    assert len(finished) == len(started)
-
-
-@pytest.mark.parametrize(
-    "failing_node",
-    ["rack/claims/identity", "rack/claims/health"],
-)
-async def test_parallel_after_each_that_throws_still_pairs_every_started_node(
-    failing_node: str,
-) -> None:
-    """The completion hook's own failure is still a completion for that node."""
-    started: list[str] = []
-    finished: list[str] = []
-    cause = RuntimeError(f"shop-floor finish rejected {failing_node}")
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        started.append(ctx.bread_crumbs)
-
-    async def after_each(ctx: AfterEachContext) -> None:
-        finished.append(ctx.bread_crumbs)
-        if ctx.bread_crumbs == failing_node:
-            raise cause
-
-    result = await ParallelHookedSuite(name="rack").run(
-        before_each=before_each,
-        after_each=after_each,
-    )
-
-    assert result.state is State.ABORTED
-    assert isinstance(result.failure, ExternalIntegrationFailure)
-    assert result.failure.hook == "after_each"
-    assert result.failure.cause is cause
-    assert set(finished) == set(started)
-    assert len(finished) == len(started)
-
-
-async def test_after_each_failure_aborts_ancestors_without_running_later_sequence_nodes() -> None:
-    started: list[str] = []
-    finished: list[str] = []
-    cause = RuntimeError("shop-floor finish rejected identity")
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        started.append(ctx.bread_crumbs)
-
-    async def after_each(ctx: AfterEachContext) -> None:
-        finished.append(ctx.bread_crumbs)
-        if ctx.bread_crumbs == "rack/claims/identity":
-            raise cause
-
-    result = await HookedSuite(name="rack").run(
-        before_each=before_each,
-        after_each=after_each,
-    )
-
-    assert result.state is State.ABORTED
-    assert isinstance(result.failure, ExternalIntegrationFailure)
-    assert result.failure.hook == "after_each"
-    assert result.failure.cause is cause
-    assert set(finished) == set(started)
-    assert "rack/claims/health" not in started
-
-
 def _summary_states(node: SummaryTreeNode) -> dict[str, State | None]:
     states = {node.name: node.state}
     for child in node.children:
         states.update(_summary_states(child))
     return states
-
-
-async def test_parallel_abort_cancels_siblings_and_returns_one_aborted_tree() -> None:
-    slow_started = asyncio.Event()
-    never_release = asyncio.Event()
-
-    class GroupedSuite(LitmusTest):
-        def build_suite(self) -> LitmusTest:
-            return self.parallel(
-                "parallel",
-                [
-                    self.test("slow", self._slow),
-                    self.test("halt", self._halt),
-                ],
-            )
-
-        async def _slow(self, utils: TestUtils) -> Verdict:
-            slow_started.set()
-            await never_release.wait()
-            return PASS
-
-        async def _halt(self, utils: TestUtils) -> Verdict:
-            return PASS
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        if ctx.name == "halt":
-            await slow_started.wait()
-            raise RuntimeError("coordinator unavailable")
-
-    result = await GroupedSuite(name="rack").run(
-        before_each=before_each,
-        allow_unpaired_hooks=True,
-    )
-
-    assert result.state is State.ABORTED
-    assert _summary_states(result.summary_tree) == {
-        "rack": State.ABORTED,
-        "parallel": State.ABORTED,
-        "slow": State.ABORTED,
-        "halt": State.ABORTED,
-    }
-
-
-@pytest.mark.parametrize(
-    "caught_type",
-    [Exception, BaseException],
-    ids=["exception", "base-exception"],
-)
-async def test_suite_code_cannot_swallow_an_abort_and_forge_pass(
-    caught_type: type[BaseException],
-) -> None:
-    parked_started = asyncio.Event()
-    caught_cancellation = asyncio.Event()
-    cause = RuntimeError("shop-floor database refused the record")
-
-    class GroupedSuite(LitmusTest):
-        def build_suite(self) -> LitmusTest:
-            return self.parallel(
-                "parallel",
-                [
-                    self.test("parked", self._parked),
-                    self.test("halt", self._halt),
-                ],
-            )
-
-        async def _parked(self, utils: TestUtils) -> Verdict:
-            parked_started.set()
-            try:
-                await asyncio.Event().wait()
-            except caught_type:
-                caught_cancellation.set()
-                return PASS
-            raise AssertionError("parked test resumed without cancellation")
-
-        async def _halt(self, utils: TestUtils) -> Verdict:
-            return PASS
-
-    async def before_each(ctx: BeforeEachContext) -> None:
-        if ctx.name == "halt":
-            await parked_started.wait()
-            raise cause
-
-    result = await GroupedSuite(name="rack").run(
-        before_each=before_each,
-        allow_unpaired_hooks=True,
-    )
-
-    assert caught_cancellation.is_set() is (caught_type is BaseException)
-    assert result.state is State.ABORTED
-    assert isinstance(result.failure, ExternalIntegrationFailure)
-    assert result.failure.hook == "before_each"
-    assert result.failure.cause is cause
-    assert _summary_states(result.summary_tree) == {
-        "rack": State.ABORTED,
-        "parallel": State.ABORTED,
-        "parked": State.ABORTED,
-        "halt": State.ABORTED,
-    }
 
 
 class _ParkedTransport(RemoteInterface):
@@ -463,148 +109,525 @@ class _ParkedTransport(RemoteInterface):
                 parked.set_exception(ConnectionError("transport aborted"))
 
 
-async def test_hook_abort_hard_closes_a_parked_remote_before_returning(
-    install_mock_connector: ConnectorInstaller,
-) -> None:
-    transport = _ParkedTransport()
+class TestDispatchOrder:
+    """Hooks wrap every node, fractally, in declaration order."""
 
-    class FlashSuite(LitmusTest):
-        async def configure(self, utils: TestUtils) -> dict[str, object]:
-            install_mock_connector(utils, transport)
-            await utils.use_shell(host="dut", username="root")
-            return {}
+    async def test_root_registration_dispatches_fractally_around_every_node(self) -> None:
+        calls: list[tuple[str, str]] = []
 
-        def build_suite(self) -> LitmusTest:
-            return self.parallel(
-                "parallel",
-                [
-                    self.test("flash", self._flash),
-                    self.test("halt", self._halt),
-                ],
-            )
+        async def before_each(ctx: BeforeEachContext) -> None:
+            calls.append(("before", ctx.bread_crumbs))
 
-        async def _flash(self, utils: TestUtils) -> Verdict:
-            await utils.exec("flash")
-            return PASS
+        async def after_each(ctx: AfterEachContext) -> None:
+            assert ctx.result.state is State.PASS
+            calls.append(("after", ctx.bread_crumbs))
 
-        async def _halt(self, utils: TestUtils) -> Verdict:
-            return PASS
+        result = await HookedSuite(name="rack").run(
+            before_each=before_each,
+            after_each=after_each,
+        )
 
-    async def before_each(ctx: BeforeEachContext) -> None:
-        if ctx.name == "halt":
-            await transport.in_flight.wait()
-            raise RuntimeError("audit database unavailable")
+        assert result.state is State.PASS
+        assert calls == [
+            ("before", "rack"),
+            ("before", "rack/claims"),
+            ("before", "rack/claims/identity"),
+            ("after", "rack/claims/identity"),
+            ("before", "rack/claims/health"),
+            ("after", "rack/claims/health"),
+            ("after", "rack/claims"),
+            ("after", "rack"),
+        ]
 
-    result = await FlashSuite(name="rack").run(
-        before_each=before_each,
-        allow_unpaired_hooks=True,
+    async def test_lambda_may_return_an_async_integration_call(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        async def record(kind: str, ctx: BeforeEachContext | AfterEachContext) -> None:
+            calls.append((kind, ctx.bread_crumbs))
+
+        # Lambdas are deliberate here: the public idiom forwards an async integration call.
+        before_each: BeforeEachHook = lambda ctx: record("before", ctx)  # noqa: E731
+        after_each: AfterEachHook = lambda ctx: record("after", ctx)  # noqa: E731
+        result = await HookedSuite(name="rack").run(
+            before_each=before_each,
+            after_each=after_each,
+        )
+
+        assert result.state is State.PASS
+        assert calls[0] == ("before", "rack")
+        assert calls[-1] == ("after", "rack")
+
+
+class TestNarrowContexts:
+    """A hook sees the node's identity and environment, never its hardware."""
+
+    async def test_context_is_narrow_at_runtime_and_after_each_receives_the_result(self) -> None:
+        observed: list[BeforeEachContext | AfterEachContext] = []
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            observed.append(ctx)
+
+        async def after_each(ctx: AfterEachContext) -> None:
+            observed.append(ctx)
+
+        result = await HookedSuite(name="rack").run(
+            env={"STATION_ID": "west-04"},
+            before_each=before_each,
+            after_each=after_each,
+        )
+
+        assert observed
+        for ctx in observed:
+            assert not hasattr(ctx, "exec")
+            assert not hasattr(ctx, "get_shell")
+            assert not hasattr(ctx, "capture_artifact")
+            assert ctx.env["STATION_ID"] == "west-04"
+            assert ctx.logger.extra is not None
+            assert ctx.logger.extra.get("litmus_scope") == ctx.ancestor_names
+        after_contexts = [ctx for ctx in observed if isinstance(ctx, AfterEachContext)]
+        assert after_contexts[-1].result is result
+
+
+class TestRegistration:
+    """Registration is checked before the lifecycle starts."""
+
+    @pytest.mark.parametrize(
+        ("hook_name", "allow_unpaired_hooks", "warning_count"),
+        [
+            ("before_each", False, 1),
+            ("after_each", False, 1),
+            ("before_each", True, 0),
+            ("after_each", True, 0),
+        ],
     )
+    async def test_unpaired_registration_warns_once_unless_allowed(
+        self,
+        hook_name: str,
+        allow_unpaired_hooks: bool,
+        warning_count: int,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        async def hook(ctx: BeforeEachContext | AfterEachContext) -> None:
+            del ctx
 
-    assert result.state is State.ABORTED
-    assert transport.cancel_count == 1
-    assert transport.connected is False
-    assert transport.has_in_flight is False
+        kwargs: dict[str, Any] = {
+            hook_name: hook,
+            "allow_unpaired_hooks": allow_unpaired_hooks,
+        }
+        with caplog.at_level("WARNING", logger="litmus"):
+            result = await HookedSuite(name="rack").run(**kwargs)
+
+        assert result.state is State.PASS
+        warnings = [
+            record
+            for record in caplog.records
+            if "UNPAIRED INTEGRATION HOOK" in record.getMessage()
+        ]
+        assert len(warnings) == warning_count
+
+    async def test_sync_hook_is_rejected_before_lifecycle_execution(self) -> None:
+        lifecycle_started = False
+
+        class GuardedSuite(HookedSuite):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                nonlocal lifecycle_started
+                lifecycle_started = True
+                return {}
+
+        def sync_hook(ctx: BeforeEachContext) -> None:
+            del ctx
+
+        result = await GuardedSuite(name="rack").run(
+            before_each=sync_hook,  # pyright: ignore[reportArgumentType]
+            allow_unpaired_hooks=True,
+        )
+
+        assert not lifecycle_started
+        assert result.state is State.ABORTED
+        assert isinstance(result.failure, ExternalIntegrationFailure)
+        assert isinstance(result.failure.cause, TypeError)
+        assert str(result.failure.cause) == (
+            "before_each hook must return an awaitable; "
+            "define it with async def so the call returns a coroutine"
+        )
 
 
-async def test_cleanup_exec_after_abort_is_not_a_contract_violation(
-    caplog: pytest.LogCaptureFixture,
-    install_mock_connector: ConnectorInstaller,
-) -> None:
-    transport = _ParkedTransport()
-    seen: dict[str, ExecResult] = {}
+class TestPairInvariant:
+    """Every before_each that ran is balanced by an after_each, whatever threw."""
 
-    class FlashSuite(LitmusTest):
-        async def configure(self, utils: TestUtils) -> dict[str, object]:
-            install_mock_connector(utils, transport)
-            await utils.use_shell(host="dut", username="root")
-            return {}
+    @pytest.mark.parametrize(
+        "failing_node",
+        ["rack", "rack/claims", "rack/claims/identity", "rack/claims/health"],
+    )
+    async def test_after_each_balances_every_before_each_that_throws(
+        self, failing_node: str
+    ) -> None:
+        started: list[str] = []
+        finished: list[str] = []
+        cause = RuntimeError(f"shop-floor start rejected {failing_node}")
 
-        def build_suite(self) -> LitmusTest:
-            return self.parallel(
-                "parallel",
-                [
-                    self.test("flash", self._flash),
-                    self.test("halt", self._halt),
-                ],
-            )
+        async def before_each(ctx: BeforeEachContext) -> None:
+            started.append(ctx.bread_crumbs)
+            if ctx.bread_crumbs == failing_node:
+                raise cause
 
-        async def _flash(self, utils: TestUtils) -> Verdict:
-            seen["flash"] = await utils.exec("flash")
-            return PASS
+        async def after_each(ctx: AfterEachContext) -> None:
+            finished.append(ctx.bread_crumbs)
 
-        async def _halt(self, utils: TestUtils) -> Verdict:
-            return PASS
+        result = await HookedSuite(name="rack").run(
+            before_each=before_each,
+            after_each=after_each,
+        )
 
-        async def cleanup(self, utils: TestUtils) -> None:
-            seen["cleanup"] = await utils.exec("id")
+        assert result.state is State.ABORTED
+        assert isinstance(result.failure, ExternalIntegrationFailure)
+        assert result.failure.hook == "before_each"
+        assert result.failure.cause is cause
+        assert set(finished) == set(started)
+        assert len(finished) == len(started)
 
-    async def before_each(ctx: BeforeEachContext) -> None:
-        if ctx.name == "halt":
-            await transport.in_flight.wait()
-            raise RuntimeError("audit database unavailable")
+    @pytest.mark.parametrize(
+        "failing_node",
+        ["rack", "rack/claims", "rack/claims/identity", "rack/claims/health"],
+    )
+    async def test_parallel_after_each_balances_every_before_each_that_throws(
+        self,
+        failing_node: str,
+    ) -> None:
+        """A sibling's halt must not strip the throwing node of its own finished row."""
+        started: list[str] = []
+        finished: list[str] = []
+        cause = RuntimeError(f"shop-floor start rejected {failing_node}")
 
-    with caplog.at_level("ERROR", logger="litmus"):
+        async def before_each(ctx: BeforeEachContext) -> None:
+            started.append(ctx.bread_crumbs)
+            if ctx.bread_crumbs == failing_node:
+                raise cause
+
+        async def after_each(ctx: AfterEachContext) -> None:
+            finished.append(ctx.bread_crumbs)
+
+        result = await ParallelHookedSuite(name="rack").run(
+            before_each=before_each,
+            after_each=after_each,
+        )
+
+        assert result.state is State.ABORTED
+        assert isinstance(result.failure, ExternalIntegrationFailure)
+        assert result.failure.hook == "before_each"
+        assert result.failure.cause is cause
+        assert failing_node in finished
+        assert set(finished) == set(started)
+        assert len(finished) == len(started)
+
+    @pytest.mark.parametrize(
+        "failing_node",
+        ["rack/claims/identity", "rack/claims/health"],
+    )
+    async def test_parallel_after_each_that_throws_still_pairs_every_started_node(
+        self,
+        failing_node: str,
+    ) -> None:
+        """The completion hook's own failure is still a completion for that node."""
+        started: list[str] = []
+        finished: list[str] = []
+        cause = RuntimeError(f"shop-floor finish rejected {failing_node}")
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            started.append(ctx.bread_crumbs)
+
+        async def after_each(ctx: AfterEachContext) -> None:
+            finished.append(ctx.bread_crumbs)
+            if ctx.bread_crumbs == failing_node:
+                raise cause
+
+        result = await ParallelHookedSuite(name="rack").run(
+            before_each=before_each,
+            after_each=after_each,
+        )
+
+        assert result.state is State.ABORTED
+        assert isinstance(result.failure, ExternalIntegrationFailure)
+        assert result.failure.hook == "after_each"
+        assert result.failure.cause is cause
+        assert set(finished) == set(started)
+        assert len(finished) == len(started)
+
+
+class TestFailurePropagation:
+    """A hook failure is an abort that suite code cannot outrun or swallow."""
+
+    async def test_after_each_failure_aborts_ancestors_without_running_later_sequence_nodes(
+        self,
+    ) -> None:
+        started: list[str] = []
+        finished: list[str] = []
+        cause = RuntimeError("shop-floor finish rejected identity")
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            started.append(ctx.bread_crumbs)
+
+        async def after_each(ctx: AfterEachContext) -> None:
+            finished.append(ctx.bread_crumbs)
+            if ctx.bread_crumbs == "rack/claims/identity":
+                raise cause
+
+        result = await HookedSuite(name="rack").run(
+            before_each=before_each,
+            after_each=after_each,
+        )
+
+        assert result.state is State.ABORTED
+        assert isinstance(result.failure, ExternalIntegrationFailure)
+        assert result.failure.hook == "after_each"
+        assert result.failure.cause is cause
+        assert set(finished) == set(started)
+        assert "rack/claims/health" not in started
+
+    async def test_parallel_abort_cancels_siblings_and_returns_one_aborted_tree(self) -> None:
+        slow_started = asyncio.Event()
+        never_release = asyncio.Event()
+
+        class GroupedSuite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "parallel",
+                    [
+                        self.test("slow", self._slow),
+                        self.test("halt", self._halt),
+                    ],
+                )
+
+            async def _slow(self, utils: TestUtils) -> Verdict:
+                slow_started.set()
+                await never_release.wait()
+                return PASS
+
+            async def _halt(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            if ctx.name == "halt":
+                await slow_started.wait()
+                raise RuntimeError("coordinator unavailable")
+
+        result = await GroupedSuite(name="rack").run(
+            before_each=before_each,
+            allow_unpaired_hooks=True,
+        )
+
+        assert result.state is State.ABORTED
+        assert _summary_states(result.summary_tree) == {
+            "rack": State.ABORTED,
+            "parallel": State.ABORTED,
+            "slow": State.ABORTED,
+            "halt": State.ABORTED,
+        }
+
+    @pytest.mark.parametrize(
+        "caught_type",
+        [Exception, BaseException],
+        ids=["exception", "base-exception"],
+    )
+    async def test_suite_code_cannot_swallow_an_abort_and_forge_pass(
+        self,
+        caught_type: type[BaseException],
+    ) -> None:
+        parked_started = asyncio.Event()
+        caught_cancellation = asyncio.Event()
+        cause = RuntimeError("shop-floor database refused the record")
+
+        class GroupedSuite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "parallel",
+                    [
+                        self.test("parked", self._parked),
+                        self.test("halt", self._halt),
+                    ],
+                )
+
+            async def _parked(self, utils: TestUtils) -> Verdict:
+                parked_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except caught_type:
+                    caught_cancellation.set()
+                    return PASS
+                raise AssertionError("parked test resumed without cancellation")
+
+            async def _halt(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            if ctx.name == "halt":
+                await parked_started.wait()
+                raise cause
+
+        result = await GroupedSuite(name="rack").run(
+            before_each=before_each,
+            allow_unpaired_hooks=True,
+        )
+
+        assert caught_cancellation.is_set() is (caught_type is BaseException)
+        assert result.state is State.ABORTED
+        assert isinstance(result.failure, ExternalIntegrationFailure)
+        assert result.failure.hook == "before_each"
+        assert result.failure.cause is cause
+        assert _summary_states(result.summary_tree) == {
+            "rack": State.ABORTED,
+            "parallel": State.ABORTED,
+            "parked": State.ABORTED,
+            "halt": State.ABORTED,
+        }
+
+
+class TestAbortTeardown:
+    """An abort hard-closes every opened transport before the run returns."""
+
+    async def test_hook_abort_hard_closes_a_parked_remote_before_returning(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        transport = _ParkedTransport()
+
+        class FlashSuite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, transport)
+                await utils.use_shell(host="dut", username="root")
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "parallel",
+                    [
+                        self.test("flash", self._flash),
+                        self.test("halt", self._halt),
+                    ],
+                )
+
+            async def _flash(self, utils: TestUtils) -> Verdict:
+                await utils.exec("flash")
+                return PASS
+
+            async def _halt(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            if ctx.name == "halt":
+                await transport.in_flight.wait()
+                raise RuntimeError("audit database unavailable")
+
         result = await FlashSuite(name="rack").run(
             before_each=before_each,
             allow_unpaired_hooks=True,
         )
 
-    assert result.state is State.ABORTED
-    assert seen["cleanup"].exit_code == -1
-    assert "not connected" in seen["cleanup"].stderr
-    assert seen["flash"].exit_code == -1
-    banners = [
-        record.message for record in caplog.records if "CONTRACT VIOLATION" in record.message
-    ]
-    cleanup_banners = [
-        record.message for record in caplog.records if "cleanup failed" in record.message
-    ]
-    assert banners == []
-    assert cleanup_banners == []
-    assert transport.connected is False
+        assert result.state is State.ABORTED
+        assert transport.cancel_count == 1
+        assert transport.connected is False
+        assert transport.has_in_flight is False
 
+    async def test_cleanup_exec_after_abort_is_not_a_contract_violation(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        transport = _ParkedTransport()
+        seen: dict[str, ExecResult] = {}
 
-async def test_abort_hard_closes_every_opened_transport(
-    install_mock_connector: ConnectorInstaller,
-) -> None:
-    hop = _ParkedTransport()
-    dut = _ParkedTransport()
+        class FlashSuite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, transport)
+                await utils.use_shell(host="dut", username="root")
+                return {}
 
-    class FlashSuite(LitmusTest):
-        async def configure(self, utils: TestUtils) -> dict[str, object]:
-            install_mock_connector(utils, {"jump": hop, "dut": dut})
-            await utils.get_shell(host="jump", username="ops")
-            await utils.use_shell(host="dut", username="root")
-            return {}
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "parallel",
+                    [
+                        self.test("flash", self._flash),
+                        self.test("halt", self._halt),
+                    ],
+                )
 
-        def build_suite(self) -> LitmusTest:
-            return self.parallel(
-                "parallel",
-                [
-                    self.test("flash", self._flash),
-                    self.test("halt", self._halt),
-                ],
+            async def _flash(self, utils: TestUtils) -> Verdict:
+                seen["flash"] = await utils.exec("flash")
+                return PASS
+
+            async def _halt(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+            async def cleanup(self, utils: TestUtils) -> None:
+                seen["cleanup"] = await utils.exec("id")
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            if ctx.name == "halt":
+                await transport.in_flight.wait()
+                raise RuntimeError("audit database unavailable")
+
+        with caplog.at_level("ERROR", logger="litmus"):
+            result = await FlashSuite(name="rack").run(
+                before_each=before_each,
+                allow_unpaired_hooks=True,
             )
 
-        async def _flash(self, utils: TestUtils) -> Verdict:
-            await utils.exec("flash")
-            return PASS
+        assert result.state is State.ABORTED
+        assert seen["cleanup"].exit_code == -1
+        assert "not connected" in seen["cleanup"].stderr
+        assert seen["flash"].exit_code == -1
+        banners = [
+            record.message for record in caplog.records if "CONTRACT VIOLATION" in record.message
+        ]
+        cleanup_banners = [
+            record.message for record in caplog.records if "cleanup failed" in record.message
+        ]
+        assert banners == []
+        assert cleanup_banners == []
+        assert transport.connected is False
 
-        async def _halt(self, utils: TestUtils) -> Verdict:
-            return PASS
+    async def test_abort_hard_closes_every_opened_transport(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        hop = _ParkedTransport()
+        dut = _ParkedTransport()
 
-    async def before_each(ctx: BeforeEachContext) -> None:
-        if ctx.name == "halt":
-            await dut.in_flight.wait()
-            raise RuntimeError("audit database unavailable")
+        class FlashSuite(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, {"jump": hop, "dut": dut})
+                await utils.get_shell(host="jump", username="ops")
+                await utils.use_shell(host="dut", username="root")
+                return {}
 
-    result = await FlashSuite(name="rack").run(
-        before_each=before_each,
-        allow_unpaired_hooks=True,
-    )
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "parallel",
+                    [
+                        self.test("flash", self._flash),
+                        self.test("halt", self._halt),
+                    ],
+                )
 
-    assert result.state is State.ABORTED
-    assert hop.cancel_count == 1
-    assert dut.cancel_count == 1
-    assert hop.connected is False
-    assert dut.connected is False
+            async def _flash(self, utils: TestUtils) -> Verdict:
+                await utils.exec("flash")
+                return PASS
+
+            async def _halt(self, utils: TestUtils) -> Verdict:
+                return PASS
+
+        async def before_each(ctx: BeforeEachContext) -> None:
+            if ctx.name == "halt":
+                await dut.in_flight.wait()
+                raise RuntimeError("audit database unavailable")
+
+        result = await FlashSuite(name="rack").run(
+            before_each=before_each,
+            allow_unpaired_hooks=True,
+        )
+
+        assert result.state is State.ABORTED
+        assert hop.cancel_count == 1
+        assert dut.cancel_count == 1
+        assert hop.connected is False
+        assert dut.connected is False
