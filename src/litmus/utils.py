@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast, final
 
 from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
+from litmus.device_api import CoapInterface, DeviceApi, DeviceApiInterface, HttpInterface
 from litmus.errors import (
     ContextImmutable,
     ContextInsufficient,
@@ -105,13 +107,21 @@ class _EnvFilter:
 
 @final
 class _RunTransports:
-    """Every transport opened during one run, without changing node ownership."""
+    """Every transport and device-API session opened during one run."""
 
-    __slots__ = ("_close_lock", "_halted", "_late_closes", "_local_exec", "_remotes")
+    __slots__ = (
+        "_close_lock",
+        "_device_apis",
+        "_halted",
+        "_late_closes",
+        "_local_exec",
+        "_remotes",
+    )
 
     def __init__(self, local_exec: LocalExec) -> None:
         self._local_exec = local_exec
         self._remotes: list[RemoteInterface] = []
+        self._device_apis: list[DeviceApiInterface] = []
         self._halted = False
         self._late_closes: set[asyncio.Task[None]] = set()
         self._close_lock = asyncio.Lock()
@@ -125,13 +135,23 @@ class _RunTransports:
             self._late_closes.add(close)
             close.add_done_callback(self._late_closes.discard)
 
+    def register_device_api(self, handle: DeviceApiInterface) -> None:
+        """Remember a device-API session for the run-level halt sweep."""
+        if all(known is not handle for known in self._device_apis):
+            self._device_apis.append(handle)
+        if self._halted and handle.connected:
+            close = asyncio.create_task(self._close_device_api(handle))
+            self._late_closes.add(close)
+            close.add_done_callback(self._late_closes.discard)
+
     async def cancel_in_flight(self) -> None:
-        """Close local work and every known remote; one broken close cannot mask another."""
+        """Close local work, remotes, and device-API sessions together."""
         async with self._close_lock:
             self._halted = True
             await asyncio.gather(
                 self._close_local(),
                 *(self._close_remote(remote) for remote in tuple(self._remotes)),
+                *(self._close_device_api(handle) for handle in tuple(self._device_apis)),
             )
             while self._late_closes:
                 await asyncio.gather(*tuple(self._late_closes))
@@ -147,6 +167,12 @@ class _RunTransports:
             await remote.cancel_in_flight()
         except Exception:
             LOGGER.exception("run-abort could not terminate remote %s", remote.endpoint)
+
+    async def _close_device_api(self, handle: DeviceApiInterface) -> None:
+        try:
+            await handle.cancel_in_flight()
+        except Exception:
+            LOGGER.exception("run-abort could not terminate device-api %s", handle.handle_label)
 
 
 @final
@@ -553,6 +579,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         "_integration_hooks",
         "_local_exec",
         "_logger",
+        "_opened_device_apis",
         "_owns_timeline",
         "_routing",
         "_scope",
@@ -634,6 +661,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         )
         self._signal = RunSignal(RunAbort())
         self._in_configure = False
+        self._opened_device_apis: list[DeviceApiInterface] = []
 
     @property
     def logger(self) -> ScopedLogger:
@@ -898,6 +926,76 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             propagate=propagate,
         )
 
+    async def get_http(
+        self,
+        *,
+        base_url: str,
+        headers: Mapping[str, str] | None = None,
+        token: str | None = None,
+        verify: bool = True,
+        follow_redirects: bool = False,
+        request_timeout: float = 20.0,
+    ) -> DeviceApi:
+        """Open an HTTP session. Does not change this node's exec route.
+
+        Status on the response is data, including 4xx/5xx. Credentials in
+        ``token`` never reach evidence. Abort closes the session; it does not
+        invent a shutdown request.
+
+        Args:
+            base_url: Origin, including ``http`` or ``https``.
+            headers: Default headers for every request on this handle.
+            token: Optional Bearer token. Named as a path in logs, never the value.
+            verify: TLS verification. ``False`` is lab-only and logged as such.
+            follow_redirects: Same-origin follow. Cross-host Location is data.
+            request_timeout: Positive finite seconds per attempt.
+        """
+        merged = dict(headers) if headers is not None else {}
+        if token is not None:
+            merged["Authorization"] = f"Bearer {token}"
+        backend = HttpInterface(
+            base_url=base_url,
+            headers=merged,
+            verify=verify,
+            follow_redirects=follow_redirects,
+            request_timeout=request_timeout,
+            logger=self._logger,
+        )
+        return await self._open_device_api(backend)
+
+    async def get_coap(
+        self,
+        *,
+        base_url: str,
+        headers: Mapping[str, str] | None = None,
+        request_timeout: float = 20.0,
+    ) -> DeviceApi:
+        """Open a CoAP session. Does not change this node's exec route.
+
+        Scheme identity is ``coap`` (UDP CON/ACK). ``coaps`` / ``coaps+tcp``
+        are not this backend. Status is the CoAP code; 4.xx is data.
+
+        Args:
+            base_url: Origin, including the ``coap`` scheme.
+            headers: Reserved for CoAP options on a later backend; unused here.
+            request_timeout: Positive finite seconds per attempt.
+        """
+        backend = CoapInterface(
+            base_url=base_url,
+            headers=headers,
+            request_timeout=request_timeout,
+            logger=self._logger,
+        )
+        return await self._open_device_api(backend)
+
+    async def _open_device_api(self, backend: DeviceApiInterface) -> DeviceApi:
+        """Connect, register for halt, and log the session without credentials."""
+        self._logger.info("device-api connect: %s", backend.handle_label)
+        await backend.connect()
+        self._opened_device_apis.append(backend)
+        self._transports.register_device_api(backend)
+        return DeviceApi(backend)
+
     def _log_exec_routing(self) -> None:
         """Record this node's topology line. The engine calls it once per executed node.
 
@@ -921,12 +1019,44 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         self._routing.apply_run_params(RouterRunParams(router))
 
     async def _disconnect_opened(self) -> None:
-        """Close remotes this node opened. Inherited hops stay with their owner."""
+        """Close remotes and device-API sessions this node opened."""
         await self._routing.disconnect_opened()
+        await self._disconnect_opened_device_apis()
 
     async def _cancel_opened(self) -> None:
-        """Hard-close this node's remotes without touching an inherited hop."""
+        """Hard-close this node's remotes and device-API sessions."""
         await self._routing.cancel_opened()
+        await self._cancel_opened_device_apis()
+
+    async def _disconnect_opened_device_apis(self) -> None:
+        opened = list(reversed(self._opened_device_apis))
+        self._opened_device_apis.clear()
+        for handle in opened:
+            confirmed = False
+            with contextlib.suppress(Exception):
+                await handle.disconnect()
+                confirmed = handle.close_confirmed
+            self._logger.info(
+                "device-api close: %s confirmed=%s",
+                handle.handle_label,
+                confirmed,
+            )
+
+    async def _cancel_opened_device_apis(self) -> None:
+        opened = list(reversed(self._opened_device_apis))
+        self._opened_device_apis.clear()
+        await asyncio.gather(*(self._cancel_one_device_api(handle) for handle in opened))
+
+    async def _cancel_one_device_api(self, handle: DeviceApiInterface) -> None:
+        confirmed = False
+        with contextlib.suppress(Exception):
+            await handle.cancel_in_flight()
+            confirmed = handle.close_confirmed
+        self._logger.info(
+            "device-api close: %s confirmed=%s",
+            handle.handle_label,
+            confirmed,
+        )
 
     def _own_context(self, node: str) -> None:
         """Name the authored instance whose ``configure()`` fills this context. Framework only."""
@@ -1013,6 +1143,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         )
         scoped._signal = RunSignal(run_abort, audit_signal)
         scoped._in_configure = False
+        scoped._opened_device_apis = []
         return scoped
 
     async def _cancel_in_flight(self) -> None:
