@@ -58,6 +58,13 @@ class SummaryTreeNode:
     is the leaf's ``@evidence`` declaration. A declared key absent from ``evidence`` is a
     reading that was not taken; an Inspector shows it by name. Both are ``None`` on a
     node that is not a leaf, that never ran, or that declared nothing (issue #118).
+
+    ``measurements`` is every ``utils.measure`` call this node recorded, in call order,
+    as version-1 measurement objects. It sits on the tree node rather than only in the
+    node's own ``run_data`` because ``result.json`` is the root's record: a leaf's
+    ``run_data`` never reaches the file the Floor Technician and the SPC consumer open
+    (issue #86). An empty tuple means the node ran and measured nothing; ``None`` means
+    the node never ran, matching ``state``.
     """
 
     name: str
@@ -69,6 +76,7 @@ class SummaryTreeNode:
     children: tuple[SummaryTreeNode, ...] = ()
     evidence: JsonObject | None = None
     evidence_declared: tuple[str, ...] | None = None
+    measurements: tuple[JsonObject, ...] | None = None
 
     def to_json(self) -> JsonObject:
         """Return the version-independent node shape accepted by ``json.dumps``."""
@@ -83,6 +91,11 @@ class SummaryTreeNode:
             "evidence": None if self.evidence is None else dict(self.evidence),
             "evidence_declared": (
                 None if self.evidence_declared is None else list(self.evidence_declared)
+            ),
+            "measurements": (
+                None
+                if self.measurements is None
+                else [dict(measurement) for measurement in self.measurements]
             ),
         }
 

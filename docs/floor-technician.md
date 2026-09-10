@@ -93,7 +93,7 @@ The declared tree is still complete, so you can see what was skipped.
 | `summary_tree` | The whole declared tree, rooted here. This is the structural view. |
 | `physical_location` | Station / slot name from `PHYSICAL_LOCATION`, or `unknown` if that variable was not in the run environment. |
 | `env` | The run environment as the run declared it. Secrets in an unfiltered environment are in this object verbatim — that is an operator obligation, not a framework rewrite. With `environment=DEBUG` the allow/deny list is ignored and a warning is in the log. |
-| `run_data` | Suite-authored evidence snapshot: what `configure()` provided, minus anything that is not JSON. Version 1 always has a `measurements` array; it is reserved and empty until the measurements protocol lands. Do not invent SPC meaning from an empty array. Other keys are the suite's. The readings a claim took are on that claim's node in `summary_tree`, not here. |
+| `run_data` | Suite-authored evidence snapshot: what `configure()` provided, minus anything that is not JSON. Version 1 always has a `measurements` array: the numbers this node recorded with `utils.measure`, or empty. Other keys are the suite's. The readings a claim took, and the numbers it measured, are on that claim's node in `summary_tree`, not here. |
 
 ### A summary-tree node
 
@@ -108,6 +108,7 @@ The declared tree is still complete, so you can see what was skipped.
 | `children` | Ordered children. Groups keep declaration order after settlement. |
 | `evidence` | The readings this claim handed back with its verdict, or `null`. Read it beside the failure: a Fail with `evidence` shows you what the unit measured. |
 | `evidence_declared` | The readings this claim promised to take on a pass, or `null`. A name listed here that is missing from `evidence` is a reading that was **not taken**: the claim failed, aborted, or never ran before it got there. It is not a reading of zero. |
+| `measurements` | The numbers this claim recorded, with their windows, or `null` if it never ran. An entry with `in_limits: false` is a reading outside its window. Read `state` beside it: it is not a Fail unless `state` says Fail. The four cases are in `docs/measurements.md`, "What the Floor Technician reads". |
 
 ### The failure object
 

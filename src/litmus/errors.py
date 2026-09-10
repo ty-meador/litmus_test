@@ -476,6 +476,130 @@ class EvidenceViolation(ContractViolation):
         return payload
 
 
+class MeasurementViolation(ContractViolation):
+    """A ``utils.measure`` call the measurement protocol refuses (issue #86).
+
+    The four guards below are tier 1 on purpose: a measurement is a record the process
+    engineer reads without the suite source, so a malformed, duplicated, or misplaced
+    reading is a developer bug the framework refuses at the call rather than a row a
+    linter might have caught. Each names the node and the measurement so the Floor
+    Technician's banner and the developer's traceback agree on where the suite is wrong.
+    Private by ruling: ``measure`` and ``Measurement`` are the two public names.
+    """
+
+    def __init__(self, node: str, *, measurement: str, detail: str) -> None:
+        """Banner the violation with the node and the measurement name.
+
+        Args:
+            node: Name of the node whose body made the call.
+            measurement: The ``name`` argument of the refused call, as given.
+            detail: What specifically was refused.
+        """
+        super().__init__(node, detail)
+        self.measurement = measurement
+
+    def to_json(self) -> dict[str, Any]:
+        payload = super().to_json()
+        payload["measurement"] = self.measurement
+        return payload
+
+
+@final
+class MeasurementInvalid(MeasurementViolation):
+    """An argument to ``utils.measure`` that the protocol does not accept.
+
+    A name that is empty, a value that is ``bool``, ``NaN``, or infinite, a unit that is
+    not text, or a window that bounds nothing: each would corrupt the series a consumer
+    keys on this name, so the reading is refused instead of recorded.
+    """
+
+    def __init__(self, node: str, *, measurement: str, reason: str) -> None:
+        """Name the measurement and state the rule it broke.
+
+        Args:
+            node: Name of the node whose body made the call.
+            measurement: The ``name`` argument as given (``repr`` when not text).
+            reason: The rule the argument broke, in the developer's terms.
+        """
+        super().__init__(
+            node,
+            measurement=measurement,
+            detail=f"measurement {measurement!r} refused: {reason}",
+        )
+        self.reason = reason
+
+    def to_json(self) -> dict[str, Any]:
+        payload = super().to_json()
+        payload["reason"] = self.reason
+        return payload
+
+
+@final
+class MeasurementDuplicate(MeasurementViolation):
+    """The same measurement name recorded twice in one node.
+
+    A consumer that sees two ``output_voltage_v`` rows for one node cannot tell a retry
+    from a bug, so the second reading is refused rather than appended.
+    """
+
+    def __init__(self, node: str, *, measurement: str) -> None:
+        """Name the node and the measurement recorded twice."""
+        super().__init__(
+            node,
+            measurement=measurement,
+            detail=(
+                f"measurement {measurement!r} was already recorded in this node; "
+                "a name identifies one quantity per node, so take the reading once "
+                "or give the second reading its own name"
+            ),
+        )
+
+
+@final
+class MeasurementSealed(MeasurementViolation):
+    """A ``utils.measure`` call outside ``configure()`` or the test method.
+
+    Those two slots produce the node's record; ``cleanup``, surveys, audits, and
+    integration hooks do not, and a node that has settled has nothing left to record
+    into. The record is sealed at the same moment ``run_data`` is snapshotted, in the
+    pattern of ``ContextImmutable``.
+    """
+
+    def __init__(self, node: str, *, measurement: str) -> None:
+        """Name the node and the measurement that arrived outside its slots."""
+        super().__init__(
+            node,
+            measurement=measurement,
+            detail=(
+                f"measurement {measurement!r} recorded outside configure() or the test "
+                "method; the record is sealed like ctx, so cleanup, surveys, audits, "
+                "and hooks cannot measure"
+            ),
+        )
+
+
+@final
+class MeasurementUnbound(MeasurementViolation):
+    """``litmus.measure`` called where no node's slot is executing.
+
+    The package-root alias resolves the current node through a task-local binding the
+    framework sets around ``configure()`` and the test method. At module scope, in a
+    hook, in ``cleanup``, or in a helper called from outside a run there is no node to
+    record against, so the call is refused rather than recorded somewhere surprising.
+    """
+
+    def __init__(self, measurement: str) -> None:
+        """Name the measurement; the banner names the alias, since there is no node."""
+        super().__init__(
+            "litmus.measure",
+            measurement=measurement,
+            detail=(
+                f"measure({measurement!r}) was called outside a running node; call "
+                "utils.measure inside configure() or a test method"
+            ),
+        )
+
+
 @final
 class MissingVerdict(LitmusError):
     """No verdict was produced: the node returned something other than the sentinel.

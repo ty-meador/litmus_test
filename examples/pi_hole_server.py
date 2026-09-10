@@ -2,7 +2,7 @@
 
 This is the example that runs against a real machine the maintainers own, so it is
 where the framework's rules meet a device that does not read the docs. It teaches
-four things:
+five things:
 
 1.  **A class-owned hop.** `configure()` calls `utils.use_shell(...)` once, and from
     then on every `utils.exec` in this node and its descendants lands on the pi-hole.
@@ -25,6 +25,12 @@ four things:
     never asked; a `sequence` stops at the first failure and the tree records the
     unreached claims as pending, not passed.
 
+5.  **A measurement beside the verdict.** The sanity claim times its own exec and
+    records it with `utils.measure(..., limits=(None, 2000.0))`. The number lands in
+    `result.json` with its window and `in_limits`, for the process engineer to trend;
+    the claim's verdict comes from the gate written in the method, not from the
+    window. See `docs/measurements.md`.
+
 Targets come from constructor arguments when given (the self-tests pass a scripted
 hop) and from `utils.env` otherwise: `TARGET_ADDRESS` / `TARGET_USER`, with optional
 `TARGET_PASSWORD` / `TARGET_PORT` (default 22). A missing variable is a `TestFailure`
@@ -42,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any, ClassVar
 
 from litmus import PASS, LitmusTest, Phase, TestFailure, TestUtils, Verdict, evidence
@@ -220,13 +227,32 @@ class PiHoleServer(LitmusTest):
         The reading is the `uptime` line itself. Carrying it on the verdict means the
         run record shows how long the box had been up when it was judged, which is the
         first thing an FT asks about a flaky pi-hole.
+
+        The round trip is this suite's one parametric measurement. Timing the exec
+        gives the process engineer a number to trend across runs, and the window turns
+        a slow hop into something the FT sees on the floor instead of in the log. A
+        limit is evidence, not a verdict: the measurement is recorded either way, and
+        the claim fails on it only because the gate below says so, in plain sight.
         """
+        started = time.monotonic()
         result = await utils.exec("uptime")
+        round_trip = utils.measure(
+            "ssh_round_trip_ms",
+            (time.monotonic() - started) * 1000.0,
+            unit="ms",
+            limits=(None, 2000.0),
+        )
         uptime = result.stdout.strip()
         utils.logger.info("Uptime: %s", uptime)
-        if uptime:
+        if not uptime:
+            raise TestFailure("uptime returned no output!", "uptime output", result.stdout)
+        if round_trip.in_limits:
             return PASS({"uptime": uptime})
-        raise TestFailure("uptime returned no output!", "uptime output", result.stdout)
+        raise TestFailure(
+            "ssh round trip exceeded the window",
+            "at most 2000 ms",
+            f"{round_trip.value:.1f} ms",
+        )
 
     # Remember, if this function doesn't return PASS({ftl_state: <value>})
     # it's a contract violation!

@@ -149,7 +149,7 @@ the record identifies the exact clock and budget without requiring the suite sou
     never returned. A survey that reads the device therefore guards on
     `utils.exec_route`, not on the phase; the phase says when, the route says where.
 - Log artifacts are co-located with their node.
-- **Evidence travels with the verdict** (issue #118). A leaf's readings leave its test method as `PASS(evidence)` or `TestFailure(..., evidence=...)`. The child boundary validates the payload entry by entry before it is recorded: a value that is not JSON, a key that shadows a ctx entry or the reserved `measurements` slot, or a key `@evidence` declared that `PASS` did not carry is a `ContractViolation` naming the leaf and the key. Nothing is stripped silently. A failure is not held to the declaration; it records what it was handed.
+- **Evidence travels with the verdict** (issue #118). A leaf's readings leave its test method as `PASS(evidence)` or `TestFailure(..., evidence=...)`. The child boundary validates the payload entry by entry before it is recorded: a value that is not JSON, a key that shadows a ctx entry or the framework-owned `measurements` slot, or a key `@evidence` declared that `PASS` did not carry is a `ContractViolation` naming the leaf and the key. Nothing is stripped silently. A failure is not held to the declaration; it records what it was handed.
 - A leaf's `RunResult.run_data` is the JSON-safe view of its ctx plus the evidence its verdict carried, flat. A non-leaf node's `run_data` is the ctx view alone. Every `summary_tree` node carries `evidence` (what the leaf's verdict carried, or null) and `evidence_declared` (the `@evidence` declaration, or null); a declared key absent from `evidence` is a reading that was not taken, shown by name.
 - All serializable values (primitives, plain dicts, lists) `configure()` returned appear in `run_data`.
   - Functions, class instances, and live handles (e.g. SSH connections) are stripped from the ctx view; they are the objects a run works through, not evidence.
@@ -161,11 +161,22 @@ the record identifies the exact clock and budget without requiring the suite sou
     contributes no evidence; readings in hand when a time budget fires are lost by
     design, and the scoped log and point-in-time artifacts remain for in-flight
     observation.
-  - `run_data["measurements"]` is a framework-owned empty list reserved for future
-    parametric measurements. An authored ctx entry with that name cannot populate or
-    replace the slot. Limit evaluation, aggregation, SPC, and Cpk are deliberately out
-    of scope; the reserved slot must not be mistaken for an implemented statistical
-    process-control model.
+  - `run_data["measurements"]` is framework-owned: the readings `utils.measure`
+    recorded on this node, in call order, written when the node settles. An authored
+    ctx entry with that name cannot populate or replace the slot, and a `run_data`
+    override cannot drop it. Aggregation, SPC, and Cpk are the consumer's, not the
+    record's.
+- **Measurement Contract** (issue #86, `docs/measurements.md`). A limit is evidence,
+  never a verdict: `utils.measure` records `in_limits` and touches neither the node's
+  state nor its failure. The framework refuses, as a `ContractViolation` naming the
+  node and the measurement: an empty name, a `bool`, `NaN`, or infinite value, a
+  non-text unit, or a window that bounds nothing or runs backwards; the same name
+  recorded twice in one node; a call from outside `configure()` or the test method
+  (`cleanup`, surveys, audits, hooks, or after the node settled); and `litmus.measure`
+  where no node's slot is executing. The record is sealed on every terminal state,
+  Aborted included, and published on the node's `run_data` and on every `summary_tree`
+  node (`null` when the node never ran). A measurement does not satisfy an `@evidence`
+  declaration.
 - Every `RunResult` includes `ancestor_names: list[str]` (path from root) and `bread_crumbs: str` (joined for display), plus a `summary_tree` snapshot of the node's subtree state at completion. Downstream integrators can reconstruct the full Inspector tree from the root's RunResult alone.
 - `TestFailure`, `ExternalIntegrationFailure`, and `OperatorInterrupt` all implement `to_json()`. Serializing a `RunResult` produces clean JSON for downstream integrators without any custom serializer.
 - **Provenance.** Every executed node records one `exec routing: <where> (<why>)` line — `where` is `local` or `via <chain>`, `why` names the call that put it there (`declared via use_shell`, `inherited from parent`, `declared via use_shell(inherit=False)`). A node that never declared a route renders `where` alone. The line is emitted after `configure` returns, since `use_shell` lives there and the route is not final until it does.
