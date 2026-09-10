@@ -48,6 +48,10 @@ class EvidenceFulfilledRule(Rule):
     summary = "every return PASS({...}) in an @evidence method carries every declared key"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report a ``return PASS`` that drops a key ``@evidence`` declared.
+
+        See the ``litmus/evidence-fulfilled`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for member in klass.body:
                 if not isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):

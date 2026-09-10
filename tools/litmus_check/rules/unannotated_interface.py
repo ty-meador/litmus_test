@@ -34,6 +34,10 @@ class UnannotatedInterfaceRule(Rule):
     summary = "suite interfaces are fully annotated and test methods return Verdict"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report missing suite annotations and non-``Verdict`` test returns.
+
+        See the ``litmus/unannotated-interface`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             test_methods = _test_methods(module, klass)
             for function in _functions_owned_by(module, klass):

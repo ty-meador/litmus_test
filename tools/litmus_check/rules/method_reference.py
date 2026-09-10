@@ -34,6 +34,10 @@ class MethodReferenceRule(Rule):
     summary = "pass a method reference to test(), not a lambda or nested def"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report a lambda or nested def passed to ``self.test``.
+
+        See the ``litmus/method-reference`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for node in ast.walk(klass):
                 if not isinstance(node, ast.Call):

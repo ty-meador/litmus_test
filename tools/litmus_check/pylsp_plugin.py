@@ -108,7 +108,7 @@ _hooks = PylspAdapter()
 
 @hookimpl
 def pylsp_settings() -> dict[str, object]:
-    """pylsp plugin settings hook."""
+    """Return plugin settings; the plugin is enabled by default."""
     return _hooks.settings()
 
 
@@ -119,7 +119,7 @@ def pylsp_lint(
     document: object,
     is_saved: bool,
 ) -> list[dict[str, object]]:
-    """pylsp lint hook: run the registry over the buffer."""
+    """Publish registry findings on the open buffer as diagnostics."""
     del workspace, is_saved
     return _hooks.lint(config, document)
 
@@ -132,6 +132,6 @@ def pylsp_code_actions(
     range: object,
     context: object,
 ) -> list[dict[str, object]]:
-    """pylsp code-action hook: gated-pass wrap and method-reference lift."""
+    """Offer gated-pass wrap and method-reference lift as code actions."""
     del workspace
     return _hooks.code_actions(config, document, range, context)
