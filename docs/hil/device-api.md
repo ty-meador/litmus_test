@@ -1,13 +1,14 @@
 # Design note: Device API (CoAP/HTTP) interface contract
 
-Status: DRAFT — awaiting Ty's signature on #97
+Status: SIGNED — Ty approved this note in !130 on 2026-09-09; recorded on #97
 
-A CoAP or HTTP resource is not a command string. This note proposes the
+A CoAP or HTTP resource is not a command string. This note states the
 request and response shape, retry-as-evidence, timing, error taxonomy, and
 closed-session obligations that make a device API fit Litmus's existing
 lifecycle. The [three HIL rulings](index.md#the-three-rulings) govern it.
-Approval to draft #97 does not sign the obligations below; no Device API
-implementation may precede Ty's signature on this note.
+[Ty's approval of the actual note](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/130#note_3812484557)
+signs the obligations below. Implementation requires its own approved issue
+and Zavala's review under [API stability](../api-stability.md).
 
 This is the interface most likely to be waved through as "just `exec` with a
 URL." It is not. An HTTP call needs its own contract, error taxonomy, and
@@ -403,10 +404,9 @@ unconfirmed close never leaves a success line behind. Retry lines, when
 present, sit with the request that produced them, so a Fail that landed
 on the third attempt cannot be read as a single call.
 
-## Decisions for Ty on #97
+## Signed decisions recorded on #97
 
-The draft asks for a ruling on these concrete obligations before
-implementation:
+Ty signed these obligations:
 
 1. One resource-request contract, two backends. HTTP and CoAP share
    method/path/payload/status/body. They are not one handle type, and
@@ -437,11 +437,13 @@ implementation:
    name, not an option number. Response option values are never
    recorded by the framework; carrying one into evidence is the
    author's act, the same as a body.
-7. PATCH. The declared HTTP methods are GET, PUT, POST, DELETE. POST
-   refuses application retry unless opted in. PATCH is the same
-   double-stimulus. Include it in the first backend as a declared
-   non-idempotent method, or keep it undeclared (refused at the call
-   site) until a later note.
+7. PATCH stays undeclared. The declared HTTP methods are GET, PUT, POST,
+   DELETE. POST refuses application retry unless opted in. PATCH is the
+   same double-stimulus, and the signature of 2026-09-09 did not choose
+   between the two branches this decision offered, so it takes the branch
+   that adds nothing to the public surface: PATCH is refused at the call
+   site as an undeclared method. Declaring it is a later note against this
+   contract, not a widening of the first backend.
 
 The lifecycle, verdict, and evidence contracts above are constraints on
 that decision. If a required backend cannot satisfy them, the finding
