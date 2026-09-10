@@ -24,6 +24,7 @@ def _node(name: str, **changes: JsonValue) -> JsonObject:
         "children": [],
         "evidence": None,
         "evidence_declared": None,
+        "measurements": [],
         **changes,
     }
 

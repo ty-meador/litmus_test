@@ -64,8 +64,11 @@ async def _check_voltage(self, utils: TestUtils) -> Verdict:
   declaration is a floor. A failure is not held to it, since a failure may fire before
   every reading was taken; it records what it is handed.
 - The payload is validated entry by entry. A value that is not JSON, or a key that shadows
-  a ctx entry or the reserved `measurements` slot, is a `ContractViolation` naming the
-  key. Nothing is stripped silently.
+  a ctx entry or the framework-owned `measurements` slot, is a `ContractViolation` naming
+  the key. Nothing is stripped silently.
+- A measurement is not evidence. `utils.measure` records a number beside the verdict
+  (see *Measurements* below); it does not satisfy an `@evidence` declaration, so a claim
+  that wants the reading in both records names it in both.
 - An undecorated method may still return `PASS(payload)`; the payload is recorded
   unchecked. Declare when you want to be held to it.
 - The same decorator accepts a `TypedDict`. With `-> Verdict[MyEvidence]` on the method,
@@ -150,11 +153,38 @@ def run_data(self) -> JsonObject:
 default. Override `run_data` if you need custom serialization for these types, and
 return only JSON-safe data from the override.
 
-Every default snapshot includes an empty `run_data["measurements"]` list reserved for
-parametric measurements. It is framework-owned: a ctx entry with that key does not
-populate or replace it. Measurement limits, units, aggregation, SPC, and Cpk require a
-later shared design. The empty slot preserves that boundary without pretending those
-semantics exist today.
+Every snapshot includes `run_data["measurements"]`, the list `utils.measure` fills. It
+is framework-owned: a ctx entry with that key does not populate or replace it, and it
+is written after any `run_data` override runs, so an override cannot drop it.
+
+## Measurements: `utils.measure`
+
+A reading with a unit and a window that a process engineer will chart belongs in
+`utils.measure`, not only in the evidence payload. The call records and returns; the
+verdict stays whatever the gated `PASS` says, because a limit is evidence, never a
+verdict (`docs/measurements.md`):
+
+```python
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict, evidence
+
+
+class Rail(LitmusTest):
+    @evidence("output_voltage_v")
+    async def _output_rail(self, utils: TestUtils) -> Verdict:
+        volts = await self._read_rail(utils)
+        rail = utils.measure("output_voltage_v", volts, unit="V", limits=(4.75, 5.25))
+        if rail.in_limits:
+            return PASS({"output_voltage_v": volts})
+        raise TestFailure("rail outside window", "4.75-5.25 V", f"{volts} V")
+```
+
+The gate reads in plain sight, so `litmus/gated-pass` sees the predicate and the next
+reader sees the criterion. Name the quantity once per node, in the unit it will always
+carry; the consumer keys its series on that name. Record for trend without a window by
+passing `limits=None`. Measure from `configure()` (a bring-up reading) or the test
+method only; `cleanup`, surveys, audits, and hooks are refused. `from litmus import
+measure` is the same call resolved to the running node when a helper does not have
+`utils` in hand.
 
 ## Composition Factories: `self.test`, `self.sequence`, `self.parallel`
 
