@@ -36,6 +36,11 @@ _DEFAULT_PROMPT: Final[str] = r"[#$%] $"
 _RC_MARKER: Final[str] = "__LITMUS_RC__"
 _READ_CHUNK: Final[int] = 65536
 _BREAK_SECONDS: Final[float] = 0.25
+# A prompt timeout is named "frozen" only when the wire has been silent for at
+# least this share of the wait. Half the budget is long enough that a console
+# still dripping output (a slow boot, a paging `dmesg`) is never called wedged,
+# and short enough that a genuine hang after the echo still earns the name.
+_FROZEN_SHARE_OF_WAIT: Final[float] = 0.5
 _MISSING_SERIAL_EXTRA: Final[str] = (
     "SerialInterface local placement requires the 'serial' extra; "
     "install it with: pip install 'litmus[serial]'"
@@ -199,8 +204,11 @@ class SerialInterface(RemoteInterface):
       - Hitting `output_budget` interrupts the wire (BREAK, then Ctrl-C) and
         settles `truncated=True`; the port stays open.
       - `cancel_in_flight` is BREAK, then Ctrl-C, then an unconditional close.
-        A via hop is not cancelled — that would take down every other consumer
-        of the SSH connection. `disconnect` still owns the hop's lifecycle.
+        Through a via hop there is no BREAK: a byte bridge cannot carry a line
+        condition, so the halt is Ctrl-C then closing the bridging channel.
+        The hop itself is not cancelled — that would take down every other
+        consumer of the SSH connection. `disconnect` still owns the hop's
+        lifecycle.
       - A `via` hop is owned: it must arrive unconnected, `connect` brings it
         up, a failed connect collapses it, `disconnect` tears it down.
     """
@@ -388,10 +396,7 @@ class SerialInterface(RemoteInterface):
         self._serial = getattr(transport, "serial", None)
 
     async def _open_via(self, via: SshInterface) -> None:
-        connection = via._connection  # pyright: ignore[reportPrivateUsage]
-        if connection is None:
-            msg = "via hop reports connected without a live connection"
-            raise ConnectionError(msg)
+        connection = SshInterface._live_hop_connection(via, "via")  # pyright: ignore[reportPrivateUsage]
         process = await connection.create_process(self._bridge_command, encoding=None)
         self._process = process
         self._reader = process.stdout
@@ -473,11 +478,15 @@ class SerialInterface(RemoteInterface):
 
     @staticmethod
     def _is_frozen(now: float, last_progress: float | None, seconds: float) -> bool:
-        """True when the wire went quiet for most of the wait — wedged, not slow."""
+        """True when the wire was silent for the final half of the wait — wedged, not slow.
+
+        No bytes at all is the clearest hang. Otherwise the criterion is the
+        silence before expiry measured against `_FROZEN_SHARE_OF_WAIT`, so the
+        answer scales with the budget instead of a fixed number of milliseconds.
+        """
         if last_progress is None:
             return True
-        stall = min(0.15, seconds / 2)
-        return (now - last_progress) >= stall
+        return (now - last_progress) >= seconds * _FROZEN_SHARE_OF_WAIT
 
     def _timeout_read(self, capture: BoundedCapture, *, frozen: bool) -> _Read:
         return _Read(
