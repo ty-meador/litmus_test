@@ -18,6 +18,8 @@ runs the one `LitmusTest` subclass it defines (or the one named after `::`), and
 0 for Pass, 1 for Fail, 2 for Aborted, 3 when the suite could not be run at all.
 `litmus new WidgetSuite` writes a gated-PASS suite and a matching self-test so a new
 author starts from that shape instead of copying an example (`docs/litmus-new.md`).
+`litmus inspect [PATH]` opens a saved run in the Inspector, the Floor Technician's
+surface (`docs/inspector.md`); without PATH it opens the latest run under `artifacts/`.
 The locally executable examples progress from one explicit claim, through composition, to
 polling, lifecycle hooks, and the evidence surface:
 
