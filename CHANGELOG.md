@@ -19,6 +19,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `litmus-check` rule `litmus/measurement-name-unique` (issue #132, raised by the #109
+  sweep): two `measure(...)` calls, either spelling, with the same literal name inside one
+  `configure` or test method are reported at the second call. The tier-1 duplicate-name
+  guard is unchanged; the rule moves that finding from the first run to the editor.
 - `litmus inspect [PATH]` (issue #89, Ty's ruling of 2026-09-09): opens a saved run in
   the Inspector. PATH is a run directory or its `result.json`; without PATH the most
   recently modified `result.json` under `LITMUS_ARTIFACT_ROOT` (default `artifacts/`;
