@@ -25,11 +25,20 @@ from litmus.errors import (
     ContractViolation,
     FrameworkContractViolation,
     HaltReason,
+    MeasurementDuplicate,
+    MeasurementSealed,
     TestFailure,
 )
 from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, ExecResult, LocalExec
 from litmus.hooks import IntegrationHooks
 from litmus.lifecycle import AuditSignal, RunAbort
+from litmus.measurement import (
+    Limits,
+    Measurement,
+    current_utils,
+    measurement_label,
+    new_measurement,
+)
 from litmus.remote import RemoteInterface
 from litmus.routing import (
     ExecRouter,
@@ -293,6 +302,23 @@ class RunSignal:
         if self._run_abort.reason is not None:
             return self._run_abort.reason
         return None if self._audit_signal is None else self._audit_signal.reason
+
+
+def _measurement_line(measurement: Measurement) -> str:
+    """Render the timeline line for one reading in the shape ``docs/measurements.md`` fixes.
+
+    JSON vocabulary (``null``, ``true``, ``false``) rather than Python's, so the log
+    line and the record read the same way to someone comparing them.
+    """
+    text = f"{measurement.name} = {measurement.value}"
+    if measurement.unit is not None:
+        text = f"{text} {measurement.unit}"
+    if measurement.limits is None:
+        return f"{text} limits=null in_limits=null"
+    low, high = measurement.limits
+    bounds = ", ".join("null" if bound is None else str(bound) for bound in (low, high))
+    verdict = "true" if measurement.in_limits else "false"
+    return f"{text} limits=[{bounds}] in_limits={verdict}"
 
 
 @final
@@ -579,6 +605,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         "_integration_hooks",
         "_local_exec",
         "_logger",
+        "_measurements",
         "_opened_device_apis",
         "_owns_timeline",
         "_routing",
@@ -662,6 +689,8 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         self._signal = RunSignal(RunAbort())
         self._in_configure = False
         self._opened_device_apis: list[DeviceApiInterface] = []
+        # A list while the node's slots may still record; a tuple once sealed.
+        self._measurements: list[Measurement] | tuple[Measurement, ...] = []
 
     @property
     def logger(self) -> ScopedLogger:
@@ -988,6 +1017,78 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         )
         return await self._open_device_api(backend)
 
+    def measure(
+        self,
+        name: str,
+        value: int | float,
+        *,
+        unit: str | None = None,
+        limits: Limits | None = None,
+    ) -> Measurement:
+        """Record one parametric reading on this node, beside the verdict.
+
+        A limit is evidence, never a verdict: the reading is recorded with
+        ``in_limits`` decided and nothing about the node's state changes. When the
+        window is a pass criterion, gate on the returned record in plain sight so the
+        verdict's predicate is visible to the reader and to ``litmus/gated-pass``::
+
+            rail = utils.measure("output_voltage_v", volts, unit="V", limits=(4.75, 5.25))
+            if rail.in_limits:
+                return PASS({"output_voltage_v": volts})
+            raise TestFailure("rail outside window", "4.75-5.25 V", f"{volts} V")
+
+        Synchronous and free of I/O, so no cancellation can land between the reading
+        and its record. Allowed from ``configure()`` and the test method only, the two
+        slots that produce the node's record; the record is sealed when the node
+        settles. ``litmus.measure`` is the same call resolved to the running node.
+
+        Args:
+            name: Non-empty identity of the quantity, unique within this node. For the
+                life of the suite it names the same quantity in the same unit; a
+                consumer keys its series on it.
+            value: An ``int`` or finite ``float``. A textual observation is evidence on
+                the verdict, not a measurement.
+            unit: Free label such as ``"V"`` or ``"ms"``, or ``None`` for a
+                dimensionless count. Never validated, never converted.
+            limits: Inclusive ``(low, high)`` window with ``None`` on an open side, or
+                ``None`` to record for trend with ``in_limits`` unset.
+
+        Returns:
+            The frozen ``Measurement`` exactly as recorded.
+
+        Raises:
+            ContractViolation: When an argument is refused, when the name was already
+                recorded in this node, or when the call comes from outside
+                ``configure()`` or the test method.
+        """
+        node = self._scope[-1] if self._scope else "<unscoped>"
+        # The task-local binding, not a flag on this object, is the slot guard: an
+        # audit sampler shares this object but runs in a task that was created before
+        # the slot bound it, so it sees no binding and is refused.
+        if current_utils.get() is not self or isinstance(self._measurements, tuple):
+            raise MeasurementSealed(node, measurement=measurement_label(name))
+        measurement = new_measurement(node, name, value, unit=unit, limits=limits)
+        if any(recorded.name == measurement.name for recorded in self._measurements):
+            raise MeasurementDuplicate(node, measurement=measurement.name)
+        self._measurements.append(measurement)
+        # One scoped line per call, so the chronology carries the number next to what
+        # the suite was doing; a warning when out of window so it stands out in
+        # timeline.log without the Floor Technician filtering for it.
+        level = logging.WARNING if measurement.in_limits is False else logging.INFO
+        self._logger.log(level, "measurement: %s", _measurement_line(measurement))
+        return measurement
+
+    def _seal_measurements(self) -> tuple[Measurement, ...]:
+        """Close this node's measurement record and return it. Framework only.
+
+        Called when the node settles, on every terminal state; calling it again
+        returns the same record. Sealing is what makes a late ``measure`` a
+        ``ContractViolation``, in the pattern of ``ContextImmutable``.
+        """
+        if not isinstance(self._measurements, tuple):
+            self._measurements = tuple(self._measurements)
+        return self._measurements
+
     async def _open_device_api(self, backend: DeviceApiInterface) -> DeviceApi:
         """Connect, register for halt, and log the session without credentials."""
         self._logger.info("device-api connect: %s", backend.handle_label)
@@ -1144,6 +1245,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         scoped._signal = RunSignal(run_abort, audit_signal)
         scoped._in_configure = False
         scoped._opened_device_apis = []
+        scoped._measurements = []
         return scoped
 
     async def _cancel_in_flight(self) -> None:
