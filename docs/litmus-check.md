@@ -10,7 +10,7 @@ files as Python ASTs and reports departures from the declarative idiom.
 |---|---|---|---|
 | 1 | Runtime IoC wrapping | Verdict contract, failure taxonomy, lifecycle order, immutable-self freeze | Never |
 | 2 | `__init_subclass__` at import | Structural contract: sealed internals, lifecycle signatures, hook shape | Never |
-| 3 | `litmus-check` | Declarative syntax: pure `build_suite`, gated `PASS`, immutable-self idiom, constructor-only hooks, live composition names, ctx provenance, fulfilled evidence, routes declared in `configure`, one reading per measurement name | **Yes** |
+| 3 | `litmus-check` | Declarative syntax: pure `build_suite`, gated `PASS`, immutable-self idiom, constructor-only hooks, live composition names, ctx provenance, fulfilled evidence, routes declared in `configure`, measurements named once and recorded where a node runs | **Yes** |
 
 **Nothing that protects hardware or verdict integrity lives only here.** Every rule
 below has a tier-1 or tier-2 counterpart that holds whether or not the linter ever
@@ -62,6 +62,7 @@ scaffolding suite authors copy from, so the examples always demonstrate the idio
 | `litmus/shell-in-configure` | `utils.use_shell(...)` with arguments, the call that declares where this node's `utils.exec` lands, appears only in `configure()`; the bare `use_shell()` read and `get_shell` may appear anywhere (issue #76). | Tier 1: a declaring call (`host`, `via`, `inherit=False`, `propagate=False`) from any slot but `configure` raises `ContractViolation` before the router is touched, so the `exec routing:` line written after `configure` is the route every command of the node ran under. |
 | `litmus/evidence-fulfilled` | Every `return PASS({...})` in a method decorated `@evidence(...)` carries every declared key, and such a method never returns bare `PASS` (issue #118). | Tier 1: the child boundary holds every `PASS` to the declaration; a missing key is a `ContractViolation` naming the leaf and the key, a developer-bug Fail. |
 | `litmus/measurement-name-unique` | Two `measure(...)` calls, either spelling, with the same literal name inside one `configure` or test method; a measurement's series is keyed on its name, so the second call would overwrite or fork it (issue #132). | Tier 1: the duplicate-name guard in `TestUtils.measure` and `litmus.measure` raises `ContractViolation` naming the node and the measurement. |
+| `litmus/measurement-in-node` | A `measure(...)` call, either spelling, inside `cleanup`, a method registered with `use_survey`/`use_audit`, a `before_each`/`after_each` hook (by name, or passed under either keyword), or outside any function; a reading belongs to the node whose `configure()` or test method is running (issue #133). | Tier 1: the outside-a-node guard raises `ContractViolation` naming the node and the measurement for `litmus.measure` with nothing bound and for either spelling from `cleanup`, a survey, an audit, a hook, or after the node settled. |
 
 Run `litmus-check --list-rules` for the catalogue shipped in the installed version.
 Each rule's module docstring under `tools/litmus_check/rules/` states exactly what it
@@ -80,7 +81,8 @@ The registry is extensible without touching the CLI:
 
 `RuleRegistry.discover()` imports every module in the package and instantiates every
 concrete `Rule` subclass it finds. `SuiteModule` carries the structural queries a rule
-needs — enclosing function, method, and class, and a static answer to "is this class a
+needs — enclosing function, method, and class, the methods a class registers by
+reference (`use_survey`, `use_audit`, `test`), and a static answer to "is this class a
 `LitmusTest`" — so a rule is only its own idiom.
 
 A rule's `code` is a contract with suite authors' `--ignore` flags; rename it only with
