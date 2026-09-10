@@ -3,7 +3,6 @@
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from tempfile import gettempdir
-from typing import cast
 
 import pytest
 from hypothesis.configuration import set_hypothesis_home_dir
@@ -12,7 +11,7 @@ from tests.mock_connector import ConnectorInstaller, MockConnector
 from litmus import TestUtils
 from litmus.arp import ArpResolver
 from litmus.remote import RemoteInterface
-from litmus.routing import ExecRouting
+from litmus.utils import node_runtime
 
 CHECKOUT_ARTIFACTS = Path(__file__).resolve().parents[1] / "artifacts"
 
@@ -91,7 +90,7 @@ def install_mock_connector() -> ConnectorInstaller:
         transports: RemoteInterface | Mapping[str, RemoteInterface],
     ) -> MockConnector:
         connector = MockConnector(transports)
-        routing = cast("ExecRouting", object.__getattribute__(utils, "_routing"))
+        routing = node_runtime(utils).routing
         object.__setattr__(routing, "_connector", connector)
         return connector
 

@@ -21,6 +21,7 @@ from litmus import (
     Verdict,
 )
 from litmus.results import SummaryTreeNode
+from litmus.utils import node_runtime
 
 DETAIL = (
     "use_shell declared a route outside configure(); the exec route is fixed when "
@@ -34,7 +35,7 @@ def _leaf(tree: SummaryTreeNode, index: int = 0) -> SummaryTreeNode:
 
 
 def _routing_line(utils: TestUtils) -> str:
-    return utils._routing.routing_line()  # pyright: ignore[reportPrivateUsage]
+    return node_runtime(utils).routing.routing_line()
 
 
 class TestDeclarationOutsideConfigureIsAContractViolation:
