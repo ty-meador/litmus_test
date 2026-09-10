@@ -36,7 +36,7 @@ transport reads until `prompt` matches — a console already at a shell is
 unaffected. `login_timeout` (default 10s, connect-time only) bounds that
 resolution; expiry raises `ConnectionError` naming the last bytes seen,
 `connect()` raising whatever `_connect` raises, matching `RemoteInterface`.
-`prompt_timeout` (default 30s, overridable per `exec`) bounds how long `exec`
+`prompt_timeout` (default 30s, fixed at construction) bounds how long `exec`
 waits for the prompt after sending a command — the transport's own safety net, not
 a substitute for `fail_after`/`abort_after`: a wedged console is a resource the
 transport cannot leave parked forever even with no ancestor budget declared.
