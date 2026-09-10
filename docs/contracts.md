@@ -339,6 +339,16 @@ The operator-signal handler is installed by `run()`/`main()` only while that run
 
 ---
 
+## Device API Contract
+**Framework obligation:** `DeviceApiInterface` is a contract, not an `exec`
+subclass ([HIL ruling 1](hil/index.md#the-three-rulings)). The guarantees live
+in the signed [Device API design note](hil/device-api.md); this page does not
+restate them.
+
+**Developer obligation:** Implement `DeviceApiInterface` as that note specifies.
+
+---
+
 ## Composability Contract
 **Framework obligation:** Any `LitmusTest` or subclass thereof can be composed indefinitely in any shape the SE deems appropriate.
 
