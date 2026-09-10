@@ -204,6 +204,43 @@ class ArpResolutionFailure(LitmusError):
         self.host = host
 
 
+class DeviceApiOperationFailure(LitmusError):
+    """A device-API transfer did not complete. This is not a DUT verdict.
+
+    Uncaught in a test method or ``configure``, the child boundary classifies it
+    as a developer bug: the suite did not model this failure mode. Caught and
+    re-raised as ``TestFailure``, the author chose the verdict. A well-formed
+    HTTP 4xx/5xx is *not* this error — that status is data on ``DeviceResponse``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        handle: str,
+        operation: str,
+        method: str,
+        path: str,
+        ceiling: float | None = None,
+    ) -> None:
+        """Record the handle, operation, and ceiling that did not complete.
+
+        Args:
+            message: What failed, in the FT's language.
+            handle: Scheme plus base URL of the session.
+            operation: ``request``, ``connect``, or ``close``.
+            method: HTTP/CoAP method, or empty when the operation has none.
+            path: Resource path, or empty when the operation has none.
+            ceiling: Backend-declared seconds bound, when one expired.
+        """
+        super().__init__(message)
+        self.handle = handle
+        self.operation = operation
+        self.method = method
+        self.path = path
+        self.ceiling = ceiling
+
+
 class ContractViolation(TestFailure):
     """A developer bug: suite code did something the verdict contract forbids.
 

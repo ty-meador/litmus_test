@@ -5,11 +5,13 @@ governs it: from 1.0.0 every name listed here is a promise, and nothing outside 
 list is. Import public names from `litmus` itself; the module a name is defined in is
 an implementation detail and may move.
 
-Suite authors need `LitmusTest`, `TestUtils`, `Shell`, `ExecResult`, `Artifact`,
+Suite authors need `LitmusTest`, `TestUtils`, `Shell`, `DeviceApi`, `DeviceRequest`,
+`DeviceResponse`, `ExecResult`, `Artifact`,
 `JsonObject`, `PASS`, `Verdict`, `evidence`, `TestFailure`, and `ArpResolver`. The
 rest of the failure taxonomy is exported because it appears in artifacts and logs,
 where a reader will follow a name back to its meaning (`ExternalIntegrationFailure`,
-`OperatorInterrupt`, `ArpResolutionFailure`, `EvidenceViolation`). The record types (`RunResult`,
+`OperatorInterrupt`, `ArpResolutionFailure`, `DeviceApiOperationFailure`,
+`EvidenceViolation`). The record types (`RunResult`,
 `SummaryTreeNode`, `State`, `NodeType`, `Slot`, `TimeoutEvidence`, `RunSignal`,
 `ScopedLogger`) are exported because a public object has no attribute of a private
 type. `Phase` names the survey dispatch points for `use_survey(phases=)`. Harness
@@ -31,9 +33,11 @@ from importlib.metadata import version as _distribution_version
 from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
 from litmus.base import LitmusTest
+from litmus.device_api import DeviceApi, DeviceRequest, DeviceResponse
 from litmus.errors import (
     ArpResolutionFailure,
     ContractViolation,
+    DeviceApiOperationFailure,
     EvidenceViolation,
     ExternalIntegrationFailure,
     Failure,
@@ -68,6 +72,10 @@ __all__ = [
     "BeforeEachContext",
     "BeforeEachHook",
     "ContractViolation",
+    "DeviceApi",
+    "DeviceApiOperationFailure",
+    "DeviceRequest",
+    "DeviceResponse",
     "EvidenceViolation",
     "ExecResult",
     "ExternalIntegrationFailure",

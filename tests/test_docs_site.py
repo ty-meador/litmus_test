@@ -81,6 +81,23 @@ class TestDocsSiteConfig:
         assert missing == set()
         assert extra == set()
 
+    def test_hil_nav_labels_carry_no_status(self) -> None:
+        """Status lives on the HIL index table, not in the mkdocs label.
+
+        GPIO, PWM, and Serial/UART already read ``<Name> (design note)``. Putting
+        ``draft`` in the label makes signing the note cost a second ``mkdocs.yml``
+        edit for no gain (Zavala on !128).
+        """
+        entries = re.findall(
+            r"^\s+- (.+): hil/(?!index\.md)([A-Za-z0-9_./-]+\.md)\s*$",
+            MKDOCS.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        assert entries, "HIL nav grew no design-note pages"
+        for label, _page in entries:
+            assert label.endswith("(design note)"), label
+            assert "draft" not in label.lower(), label
+
     def test_api_page_identifiers_match_dunder_all(self) -> None:
         names = _IDENT.findall(API_PAGE.read_text(encoding="utf-8"))
         assert names == list(litmus.__all__)
