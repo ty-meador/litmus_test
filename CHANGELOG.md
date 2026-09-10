@@ -19,11 +19,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
-- `docs/hil/i2c-spi.md`: the design note for I2C and SPI transaction
+- `docs/hil/i2c-spi.md`: the signed design note for I2C and SPI transaction
   contracts — atomic transfers, I2C NACK/arbitration, SPI chip-select and
   mode, and a released bus as the abort safe-state. Design only; no code
-  change. Awaiting Ty's sign-off on the note before an implementation MR
-  opens (issue #96).
+  change. Signed by Ty in !129 on 2026-09-09; recorded on issue #96.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without
