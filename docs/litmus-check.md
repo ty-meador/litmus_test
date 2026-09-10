@@ -10,7 +10,7 @@ files as Python ASTs and reports departures from the declarative idiom.
 |---|---|---|---|
 | 1 | Runtime IoC wrapping | Verdict contract, failure taxonomy, lifecycle order, immutable-self freeze | Never |
 | 2 | `__init_subclass__` at import | Structural contract: sealed internals, lifecycle signatures, hook shape | Never |
-| 3 | `litmus-check` | Declarative syntax: pure `build_suite`, gated `PASS`, immutable-self idiom, constructor-only hooks, live composition names, ctx provenance, fulfilled evidence, routes declared in `configure` | **Yes** |
+| 3 | `litmus-check` | Declarative syntax: pure `build_suite`, gated `PASS`, immutable-self idiom, constructor-only hooks, live composition names, ctx provenance, fulfilled evidence, routes declared in `configure`, one reading per measurement name | **Yes** |
 
 **Nothing that protects hardware or verdict integrity lives only here.** Every rule
 below has a tier-1 or tier-2 counterpart that holds whether or not the linter ever
@@ -61,6 +61,7 @@ scaffolding suite authors copy from, so the examples always demonstrate the idio
 | `litmus/ctx-provenance` | Every `utils.ctx["k"]` read in a test method, hook, `configure`, or `cleanup` names a key that `configure()` returns (its dict literal or `TypedDict`), and ctx is never written: no subscript assignment, `update`, `setdefault`, `pop`, or `clear` anywhere in the suite. A reading travels with the verdict, and `.get()` is how an optional key is read (issues #112, #118). | Tier 1: a `[]` read of a key `configure()` did not provide, and any write after `configure()` returns, raise `ContractViolation` naming the test and the key; `get` and `in` never do. |
 | `litmus/shell-in-configure` | `utils.use_shell(...)` with arguments, the call that declares where this node's `utils.exec` lands, appears only in `configure()`; the bare `use_shell()` read and `get_shell` may appear anywhere (issue #76). | Tier 1: a declaring call (`host`, `via`, `inherit=False`, `propagate=False`) from any slot but `configure` raises `ContractViolation` before the router is touched, so the `exec routing:` line written after `configure` is the route every command of the node ran under. |
 | `litmus/evidence-fulfilled` | Every `return PASS({...})` in a method decorated `@evidence(...)` carries every declared key, and such a method never returns bare `PASS` (issue #118). | Tier 1: the child boundary holds every `PASS` to the declaration; a missing key is a `ContractViolation` naming the leaf and the key, a developer-bug Fail. |
+| `litmus/measurement-name-unique` | Two `measure(...)` calls, either spelling, with the same literal name inside one `configure` or test method; a measurement's series is keyed on its name, so the second call would overwrite or fork it (issue #132). | Tier 1: the duplicate-name guard in `TestUtils.measure` and `litmus.measure` raises `ContractViolation` naming the node and the measurement. |
 
 Run `litmus-check --list-rules` for the catalogue shipped in the installed version.
 Each rule's module docstring under `tools/litmus_check/rules/` states exactly what it

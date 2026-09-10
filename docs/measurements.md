@@ -352,15 +352,14 @@ reads the banner, `node`, and a `measurement` field naming the reading; the deve
 follows the class name from the log. Nothing protecting the record lives only in tier 3.
 
 Tier-3 rules for `litmus-check`, each mirroring a guard above so the finding reaches
-the developer's CI before it reaches a station log, are worth adding once #86 has
-landed and the call shape is in examples:
+the developer's CI before it reaches a station log:
 
-| Rule | Flags | Mirrors |
-|---|---|---|
-| `litmus/measurement-name-unique` | Two `measure(...)` calls with the same literal name inside one `configure` or test method. | Tier 1: duplicate name. |
-| `litmus/measurement-in-node` | A `measure(...)` call, either spelling, inside `cleanup`, a survey or audit function, a `before_each`/`after_each`, or at module scope. | Tier 1: outside a node. |
+| Rule | Flags | Mirrors | Status |
+|---|---|---|---|
+| `litmus/measurement-name-unique` | Two `measure(...)` calls with the same literal name inside one `configure` or test method. | Tier 1: duplicate name. | Shipped (#132). |
+| `litmus/measurement-in-node` | A `measure(...)` call, either spelling, inside `cleanup`, a survey or audit function, a `before_each`/`after_each`, or at module scope. | Tier 1: outside a node. | Its own issue (#133). |
 
-Neither is part of #86; each is its own issue when raised, per `docs/litmus-check.md`
+Neither is part of #86; each was raised as its own issue per `docs/litmus-check.md`
 (*Adding a rule*). The `-> Verdict` and `litmus/gated-pass` rules already cover the
 gate a developer writes on `.in_limits`.
 
