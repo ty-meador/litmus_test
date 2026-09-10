@@ -1,6 +1,6 @@
 """The remote transport contract.
 
-SSH, and later serial/UART, are peers behind this class. Protocol-specific
+SSH and serial/UART are peers behind this class. Protocol-specific
 methods (CoAP get/put, HTTP post, SSH port-forward) belong on the subclass —
 putting them here would freeze UART out of the port.
 

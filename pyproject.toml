@@ -49,6 +49,9 @@ Changelog = "https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/CHANGELOG.m
 pylsp = [
     "python-lsp-server>=1.12",
 ]
+serial = [
+    "pyserial-asyncio>=0.6",
+]
 
 [dependency-groups]
 dev = [
@@ -63,6 +66,7 @@ dev = [
     "mkdocstrings[python]>=1.0.6",
     "mutmut>=3.7.0",
     "python-lsp-server>=1.12",
+    "pyserial-asyncio>=0.6",
 ]
 
 [project.scripts]
