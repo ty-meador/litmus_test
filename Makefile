@@ -1,5 +1,5 @@
 # litmus — development entry points. All tooling config lives in pyproject.toml.
-.PHONY: install format lint fix typecheck test coverage audit docs check soak nightly mutants hooks clean
+.PHONY: install format lint fix typecheck test coverage audit build smoke docs check soak nightly mutants hooks clean
 
 install:  ## Sync venv (incl. dev deps) and install git hooks
 	uv sync
@@ -29,6 +29,23 @@ audit:  ## Vulnerability scan over the locked dependency set (network required)
 	uv export -q --locked --format requirements-txt --no-emit-project -o .audit/requirements.txt
 	uv run pip-audit -r .audit/requirements.txt --disable-pip --require-hashes --strict --progress-spinner off
 
+build:  ## Wheel and sdist into dist/; a package that cannot build is red before it is tagged
+	rm -rf dist
+	uv build
+
+# The smoke runs from inside .smoke/ so the source tree is not on the path: what runs
+# is the wheel, not src/. Only the two entry points the floor uses are exercised; the
+# self-tests already cover behaviour, this proves the package imports and starts.
+# The old venv is removed before the build, not after: an sdist that sweeps in a venv
+# fails to build, and .gitignore is a courtesy the build must not depend on.
+smoke:  ## Install the wheel into a clean venv and run both console entry points
+	rm -rf .smoke
+	$(MAKE) build
+	uv venv -q .smoke/venv
+	uv pip install -q --python .smoke/venv/bin/python dist/*.whl
+	cd .smoke && venv/bin/litmus-check --list-rules > /dev/null
+	cd .smoke && venv/bin/litmus run ../examples/hello_world.py
+
 check:  ## CI gate — verify only, no auto-fix. Must be green before push.
 	uv run ruff format --check .
 	uv run ruff check .
@@ -36,6 +53,7 @@ check:  ## CI gate — verify only, no auto-fix. Must be green before push.
 	uv run python tools/import_cycles.py
 	$(MAKE) coverage
 	uv run litmus-check examples
+	$(MAKE) smoke
 	$(MAKE) docs
 	$(MAKE) audit
 
@@ -63,5 +81,5 @@ hooks:  ## Point git at the shared hooks (auto-lint on commit)
 	git config core.hooksPath .githooks
 
 clean:
-	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak .mutants dist site
+	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak .smoke .mutants dist site
 	find . -type d -name __pycache__ -exec rm -rf {} +
