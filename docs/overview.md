@@ -210,3 +210,36 @@ Litmus does not merely prefer explicit passes — it **rejects** implicit ones a
 This is more work up front. It forces you to think about what "success" actually looks like with the same rigor you apply to failure modes.
 
 In return, you get tests that mean what they say, clear failure categorization, and automatic structured evidence that a floor technician can trust.
+
+## Where things live
+
+The concepts above are carried by the modules under `src/litmus`. Each line says what
+the module is for, not what it contains; the contracts themselves are stated once, in
+[contracts.md](contracts.md) and the pages linked from it.
+
+| Module | What it is for |
+|---|---|
+| `__init__.py` | The public surface: `litmus.__all__` is the documented API ([api.md](api.md)); every other name in the package is internal. |
+| `base.py` | The atom: `LitmusTest`, the one node every suite is composed from, and the framework-owned lifecycle that runs it. |
+| `lifecycle.py` | Tier 1, the kernel of trust: the child boundary that turns what a test method returns into one of the three terminal states. |
+| `verdict.py` | The non-forgeable `PASS` sentinel and the `Verdict` a test method hands back. |
+| `errors.py` | The failure taxonomy: which exception means Fail, which means Aborted, and who is being told. |
+| `utils.py` | The per-node surface authored code is handed: exec, ctx, env, logging, measurements, hook registration. |
+| `evidence.py` | `@evidence`: the readings a test method promises to carry with its `PASS`. |
+| `measurement.py` | Parametric measurements: a number with a unit and limits, recorded beside the verdict ([measurements.md](measurements.md)). |
+| `run_data.py` | The JSON-safe view of ctx and verdict evidence that reaches the run record. |
+| `results.py` | The immutable evidence of a run and its JSON boundary to the Inspector ([inspector-json.md](inspector-json.md)). |
+| `timeline.py` | The temporal backbone: the durable per-node records that are a run's authoritative chronology. |
+| `artifacts.py` | Point-in-time captures and their framework-owned persistence. |
+| `hooks.py` | The integration hooks (surveys, audits, `before_each`/`after_each`) and the deliberately narrow contexts they see. |
+| `executor.py` | The host-side execution choke point every blocking call passes through. |
+| `routing.py` | Topology-aware exec routing: which hop a node's `utils.exec` travels through. |
+| `remote.py` | The remote transport contract the concrete transports implement. |
+| `ssh.py` | The SSH transport. |
+| `mock.py` | The in-process transport for self-tests: no hardware, no SSH. |
+| `arp.py` | MAC-to-IP resolution over the node's current exec route. |
+| `device_api.py` | The Device API (CoAP/HTTP) contract: resource requests, not an exec subclass ([hil/device-api.md](hil/device-api.md)). |
+| `junit.py` | The JUnit XML reporter over the run record, for CI systems that read that format ([junit-xml.md](junit-xml.md)). |
+| `cli.py` | The `litmus` command line: `run`, `new`, `inspect` ([litmus-run.md](litmus-run.md), [litmus-new.md](litmus-new.md), [inspector.md](inspector.md)). |
+| `scaffold.py` | Writes a gated-`PASS` suite and its self-test from a class name, so a new suite starts inside the pit of success. |
+| `inspector_*.py` (ten modules) | The Floor Technician's Inspector, split reader / model / view. Readers (`inspector_json`, `inspector_run`, `inspector_timeline`, `inspector_artifacts`) load saved evidence and execute nothing; models (`inspector_tree`, `inspector_selection`, `inspector_artifact_navigation`) turn it into rows and cursors; views (`inspector_timeline_view`, `inspector_artifact_view`, `inspector_app`) render and forward keys, deciding nothing. |
