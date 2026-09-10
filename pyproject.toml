@@ -77,12 +77,21 @@ select = [
     "PTH",       # pathlib over os.path
     "ANN",       # type annotations required on all defs (STANDARDS.md §2)
     "PT",        # pytest style
+    "D",         # docstrings present and Google-shaped (STANDARDS.md §5)
 ]
 ignore = [
     "ANN401",    # explicit Any is allowed where the contract is dict[str, Any] (ctx)
+    "D105",      # magic methods: the dunder protocol is the contract, a docstring restates it
+    "D107",      # __init__: constructor arguments are documented in the class docstring (Google)
 ]
 
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.ruff.lint.per-file-ignores]
+# Tests document by name (STANDARDS.md §6): the coverage rules (D1xx) are off, the
+# format rules stay on so a docstring that is written is written the same way.
+"tests/**" = ["D1"]
 # The failure taxonomy's class names are fixed by PLAN.md section 2 and carried from
 # the legacy framework — they are the vocabulary the FT and the artifacts already use.
 # An `Error` suffix would rename a published contract to satisfy a naming convention.
