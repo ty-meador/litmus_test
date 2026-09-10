@@ -19,6 +19,9 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Package metadata for discovery (issue #103): keywords, trove classifiers, and project
+  URLs (docs site, source, issue tracker, changelog) in `pyproject.toml`, with the README
+  already the long description. The name stays as it is until #9 rules at 1.0.0.
 - `make build` and `make smoke` (issue #102): the gate now builds the wheel and sdist
   with `uv build`, installs the wheel into a clean venv under `.smoke/`, and starts both
   console entry points from there. A package that cannot build or import is red before

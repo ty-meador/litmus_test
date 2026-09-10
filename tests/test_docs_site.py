@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -104,6 +105,18 @@ class TestDocsSiteConfig:
 
 
 class TestReadmeRecordsThePublishedUrl:
+    def test_package_urls_point_at_the_site_and_the_repo(self) -> None:
+        # The PyPI page is the first place a developer finds the docs and the tracker
+        # (issue #103); a URL that drifts from mkdocs.yml sends them to a dead site.
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        urls = data["project"]["urls"]
+        mkdocs = MKDOCS.read_text(encoding="utf-8")
+        assert urls["Documentation"] == PAGES_URL
+        assert f"repo_url: {urls['Source']}" in mkdocs
+        assert urls["Issues"] == f"{urls['Source']}/-/issues"
+        assert "Typing :: Typed" in data["project"]["classifiers"]
+        assert (ROOT / "src" / "litmus" / "py.typed").is_file()
+
     def test_readme_names_the_pages_url(self) -> None:
         readme = README.read_text(encoding="utf-8")
         assert PAGES_URL in readme
