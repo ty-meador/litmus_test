@@ -39,7 +39,6 @@ _DEFAULT_PORTS: Final[dict[str, int]] = {
 _COAP_CODES: Final[dict[str, int]] = {"GET": 1, "POST": 2, "PUT": 3, "DELETE": 4}
 _COAP_URI_PATH = 11
 _COAP_CON = 0
-_COAP_ACK = 2
 _COAP_VER = 1
 
 
