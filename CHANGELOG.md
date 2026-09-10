@@ -19,6 +19,14 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `litmus inspect [PATH]` (issue #89, Ty's ruling of 2026-09-09): opens a saved run in
+  the Inspector. PATH is a run directory or its `result.json`; without PATH the most
+  recently modified `result.json` under `LITMUS_ARTIFACT_ROOT` (default `artifacts/`;
+  `--artifact-root DIR` overrides) opens, the legacy discovery rule carried over.
+  Nothing under the root, or a selection that is not a saved version-1 run, is exit 3
+  with the reader's diagnostic on stderr and nothing opened in its place; no suite code
+  runs. With this the Inspector's acceptance list is on `main` in full; the Run tab
+  stays behind its own decision.
 - Parametric measurements (issue #86, signed note #85): `utils.measure` records a
   number with a unit and an inclusive window beside the verdict and returns a frozen
   `Measurement`; `litmus.measure` is the same call resolved to the running node. The
@@ -48,8 +56,7 @@ of feature parity: the Python Inspector is still separate work.
   captures or the right side, `n` `p` page both sides together, `d` compare). One
   capture renders as its lines, a comparison as two aligned columns with differing
   rows highlighted, an unreadable capture as the reader's diagnostic with the recorded
-  reference. Every key is one call into the modal model. Latest-run discovery and the
-  `litmus inspect` entry point remain later work.
+  reference. Every key is one call into the modal model.
 - Internal Inspector artifact modal model (issue #89): loads the selected capture,
   or the two sides of a comparison, through the contained capture reader and pages
   the result. A capture is printed in its recorded key order; an unavailable or

@@ -48,6 +48,12 @@ and every documented code block imports only that set from the package root, and
   gated-PASS suite and a matching self-test stub) and its exit status (`0` wrote the
   files, `3` usage error). The `litmus.scaffold` module behind it is not
   (`docs/litmus-new.md`).
+- The `litmus inspect` command line is public in two respects: its selection rule
+  (PATH is a run directory or its `result.json`; no PATH opens the most recently
+  modified `result.json` under `LITMUS_ARTIFACT_ROOT`, default `artifacts/`) and its
+  exit status (`0` the Inspector was closed, `3` nothing to inspect or not a saved
+  version-1 run). The screen behind it, `litmus.inspector_app`, is not
+  (`docs/inspector.md`).
 - The `litmus-check` command line is public in two respects: its exit status contract
   and the rule codes it ships (`docs/litmus-check.md`). The Python API of the
   `litmus_check` package is not.
