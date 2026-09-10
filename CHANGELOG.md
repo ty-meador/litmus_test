@@ -19,6 +19,17 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Device API (CoAP/HTTP) implementation (issue #119, signed contract #97):
+  `DeviceApi`, `DeviceRequest`, `DeviceResponse`, and
+  `DeviceApiOperationFailure` on the public surface; `TestUtils.get_http` and
+  `get_coap` open a session. HTTP 4xx/5xx is data. Retries default to zero and
+  each attempt is evidenced. Declared methods are GET, PUT, POST and DELETE;
+  PATCH is refused at the call site as undeclared (signed note #97, decision 7).
+  Abort closes the session. Mock, HTTP/1.1, and
+  CoAP CON/ACK backends share one contract suite. Attempt logs withhold every
+  header value unless the author opts that name into `evidence_headers` — a
+  secret-name allowlist cannot keep credentials out of artifacts. Core install
+  unchanged (stdlib asyncio).
 - Device API (CoAP/HTTP) signed interface design note (issue #97): typed
   request/response, status-as-data, retries as evidence, closed-session
   abort, deny-by-default request-header values (`evidence_headers`

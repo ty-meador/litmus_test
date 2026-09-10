@@ -677,6 +677,31 @@ See `examples/ssh_tunneling.py`.
 
 ---
 
+## Device API — CoAP/HTTP
+
+A device API is not `exec` with a URL. Open a session from `configure()` with
+`utils.get_http` or `utils.get_coap`, then `request` a typed
+`DeviceRequest`. The response's `status` is data — HTTP 4xx/5xx is not an
+exception. Catch `DeviceApiOperationFailure` when the transfer itself did not
+complete (timeout, refused connection) and model it as a `TestFailure`.
+
+Retries default to zero. Each declared attempt is logged. POST refuses retry
+unless `retry_non_idempotent=True`. Attempt logs keep header names and withhold
+every value unless the author lists that name in `evidence_headers`. Abort
+closes the session; it does not invent a shutdown PUT.
+
+```python
+api = await utils.get_http(base_url="https://dut.local")
+response = await api.request(DeviceRequest(method="GET", path="/whoami"))
+if response.status != 200:
+    raise TestFailure("whoami rejected", 200, response.status)
+return PASS({"status": response.status})
+```
+
+The backends stay off the public surface, the way `SshInterface` does.
+
+---
+
 ## wait_for Patterns
 
 Where `wait_for()` is called determines what the timeout *means*, not what gets raised — both raise `TestFailure`:
