@@ -41,8 +41,15 @@ of feature parity: the Python Inspector is still separate work.
   place. Every key handler is one model call and a redraw; the plain text of each
   redraw is kept on the app so the self-tests and a screenshot can be read back.
   `textual` becomes a runtime dependency by Ty's ruling of 2026-09-09 (MIT; the tree is
-  GPL-2.0 compatible). The Run tab stays behind its own decision; the artifact modal
-  screen, latest-run discovery, and the `litmus inspect` entry point remain later work.
+  GPL-2.0 compatible). The Run tab stays behind its own decision.
+- Inspector artifact modal screen (issue #89): `litmus.inspector_app.ArtifactScreen`.
+  A digit in the log pane opens the capture carrying that number; the modal owns the
+  guide's artifact keys until `b` closes it (`[` `]` types or the left side, arrows
+  captures or the right side, `n` `p` page both sides together, `d` compare). One
+  capture renders as its lines, a comparison as two aligned columns with differing
+  rows highlighted, an unreadable capture as the reader's diagnostic with the recorded
+  reference. Every key is one call into the modal model. Latest-run discovery and the
+  `litmus inspect` entry point remain later work.
 - Internal Inspector artifact modal model (issue #89): loads the selected capture,
   or the two sides of a comparison, through the contained capture reader and pages
   the result. A capture is printed in its recorded key order; an unavailable or
@@ -101,31 +108,31 @@ of feature parity: the Python Inspector is still separate work.
   a pending root cannot supply chronology or relocation from a damaged recorded link.
   Disagreement between result and tree roots names the result defect explicitly.
   Tested against a moved 70-DUT run without suite execution or evidence changes;
-  screens, latest-run discovery, and the entry point remain later increments.
+  the screens are now implemented as described above.
 - Internal Inspector selection model (issue #89): Inspect and Failures navigation
   loads the selected node's contained timeline, clearing the previous chronology
   before I/O. Each load has its own identity, so delayed completion cannot replace
   a newer selection's evidence. Pending nodes render not run; missing logs remain
   explicitly unavailable. Tested from a moved 70-DUT result without suite execution;
-  screens and the entry point remain later increments.
+  the screens are now implemented as described above.
 - Internal Inspector timeline containment (issue #89): reads recorded run-relative
   log paths beneath the opened run, retains the complete path after relocation, and
   reports unavailable references without reading another run's chronology. Timeline
-  and capture readers now share checked, cached packaged schemas. Screens and the
-  entry point remain separate increments.
+  and capture readers now share checked, cached packaged schemas. The screens are
+  now implemented as described above.
 - Internal Inspector saved-tree model (issue #89): schema-validated result loading,
   declaration-order rows, shared Fail/Aborted navigation, and nearest-ancestor log
   ownership. Pending nodes never borrow chronology, duplicate names retain distinct
   indices, and missing declared readings remain named. Operator selections resolve
   symlinks and `..` before establishing the run root, without relaxing recorded-reference
   containment. Tested from a moved 70-DUT result without live suite execution;
-  terminal screens remain a later increment.
+  the screens are now implemented as described above.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without
   substituting captures from the original run. Publishes the existing version-1
   artifact envelope schema; shared strict JSON parsing keeps both Inspector readers
-  consistent. Screens and the entry point remain later work.
+  consistent. The screens are now implemented as described above.
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
   `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
