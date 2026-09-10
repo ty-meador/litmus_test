@@ -1,12 +1,13 @@
 # Design note: CAN bus interface contract
 
-Status: DRAFT — awaiting Ty's signature on #95
+Status: SIGNED — Ty approved this note in !128 on 2026-09-09; recorded on #95
 
-A CAN frame is not a command string. This note proposes the transfer, filter,
+A CAN frame is not a command string. This note states the transfer, filter,
 bus-off, timing, and silent-bus obligations that make a controller fit Litmus's
 existing lifecycle. The [three HIL rulings](index.md#the-three-rulings) govern
-it. Approval to draft #95 does not sign the obligations below; no CAN
-implementation may precede Ty's signature on this note.
+it. [Ty's approval of the actual note](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/128#note_3812483371)
+signs the obligations below. Implementation requires its own approved issue
+and Zavala's review under [API stability](../api-stability.md).
 
 All names below (`CanInterface`, `CanFrame`, `CanFilter`, `CanBusOff`,
 `CanOperationFailure`, `MockCan`, and the method names) are provisional. This
@@ -312,7 +313,7 @@ that this node stopped transmitting. Where the sweep could not confirm
 silence, the timeline says exactly that, naming the handle. An unconfirmed
 silence never leaves a success line behind.
 
-## Decisions for Ty on #95
+## Signed decisions recorded on #95
 
 The draft asks for a ruling on these concrete obligations before
 implementation:
