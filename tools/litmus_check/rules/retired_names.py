@@ -35,6 +35,10 @@ class RetiredNamesRule(Rule):
     summary = "compose with test(), sequence(), and parallel(); case() and group() are retired"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report ``self.case`` and ``self.group`` calls.
+
+        See the ``litmus/retired-names`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for node in ast.walk(klass):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):

@@ -74,6 +74,12 @@ class GatedPassFix(CodeFix):
         source: str,
         diagnostic: LspDiagnostic,
     ) -> LspCodeAction | None:
+        """Wrap this diagnostic's ``return PASS`` in an explicit predicate.
+
+        Returns ``None`` when the node is not a ``return`` or the shape is not
+        rewritable. Preceding ``if ...: raise`` guards invert into the predicate
+        when they sit flush; every other shape gets ``if False:``.
+        """
         node = node_at(module.tree, diagnostic.start_line, diagnostic.start_character, ast.Return)
         if not isinstance(node, ast.Return) or node.value is None:
             return None
@@ -188,6 +194,11 @@ class MethodReferenceFix(CodeFix):
         source: str,
         diagnostic: LspDiagnostic,
     ) -> LspCodeAction | None:
+        """Lift this diagnostic's trivial lambda to the method it forwards.
+
+        Returns ``None`` when the node is not a lambda, or the lambda carries
+        extra logic that belongs in a real method.
+        """
         del source
         node = node_at(module.tree, diagnostic.start_line, diagnostic.start_character, ast.Lambda)
         if not isinstance(node, ast.Lambda):
