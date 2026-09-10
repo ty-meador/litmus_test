@@ -19,6 +19,19 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Inspector main view (issue #89): `litmus.inspector_app.InspectorApp`, a Textual
+  screen over one saved run. A tab row (Inspect, Failures), the structural tree above
+  with Pass, Fail, Aborted, and Pending rendered as distinct states and readings not
+  taken named on the row, and the highlighted node's chronology below, loaded on
+  cursor movement without Enter and labelled with its owner when the node's records
+  rolled up. The guide's keys: `q` and `Ctrl-C` quit, `Tab` cycles the two tabs, arrows
+  move and jump between Fail and Aborted nodes without wrapping, `n`/`p` page, `f`
+  filters to errors while reader diagnostics such as a truncation marker stay in
+  place. Every key handler is one model call and a redraw; the plain text of each
+  redraw is kept on the app so the self-tests and a screenshot can be read back.
+  `textual` becomes a runtime dependency by Ty's ruling of 2026-09-09 (MIT; the tree is
+  GPL-2.0 compatible). The Run tab stays behind its own decision; the artifact modal
+  screen, latest-run discovery, and the `litmus inspect` entry point remain later work.
 - Internal Inspector artifact modal model (issue #89): loads the selected capture,
   or the two sides of a comparison, through the contained capture reader and pages
   the result. A capture is printed in its recorded key order; an unavailable or
@@ -26,8 +39,8 @@ of feature parity: the Python Inspector is still separate work.
   never replaced by another file. A comparison aligns the two captures row by row so
   one page cursor moves both sides together; a singleton type stays single without a
   reload; a delayed read never replaces a newer selection. `tests/inspector_rack.py`
-  now records the shared 70-DUT run every Inspector test opens. Terminal screens,
-  latest-run discovery, and the entry point remain later work.
+  now records the shared 70-DUT run every Inspector test opens. The main view screen
+  is now implemented as described above.
 - Internal Inspector artifact navigation (issue #89): opens the requested numbered
   capture, groups by recorded type in first-appearance order, and preserves chronology
   order within each type. Comparison targets stay distinct; a collision swaps the
@@ -67,9 +80,8 @@ of feature parity: the Python Inspector is still separate work.
   numbers across the complete loaded chronology. Paging, filtering, and resizing never
   change a number's target or edit the saved records. A moved 70-DUT proof resolves
   numbered captures through the existing contained reader without suite execution.
-  Artifact target navigation is now implemented as described above. Modal loading,
-  content paging/diff rendering, terminal screens, latest-run discovery, and the entry
-  point remain later work.
+  Artifact target navigation, modal loading, content paging/diff rendering, and the
+  main view screen are now implemented as described above.
 - Internal Inspector saved-run loader (issue #89): establishes an original run root
   from one final root-scoped result publication, then relocates captures through the
   existing contained reader. Missing, damaged, ambiguous, or misplaced publication
