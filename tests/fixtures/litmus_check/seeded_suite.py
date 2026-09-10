@@ -7,7 +7,7 @@ end rather than merely somewhere.
 
 from typing import Any
 
-from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict, evidence
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict, evidence, measure
 
 
 class SeededBlade(LitmusTest):
@@ -66,3 +66,7 @@ class SeededBlade(LitmusTest):
         if self._limit_c:
             return PASS
         raise TestFailure("no limit", "> 0", "0")
+
+
+async def before_each(_context: object) -> None:
+    measure("hook_ms", 1.0)  # seed: litmus/measurement-in-node

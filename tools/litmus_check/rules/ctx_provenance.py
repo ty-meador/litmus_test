@@ -245,8 +245,8 @@ def _start(node: ast.expr | ast.stmt) -> tuple[int, int]:
 
 def _reader_methods(module: SuiteModule, klass: ast.ClassDef) -> list[FunctionDef]:
     """``configure``, ``cleanup``, test methods, and registered survey/audit hooks."""
-    leaves = _referenced_method_names(module, klass, {"test"})
-    hooks = _referenced_method_names(module, klass, _REGISTRARS)
+    leaves = module.registered_methods(klass, {"test"})
+    hooks = module.registered_methods(klass, _REGISTRARS)
     readers: list[FunctionDef] = []
     for member in klass.body:
         if not isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -263,51 +263,11 @@ def _reader_methods(module: SuiteModule, klass: ast.ClassDef) -> list[FunctionDe
     return readers
 
 
-def _referenced_method_names(
-    module: SuiteModule, klass: ast.ClassDef, registrars: Iterable[str]
-) -> frozenset[str]:
-    """Names of ``self.<method>`` handed to ``self.<registrar>(...)`` inside ``klass``."""
-    wanted = frozenset(registrars)
-    names: set[str] = set()
-    for node in ast.walk(klass):
-        if not isinstance(node, ast.Call) or module.enclosing_class(node) is not klass:
-            continue
-        method = module.enclosing_method(node)
-        if method is None:
-            continue
-        receiver = _first_parameter(method)
-        if receiver is None:
-            continue
-        func = node.func
-        if not (
-            isinstance(func, ast.Attribute)
-            and func.attr in wanted
-            and isinstance(func.value, ast.Name)
-            and func.value.id == receiver
-        ):
-            continue
-        for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
-            if (
-                isinstance(argument, ast.Attribute)
-                and isinstance(argument.value, ast.Name)
-                and argument.value.id == receiver
-            ):
-                names.add(argument.attr)
-    return frozenset(names)
-
-
 def _utils_parameter(function: FunctionDef) -> str | None:
     positional = function.args.posonlyargs + function.args.args
     if len(positional) < 2:
         return None
     return positional[1].arg
-
-
-def _first_parameter(function: FunctionDef) -> str | None:
-    positional = function.args.posonlyargs + function.args.args
-    if not positional:
-        return None
-    return positional[0].arg
 
 
 def _is_verdict(annotation: ast.expr | None) -> bool:
