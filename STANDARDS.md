@@ -62,6 +62,11 @@ rules and pyright strict — an unannotated def fails `make check`.
   code too: set attributes in `__init__`, treat instances as frozen afterwards unless the
   class explicitly models mutable state.
 - Prefer `pathlib.Path` over `os.path` (`PTH` rules). Prefer f-strings. Line length 100.
+- **No runtime import cycles.** A cycle that exists only under `if TYPE_CHECKING:` is
+  permitted: those imports never execute and exist so an annotation can name a sibling's
+  class. A cycle among the imports that run is not: the module that loses the race sees
+  a half-initialised sibling and fails far from the cause. `tools/import_cycles.py`
+  refuses the second kind in `make check` and lists the first so it stays visible.
 
 ## 4. Naming
 
