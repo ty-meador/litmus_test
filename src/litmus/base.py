@@ -49,7 +49,7 @@ from litmus.lifecycle import (
 from litmus.measurement import current_utils
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.run_data import MEASUREMENTS_KEY, JsonObject, snapshot_run_data
-from litmus.utils import TestUtils
+from litmus.utils import NodeRuntime, TestUtils, node_runtime
 from litmus.verdict import Verdict
 
 type _TestFunction = Callable[..., Awaitable[Verdict]]
@@ -123,7 +123,7 @@ class _OperatorSignalGuard:
     def __init__(
         self,
         run_abort: RunAbort,
-        seed: TestUtils,
+        seed: NodeRuntime,
         lifecycle: asyncio.Task[RunResult | None],
     ) -> None:
         self._run_abort = run_abort
@@ -160,9 +160,7 @@ class _OperatorSignalGuard:
         if not self._lifecycle.done():
             self._lifecycle.cancel()
         loop = asyncio.get_running_loop()
-        self._close_task = loop.create_task(
-            self._seed._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
-        )
+        self._close_task = loop.create_task(self._seed.cancel_in_flight())
 
     async def drain_close(self) -> None:
         """Wait for the hard-close scheduled by the first signal, if any."""
@@ -726,7 +724,8 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
     @final
     async def _execute_run(self, seed: TestUtils, run_budget: TimeBudget | None) -> RunResult:
         """Execute one full run with an optional root declaration from ``run()``."""
-        await seed._begin_run()  # pyright: ignore[reportPrivateUsage]
+        runtime = node_runtime(seed)
+        await runtime.begin_run()
         run_abort = RunAbort()
         extra = () if run_budget is None else (run_budget,)
         loop = asyncio.get_running_loop()
@@ -753,7 +752,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
 
         try:
             lifecycle = asyncio.create_task(execute())
-            guard = _OperatorSignalGuard(run_abort, seed, lifecycle)
+            guard = _OperatorSignalGuard(run_abort, runtime, lifecycle)
             guard.install(loop)
             result = await lifecycle
             await guard.drain_close()
@@ -766,7 +765,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             if run_abort.fired:
                 # Sweep once more at the root so a transport that settled open while its
                 # task was being cancelled cannot outlive the returned Aborted tree.
-                await seed._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+                await runtime.cancel_in_flight()
             return result
         finally:
             if lifecycle is not None and not lifecycle.done():
@@ -778,7 +777,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 # drop it. A SIGINT during drain must escalate, not become KeyboardInterrupt.
                 await guard.drain_close()
                 guard.remove(loop)
-            await seed._end_run()  # pyright: ignore[reportPrivateUsage]
+            await runtime.end_run()
 
     @final
     async def run_configure_only(self, utils: TestUtils | None = None) -> dict[str, Any]:
@@ -854,18 +853,19 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         fn = self._fn
         authored_instance = children is None and fn is None
         node_audit_signal = AuditSignal(audit_signal) if self._audits else audit_signal
-        utils = utils._for_node(  # pyright: ignore[reportPrivateUsage]
+        runtime = node_runtime(utils).for_node(
             self.name,
             run_abort,
             discrete_log_file=self.discrete_log_file,
             isolate_context=isolate_context and authored_instance,
             audit_signal=node_audit_signal,
         )
+        utils = runtime.utils
         object.__setattr__(self, "_ctx", utils.ctx)
-        utils._own_context(self.name)  # pyright: ignore[reportPrivateUsage]
-        object.__setattr__(self, "_log_path", utils._owned_log_path())  # pyright: ignore[reportPrivateUsage]
+        runtime.own_context(self.name)
+        object.__setattr__(self, "_log_path", runtime.owned_log_path())
 
-        integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
+        integration_hooks = runtime.integration_hooks
         boundary = ChildBoundary(
             self.name,
             run_abort,
@@ -899,7 +899,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             if not authored_instance:
                 # A composite or leaf node declares no route of its own, so its topology
                 # is final the moment its utils exist.
-                utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                runtime.log_exec_routing()
 
             if children is not None:
 
@@ -1047,7 +1047,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                             )
                             if configured.state is not None:
                                 return configured
-                            utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                            runtime.log_exec_routing()
                             await self._run_surveys(boundary, utils, Phase.POST_CONFIGURE)
                             suite = self.build_suite()
                             await self._run_surveys(boundary, utils, Phase.PRE_TEST)
@@ -1138,7 +1138,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                                 # Owned shells outlive the post-cleanup survey and close
                                 # before the hop they may tunnel through (#115).
                                 try:
-                                    await utils._disconnect_opened()  # pyright: ignore[reportPrivateUsage]
+                                    await runtime.disconnect_opened()
                                 finally:
                                     await self._tear_down_via()
             result = self._to_result(outcome, utils, children=summary_children)
@@ -1178,7 +1178,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             elif node_audit_signal is not None and node_audit_signal.reason is not None:
                 # An audit cancels only its subtree, but each started node still owes
                 # the integrator its completion and the Inspector its failure evidence.
-                await utils._cancel_opened()  # pyright: ignore[reportPrivateUsage]
+                await runtime.cancel_opened()
                 if after_each_started:
                     if settled_result is None:
                         raise FrameworkContractViolation(
@@ -1221,7 +1221,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                         fired,
                         key=lambda candidate: candidate.fired_at or float("inf"),
                     )
-                    await utils._cancel_opened()  # pyright: ignore[reportPrivateUsage]
+                    await runtime.cancel_opened()
                     timeout = clock.evidence()
                     slot = (
                         boundary.outcome.slot
@@ -1247,7 +1247,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 utils,
             )
         except BaseException:
-            utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
+            runtime.close_timeline()
             raise
 
     @final
@@ -1362,7 +1362,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         _cancel_for_deadline(core)
 
         async def settle() -> None:
-            await utils._cancel_opened()  # pyright: ignore[reportPrivateUsage]
+            await node_runtime(utils).cancel_opened()
             await asyncio.gather(core, return_exceptions=True)
 
         settling = asyncio.create_task(settle())
@@ -1430,7 +1430,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         result: RunResult,
     ) -> RunResult:
         """Dispatch the root-owned completion hook for one settled node."""
-        integration_hooks = utils._integration_hooks  # pyright: ignore[reportPrivateUsage]
+        integration_hooks = node_runtime(utils).integration_hooks
         if integration_hooks.after_each is not None:
             try:
                 await boundary.run(
@@ -1449,7 +1449,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                     ),
                 )
             except ExternalIntegrationFailure:
-                await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+                await node_runtime(utils).cancel_in_flight()
                 return self._aborted_result(
                     boundary,
                     utils,
@@ -1478,7 +1478,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         after_each_started: bool,
     ) -> RunResult:
         """Hard-close this node and pay the completion it already owes the integrator."""
-        await utils._cancel_in_flight()  # pyright: ignore[reportPrivateUsage]
+        await node_runtime(utils).cancel_in_flight()
         result = self._aborted_result(boundary, utils, run_abort, children=children)
         if not after_each_started:
             result = await self._run_after_each(boundary, utils, run_abort, result)
@@ -1707,8 +1707,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         # list goes on the tree node because result.json is the root's record and a
         # leaf's run_data never reaches it (docs/measurements.md).
         measurements = tuple(
-            measurement.to_json()
-            for measurement in utils._seal_measurements()  # pyright: ignore[reportPrivateUsage]
+            measurement.to_json() for measurement in node_runtime(utils).seal_measurements()
         )
         run_data[MEASUREMENTS_KEY] = list(measurements)
         summary_tree = SummaryTreeNode(
@@ -1717,7 +1716,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             state=outcome.state,
             failure=outcome.failure,
             timeout=outcome.timeout,
-            log_path=utils._owned_log_reference(),  # pyright: ignore[reportPrivateUsage]
+            log_path=node_runtime(utils).owned_log_reference(),
             children=children,
             evidence=outcome.evidence,
             evidence_declared=self._evidence_declared,
@@ -1743,11 +1742,12 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
     @final
     async def _finish_result(self, result: RunResult, utils: TestUtils) -> RunResult:
         """Publish the root result, then close this node's durable timeline."""
+        runtime = node_runtime(utils)
         try:
-            if len(utils.logger.scope) == 1 and utils._owned_log_path() is not None:  # pyright: ignore[reportPrivateUsage]
+            if len(utils.logger.scope) == 1 and runtime.owned_log_path() is not None:
                 persistence = asyncio.create_task(
                     _bounded_finalization(
-                        utils._persist_result(result),  # pyright: ignore[reportPrivateUsage]
+                        runtime.persist_result(result),
                         node=self.name,
                         operation="root result persistence",
                     )
@@ -1763,7 +1763,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                     persistence.result()
                     raise
         finally:
-            utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
+            runtime.close_timeline()
         return result
 
     @final
@@ -1774,7 +1774,8 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         settles, whether it returned or raised: cleanup after a failed configure reads
         the context and the route and may not write either.
         """
-        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
+        runtime = node_runtime(utils)
+        runtime.enter_configure()
         # configure() is the other slot that may measure (a bring-up reading belongs
         # here); the binding closes with the slot so cleanup after a failed configure
         # cannot record either.
@@ -1784,11 +1785,11 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             # TestUtils; CtxT only exists for the suite author's own annotations, so
             # the framework narrows here rather than asking user code to cast (#75).
             configured = await self.configure(cast("TestUtils[CtxT]", utils))
-            utils._merge_context(configured)  # pyright: ignore[reportPrivateUsage]
+            runtime.merge_context(configured)
         finally:
             current_utils.reset(measuring)
-            utils._exit_configure()  # pyright: ignore[reportPrivateUsage]
-            utils._freeze_context()  # pyright: ignore[reportPrivateUsage]
+            runtime.exit_configure()
+            runtime.freeze_context()
         return configured
 
     @final
@@ -2008,18 +2009,19 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         if task is None:
 
             async def bring_up() -> Outcome:
-                utils = seed._for_node(  # pyright: ignore[reportPrivateUsage]
+                runtime = node_runtime(seed).for_node(
                     self.name,
                     run_abort,
                     discrete_log_file=self.discrete_log_file,
                     isolate_context=True,
                     inherit_route=False,
                 )
+                utils = runtime.utils
                 object.__setattr__(self, "_configure_only_utils", utils)
                 object.__setattr__(
                     self,
                     "_log_path",
-                    utils._owned_log_path(),  # pyright: ignore[reportPrivateUsage]
+                    runtime.owned_log_path(),
                 )
                 via_failed = await self._bring_up_via(utils, run_abort)
                 if via_failed is not None:
@@ -2060,7 +2062,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                         detail="a configure-only time window settled without an Outcome",
                     )
                 if outcome.state is None:
-                    utils._log_exec_routing()  # pyright: ignore[reportPrivateUsage]
+                    runtime.log_exec_routing()
                 return outcome
 
             task = asyncio.create_task(bring_up())
@@ -2089,17 +2091,18 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         if utils is None:
             return
         object.__setattr__(self, "_configure_only_utils", None)
-        boundary = ChildBoundary(self.name, utils._halt_signal(), utils.logger)  # pyright: ignore[reportPrivateUsage]
+        runtime = node_runtime(utils)
+        boundary = ChildBoundary(self.name, runtime.halt_signal(), utils.logger)
         try:
             await self._run_cleanup(boundary, utils)
         finally:
             try:
-                await utils._disconnect_opened()  # pyright: ignore[reportPrivateUsage]
+                await runtime.disconnect_opened()
             finally:
                 try:
                     await self._tear_down_via()
                 finally:
-                    utils._close_timeline()  # pyright: ignore[reportPrivateUsage]
+                    runtime.close_timeline()
 
     @final
     async def _bring_up_via(self, utils: TestUtils, run_abort: RunAbort) -> Outcome | None:
@@ -2122,8 +2125,8 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 self.name,
                 detail="a via hop was declared but the via device is not up",
             )
-        router = via_utils._routing.router  # pyright: ignore[reportPrivateUsage]
-        utils._inherit_router(router)  # pyright: ignore[reportPrivateUsage]
+        router = node_runtime(via_utils).routing.router
+        node_runtime(utils).inherit_router(router)
         return None
 
     @final

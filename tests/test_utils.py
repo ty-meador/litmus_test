@@ -22,6 +22,7 @@ from litmus.lifecycle import Outcome, State
 from litmus.mock import MockTransport
 from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouter, RouterRunParams
+from litmus.utils import node_runtime
 
 
 class _ScopedLogRecord(Protocol):
@@ -54,9 +55,7 @@ class TestExecRoute:
     def test_a_routed_node_names_the_endpoint_of_its_hop(self) -> None:
         utils = TestUtils()
         edge = _Endpoint("10.10.10.10")
-        utils._routing.apply_run_params(  # pyright: ignore[reportPrivateUsage]
-            RouterRunParams(ExecRouter.for_ssh(edge))
-        )
+        node_runtime(utils).routing.apply_run_params(RouterRunParams(ExecRouter.for_ssh(edge)))
         assert utils.exec_route == "10.10.10.10"
 
     def test_a_route_forced_local_answers_local(self) -> None:
@@ -64,9 +63,7 @@ class TestExecRoute:
             return ExecResult.settled(command, "", 0)
 
         utils = TestUtils()
-        utils._routing.apply_run_params(  # pyright: ignore[reportPrivateUsage]
-            RouterRunParams(ExecRouter.local(on_host))
-        )
+        node_runtime(utils).routing.apply_run_params(RouterRunParams(ExecRouter.local(on_host)))
         assert utils.exec_route == "local"
 
 
@@ -322,7 +319,7 @@ class TestUtilsExecNeverThrows:
         await _HostChild.wait_for_pidfile(pid_path)
 
         # Abort is a framework action on the seed's executor, not an author API.
-        await object.__getattribute__(utils, "_local_exec").cancel_in_flight()
+        await node_runtime(utils).local_exec.cancel_in_flight()
         result = await task
 
         assert result.exit_code == -1
@@ -391,10 +388,10 @@ class TestUtilsExecNeverThrows:
         utils = TestUtils()
         install_mock_connector(utils, transport)
         # These cases are about exec settling; open the configure-only window by hand.
-        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
+        node_runtime(utils).enter_configure()
         await utils.use_shell(host="dut", username="root")
 
-        await object.__getattribute__(utils, "_transports").cancel_in_flight()
+        await node_runtime(utils).transports.cancel_in_flight()
         result = await utils.exec("uname")
 
         assert result.exit_code == -1
@@ -409,7 +406,7 @@ class TestUtilsExecNeverThrows:
         utils = TestUtils()
         install_mock_connector(utils, transport)
         # These cases are about exec settling; open the configure-only window by hand.
-        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
+        node_runtime(utils).enter_configure()
         await utils.use_shell(host="dut", username="root")
         task = asyncio.create_task(utils.exec("flash"))
         deadline = asyncio.get_running_loop().time() + 2
@@ -417,7 +414,7 @@ class TestUtilsExecNeverThrows:
             assert asyncio.get_running_loop().time() < deadline, "parked exec never started"
             await asyncio.sleep(0)
 
-        await object.__getattribute__(utils, "_transports").cancel_in_flight()
+        await node_runtime(utils).transports.cancel_in_flight()
         result = await task
 
         assert result.exit_code == -1
@@ -432,7 +429,7 @@ class TestUtilsExecNeverThrows:
         utils = TestUtils()
         install_mock_connector(utils, transport)
         # These cases are about exec settling; open the configure-only window by hand.
-        utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
+        node_runtime(utils).enter_configure()
         shell = await utils.use_shell(host="dut", username="root")
 
         await transport.cancel_in_flight()

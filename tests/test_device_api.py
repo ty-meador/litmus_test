@@ -28,6 +28,7 @@ from litmus.device_api import (
     MockDeviceApi,
 )
 from litmus.lifecycle import State
+from litmus.utils import node_runtime
 
 
 class _Router(Protocol):
@@ -671,5 +672,5 @@ class TestValidationAndHalt:
             response = await api.request(DeviceRequest(method="PUT", path="/a/b", payload=b"xy"))
             assert response.status == 69
         finally:
-            await utils._cancel_opened()  # pyright: ignore[reportPrivateUsage]
+            await node_runtime(utils).cancel_opened()
             transport.close()
