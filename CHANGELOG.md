@@ -19,6 +19,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `docs/hil/i2c-spi.md`: the signed design note for I2C and SPI transaction
+  contracts — atomic transfers, I2C NACK/arbitration, SPI chip-select and
+  mode, and a released bus as the abort safe-state. Design only; no code
+  change. Signed by Ty in !129 on 2026-09-09; recorded on issue #96.
 - `docs/hil/can.md`: the signed design note for a CAN bus interface contract —
   typed frames, immutable acceptance filters, bus-off as an operational
   condition, and silence as the abort safe-state. Design only; no code
