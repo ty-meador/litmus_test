@@ -111,6 +111,42 @@ class SuiteModule:
             if isinstance(node, ast.ClassDef) and node in self._litmus_classes:
                 yield node
 
+    def registered_methods(self, klass: ast.ClassDef, registrars: Iterable[str]) -> frozenset[str]:
+        """Names of ``self.<method>`` handed to ``self.<registrar>(...)`` inside ``klass``.
+
+        Surveys, audits, and leaves are identity: a method becomes one by being passed
+        to ``use_survey``, ``use_audit``, or ``test`` by reference. A rule that treats a
+        hook differently from a test method, or a leaf differently from a helper, finds
+        them here rather than by naming convention.
+        """
+        wanted = frozenset(registrars)
+        names: set[str] = set()
+        for node in ast.walk(klass):
+            if not isinstance(node, ast.Call) or self.enclosing_class(node) is not klass:
+                continue
+            method = self.enclosing_method(node)
+            if method is None:
+                continue
+            receiver = _first_parameter(method)
+            if receiver is None:
+                continue
+            func = node.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr in wanted
+                and isinstance(func.value, ast.Name)
+                and func.value.id == receiver
+            ):
+                continue
+            for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+                if (
+                    isinstance(argument, ast.Attribute)
+                    and isinstance(argument.value, ast.Name)
+                    and argument.value.id == receiver
+                ):
+                    names.add(argument.attr)
+        return frozenset(names)
+
     def violation(self, node: ast.AST, code: str, message: str) -> Violation:
         """Build a violation anchored at ``node``."""
         line = getattr(node, "lineno", 1)
@@ -132,6 +168,13 @@ class SuiteModule:
                     known.add(node.name)
                     changed = True
         return frozenset(resolved)
+
+
+def _first_parameter(function: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
+    positional = function.args.posonlyargs + function.args.args
+    if not positional:
+        return None
+    return positional[0].arg
 
 
 def _base_name(base: ast.expr) -> str | None:
