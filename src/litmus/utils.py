@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 type WaitPredicate = Callable[[], bool | Awaitable[bool]]
 
-LOGGER = logging.getLogger("litmus")
+LOGGER = logging.getLogger(__name__)
 
 
 @final

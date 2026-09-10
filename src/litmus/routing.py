@@ -26,7 +26,7 @@ type ExecFn = Callable[[str], Awaitable[ExecResult]]
 type TransportOpened = Callable[[RemoteInterface], None]
 type RouterProvenance = Literal["local", "inherited", "declared", "isolated"]
 
-LOGGER = logging.getLogger("litmus")
+LOGGER = logging.getLogger(__name__)
 
 _ROUTING_REASONS: dict[RouterProvenance, str] = {
     "declared": "declared via use_shell",
