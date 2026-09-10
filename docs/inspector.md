@@ -154,8 +154,16 @@ filters to errors while a truncation marker stays in place. The plain text of ev
 redraw is kept on the app so the self-tests drive it against the recorded runs in
 `tests/inspector_rack.py` and a screenshot can be read back against this guide.
 
-The artifact modal screen, latest-run discovery, and the entry point remain later
-increments under #89. No saved inspection runs suite code.
+The artifact modal screen (`litmus.inspector_app.ArtifactScreen`) opens from a digit
+in the log pane over the capture carrying that number and owns the artifact keys until
+`b` closes it: `[` and `]` move between types or the left side of a comparison, the
+arrows between captures of the type or the right side, `n` and `p` page both sides
+together, `d` enters and leaves the comparison. It renders the modal model only: one
+capture as its lines, a comparison as two aligned columns with differing rows
+highlighted, a diagnostic as the reader's words with the recorded reference.
+
+Latest-run discovery and the entry point remain later increments under #89. No saved
+inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery

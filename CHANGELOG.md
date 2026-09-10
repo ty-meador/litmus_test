@@ -30,8 +30,15 @@ of feature parity: the Python Inspector is still separate work.
   place. Every key handler is one model call and a redraw; the plain text of each
   redraw is kept on the app so the self-tests and a screenshot can be read back.
   `textual` becomes a runtime dependency by Ty's ruling of 2026-09-09 (MIT; the tree is
-  GPL-2.0 compatible). The Run tab stays behind its own decision; the artifact modal
-  screen, latest-run discovery, and the `litmus inspect` entry point remain later work.
+  GPL-2.0 compatible). The Run tab stays behind its own decision.
+- Inspector artifact modal screen (issue #89): `litmus.inspector_app.ArtifactScreen`.
+  A digit in the log pane opens the capture carrying that number; the modal owns the
+  guide's artifact keys until `b` closes it (`[` `]` types or the left side, arrows
+  captures or the right side, `n` `p` page both sides together, `d` compare). One
+  capture renders as its lines, a comparison as two aligned columns with differing
+  rows highlighted, an unreadable capture as the reader's diagnostic with the recorded
+  reference. Every key is one call into the modal model. Latest-run discovery and the
+  `litmus inspect` entry point remain later work.
 - Internal Inspector artifact modal model (issue #89): loads the selected capture,
   or the two sides of a comparison, through the contained capture reader and pages
   the result. A capture is printed in its recorded key order; an unavailable or
