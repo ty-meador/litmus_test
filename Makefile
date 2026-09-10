@@ -61,5 +61,5 @@ hooks:  ## Point git at the shared hooks (auto-lint on commit)
 	git config core.hooksPath .githooks
 
 clean:
-	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak mutants dist site
+	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak .mutants dist site
 	find . -type d -name __pycache__ -exec rm -rf {} +
