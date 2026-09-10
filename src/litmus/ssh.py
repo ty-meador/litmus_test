@@ -414,7 +414,7 @@ class SshInterface(RemoteInterface):
 
 
 def _name_transport_death(remote_stderr: str | bytes | None) -> str:
-    """stderr for a command whose channel closed with no exit status.
+    """Name a channel-close with no exit status, keeping remote stderr beneath it.
 
     The framework's own name for the cause comes first; whatever the remote
     managed to write before the socket died is kept beneath it.
