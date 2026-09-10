@@ -83,6 +83,11 @@ class TimelineView:
         return self._errors_only
 
     @property
+    def artifacts(self) -> tuple[TimelineRecord, ...]:
+        """All numbered pointers in capture-number order, independent of the current page."""
+        return self._artifacts
+
+    @property
     def artifact_count(self) -> int:
         """Count every structured pointer, including those outside the current page/filter."""
         return len(self._artifacts)
