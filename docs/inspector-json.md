@@ -31,11 +31,16 @@ type `run-result`; consumers do not need to derive the run directory name.
 | `summary_tree` | object | Recursive snapshot rooted at this node. |
 | `physical_location` | string | `PHYSICAL_LOCATION`, or `unknown` when absent. |
 | `env` | object | Environment snapshot taken at the start of the run, filtered per the run's allow or deny list; see below. |
-| `run_data` | object | Detached structured evidence snapshot: the JSON-safe view of the node's ctx, plus, on a leaf, the evidence its verdict carried. It always contains a framework-owned `measurements` array reserved for a future parametric-measurement protocol. |
+| `run_data` | object | Detached structured evidence snapshot: the JSON-safe view of the node's ctx, plus, on a leaf, the evidence its verdict carried. It always contains a framework-owned `measurements` array: one entry per `utils.measure` call on this node, in call order, empty when the node measured nothing. |
 
-Version 1 does not define measurement entries, limits, units, aggregation, SPC, or Cpk;
-the reserved `measurements` array is therefore empty. Integrators must not infer
-statistical semantics from its presence.
+A measurement entry is `{name, value, unit, limits, in_limits, timestamp}` as
+`docs/measurements.md` defines it: `limits` is `{low, high}` with `null` for an open
+side or `null` altogether, `in_limits` is `true`, `false`, or `null` when no window was
+given, and `timestamp` is UTC ending in `Z`. `in_limits` is evidence, never a verdict;
+version 1 defines no aggregation, SPC, or Cpk, and an integrator must not infer them
+from the entries. Because `result.json` is the root's record, the entries a leaf
+recorded reach the file through `measurements` on its `summary_tree` node, not
+through this `run_data`.
 
 Python-only lifecycle details such as the internal slot and raw return value are not
 part of this payload. Consumers must treat unknown fields as additive and select a
@@ -169,7 +174,9 @@ objects do not forbid additional properties, so a consumer validating with the f
 shipped in one release accepts the additive fields of a later release within the same
 version. Three objects are open by design and stay open under the self-tests as well:
 the failure object (a `TestFailure` subclass may add fields), `env` (station-defined
-names), and `run_data` (suite evidence beyond the reserved `measurements` slot).
+names), and `run_data` (suite evidence beyond the framework-owned `measurements`
+slot). The measurement object itself is open as well, so a field added to it within
+version 1 is accepted by a consumer validating with this file.
 
 `tests/test_inspector_schema.py` validates every emitted `result.json` and every emitted
 timeline line against these files on each gate run, first as published and then with
@@ -196,6 +203,7 @@ Every `summary_tree` node contains exactly these version-1 fields:
 | `children` | array | Ordered child nodes. Groups retain declaration order after settlement. |
 | `evidence` | object or null | The readings this leaf's verdict carried: `PASS({...})` or `TestFailure(..., evidence={...})`, validated entry by entry and detached. Null on a node that is not a leaf, that never ran, or whose verdict carried none. |
 | `evidence_declared` | array of string or null | The keys the leaf's `@evidence` declaration promised on `PASS`, in declaration order. A declared key absent from `evidence` is a reading that was not taken; show it by name. Null when the node is not a leaf or declared nothing. |
+| `measurements` | array or null | Every `utils.measure` call this node recorded, in call order, as measurement objects (`docs/measurements.md`). An array on every node that ran, empty when it measured nothing; null when the node never ran, matching `state`. A measurement does not satisfy an `@evidence` declaration and `in_limits: false` is not a Fail. |
 
 A null tree state means pending/unreached; it is not a fourth terminal state. A stopped
 sequence retains its unexecuted descendants with null states, so the root snapshot

@@ -1,9 +1,8 @@
 # Parametric Measurements
 
-**Status.** Design note for #85. Signed off by Ty on the issue 2026-09-05;
-implementation is #86. Nothing on this page is emitted by the framework until #86
-merges; until then `run_data["measurements"]` stays the empty reserved array that
-`docs/inspector-json.md` describes.
+Design note for #85, signed off by Ty on the issue 2026-09-05 and implemented under
+#86. This page owns the protocol; `docs/inspector-json.md` owns the record's place in
+`result.json`.
 
 A test method already hands its readings back with the verdict (`PASS(evidence)`,
 `docs/idioms.md`). That record answers the Floor Technician's question: did the unit
