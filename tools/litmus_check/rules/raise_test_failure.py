@@ -40,6 +40,10 @@ class RaiseTestFailureRule(Rule):
     summary = "test methods raise TestFailure, not a plain exception"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report a plain exception raised from a test method.
+
+        See the ``litmus/raise-test-failure`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             test_methods = _test_methods(module, klass)
             for node in ast.walk(klass):

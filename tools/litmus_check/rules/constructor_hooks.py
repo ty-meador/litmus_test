@@ -37,6 +37,10 @@ class ConstructorHooksRule(Rule):
     summary = "use_survey and use_audit are called only inside __init__"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report ``use_survey`` / ``use_audit`` outside ``__init__``.
+
+        See the ``litmus/constructor-hooks`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for node in ast.walk(klass):
                 if isinstance(node, ast.Call):

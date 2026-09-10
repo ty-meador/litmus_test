@@ -42,6 +42,10 @@ class GatedPassRule(Rule):
     summary = "return PASS must sit inside an if branch or match arm"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report each ``return PASS`` that no ``if`` or ``match`` arm guards.
+
+        See the ``litmus/gated-pass`` row in ``docs/litmus-check.md``.
+        """
         for node in ast.walk(module.tree):
             if not isinstance(node, ast.Return) or not _returns_pass(node):
                 continue
