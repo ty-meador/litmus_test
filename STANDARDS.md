@@ -19,6 +19,12 @@ source of truth and this doc is the explanation.
   advisory truly does not apply, `--ignore-vuln` goes in the Makefile with the issue that
   says why. A weekly CI schedule refreshes `uv.lock` and opens the update MR itself
   (`tools/dependency_update.py`); nobody has to remember to look.
+- **The package is built and smoke-installed by the gate.** `make check` runs
+  `make smoke`: `uv build` into `dist/`, then the wheel installed into a clean venv under
+  `.smoke/` where `litmus-check --list-rules` and `litmus run examples/hello_world.py`
+  must start. A wheel that cannot build, or that imports from `src/` instead of itself,
+  is red before it is tagged, so the developer's `pip install` never delivers a package
+  that cannot import on the floor. Publishing waits on the name decision (#9) and on CI.
 - The pre-commit hook (installed by `make install`) auto-formats and auto-fixes staged
   files. Don't bypass it with `--no-verify`.
 
