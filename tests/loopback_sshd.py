@@ -8,6 +8,7 @@ from typing import Any
 
 import asyncssh
 import pytest
+from tests.fake_console import SERIAL_BRIDGE_COMMAND, FakeConsole
 
 
 class LoopbackSshd:
@@ -197,6 +198,9 @@ class LoopbackSshd:
         elif command == "non-utf8":
             LoopbackSshd._write(process.stdout, b"pre\xffpost", encoding=encoding)
             process.exit(0)
+        elif command == SERIAL_BRIDGE_COMMAND or command.startswith(f"{SERIAL_BRIDGE_COMMAND} "):
+            await FakeConsole().run_ssh(process, encoding=encoding)
+            return
         else:
             LoopbackSshd._write(process.stdout, command, encoding=encoding)
             process.exit(0)
