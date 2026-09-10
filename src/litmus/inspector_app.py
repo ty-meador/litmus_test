@@ -21,8 +21,11 @@ from typing import ClassVar, Literal
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.containers import Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
+from litmus.inspector_artifact_view import ArtifactModal, DiffRow, diff_rows, single_rows
 from litmus.inspector_run import SavedRun
 from litmus.inspector_selection import InspectorSelection, SelectionView
 from litmus.inspector_timeline import TimelineDiagnostic
@@ -136,6 +139,12 @@ class InspectorApp(App[None]):
         Binding("n", "page(1)", "Next page"),
         Binding("p", "page(-1)", "Previous page"),
         Binding("f", "toggle_errors", "Errors only"),
+        # Digits open the capture carrying that number in the complete chronology;
+        # the number never changes with paging or filtering (TimelineView).
+        *[
+            Binding(str(digit), f"open_capture({digit})", "Open capture", show=False)
+            for digit in range(1, 10)
+        ],
     ]
 
     def __init__(self, saved: SavedRun) -> None:
@@ -198,6 +207,15 @@ class InspectorApp(App[None]):
             self.timeline_view.toggle_errors()
             self.redraw()
 
+    def action_open_capture(self, number: int) -> None:
+        """Open the numbered capture in the modal; a digit with no capture does nothing."""
+        if self.timeline_view is None or self.timeline_view.artifact(number) is None:
+            return
+        modal = ArtifactModal(
+            self.timeline_view, self.saved.artifacts, initial_number=number, page_size=1
+        )
+        self.push_screen(ArtifactScreen(modal))
+
     def redraw(self) -> None:
         """Render every pane from the models; the only place the screen reads them."""
         view = self.selection.view
@@ -243,3 +261,150 @@ class InspectorApp(App[None]):
         elif self.timeline_view is not None and page_size != self._page_size:
             self.timeline_view.resize(page_size)
         self._page_size = page_size
+
+
+class ArtifactScreen(ModalScreen[None]):
+    """The artifact modal over the main view: one capture, or two side by side.
+
+    The modal owns its keys until it closes, as the guide's artifact table specifies:
+    ``[`` and ``]`` move between types (or the left side of a comparison), the arrows
+    between captures of the type (or the right side), ``n`` and ``p`` page both sides
+    together, ``d`` enters and leaves the comparison, ``b`` returns to the log. Every
+    handler is one call into ``ArtifactModal``; loading, paging, alignment, and the
+    swap that keeps two targets distinct all live there.
+    """
+
+    CSS = """
+    ArtifactScreen { align: center middle; }
+    #modal { width: 92%; height: 90%; padding: 0 1; }
+    #modal { border: thick $secondary; background: $surface; }
+    #modal-title { height: 2; }
+    #modal-body { height: 1fr; }
+    """
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("b", "close", "Back to log", priority=True),
+        Binding("escape", "close", "Back to log", show=False, priority=True),
+        Binding("left_square_bracket", "step_type(-1)", "Prev type / left", priority=True),
+        Binding("right_square_bracket", "step_type(1)", "Next type / left", priority=True),
+        Binding("left", "step_artifact(-1)", "Prev capture / right", priority=True),
+        Binding("right", "step_artifact(1)", "Next capture / right", priority=True),
+        Binding("n", "page(1)", "Next page", priority=True),
+        Binding("p", "page(-1)", "Previous page", priority=True),
+        Binding("d", "toggle_diff", "Diff", priority=True),
+        Binding("q", "app.quit", "Quit", priority=True),
+        Binding("ctrl+c", "app.quit", "Quit", priority=True, show=False),
+    ]
+
+    def __init__(self, modal: ArtifactModal) -> None:
+        super().__init__()
+        self.modal = modal
+        self.modal_lines: tuple[str, ...] = ()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal"):
+            yield Static(id="modal-title")
+            yield Static(id="modal-body")
+
+    async def on_mount(self) -> None:
+        self._fit()
+        await self.modal.open()
+        self.redraw()
+
+    def on_resize(self) -> None:
+        self._fit()
+        self.redraw()
+
+    def _fit(self) -> None:
+        """Page by the body's height; before layout that is one line, corrected on resize."""
+        self.modal.resize(max(1, self.query_one("#modal-body", Static).size.height))
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+    async def action_step_type(self, direction: int) -> None:
+        if direction > 0:
+            await self.modal.next_type()
+        else:
+            await self.modal.previous_type()
+        self.redraw()
+
+    async def action_step_artifact(self, direction: int) -> None:
+        if direction > 0:
+            await self.modal.next_artifact()
+        else:
+            await self.modal.previous_artifact()
+        self.redraw()
+
+    def action_page(self, delta: int) -> None:
+        if delta > 0:
+            self.modal.next_page()
+        else:
+            self.modal.previous_page()
+        self.redraw()
+
+    async def action_toggle_diff(self) -> None:
+        await self.modal.toggle_diff()
+        self.redraw()
+
+    def redraw(self) -> None:
+        """Render the title and body from the modal model; nothing is decided here."""
+        title = modal_title(self.modal)
+        body = modal_body(self.modal, self.query_one("#modal-body", Static).size.width)
+        self.modal_lines = (*title.plain.split("\n"), *(line.plain for line in body))
+        self.query_one("#modal-title", Static).update(title)
+        self.query_one("#modal-body", Static).update(Text("\n").join(body))
+
+
+def modal_title(modal: ArtifactModal) -> Text:
+    """Two lines: where the selection sits among types and captures, and the page."""
+    navigation = modal.navigation
+    types = navigation.types
+    numbers = navigation.numbers
+    title = Text()
+    title.append(
+        f"type {types.index(navigation.artifact_type) + 1}/{len(types)}: "
+        f"{navigation.artifact_type}   "
+    )
+    if modal.diff and modal.left is not None and modal.right is not None:
+        title.append("diff  ", style="bold")
+        title.append(modal.left.title, style="bold")
+        title.append("  |  ")
+        title.append(modal.right.title, style="bold")
+    elif modal.left is not None:
+        current = numbers.index(navigation.current.number) + 1
+        title.append(f"capture {current}/{len(numbers)}   ")
+        title.append(modal.left.title, style="bold")
+    else:
+        title.append("loading", style="dim")
+    title.append(f"\npage {modal.page_index + 1}/{modal.page_count}")
+    title.append("   b back  [ ] type  ← → capture  n p page  d diff", style="dim")
+    return title
+
+
+def modal_body(modal: ArtifactModal, width: int) -> list[Text]:
+    """The current page: one capture's lines, or two aligned columns of a comparison."""
+    if modal.status != "ready":
+        return [Text("loading", style="dim")]
+    if not modal.diff:
+        lines = [Text(line) for line in single_rows(modal)]
+        if modal.left is not None and modal.left.diagnostic is not None:
+            for line in lines:
+                line.stylize("bold yellow")
+        return lines
+    column = max(8, (max(20, width) - 3) // 2)
+    return [_diff_line(row, column) for row in diff_rows(modal)]
+
+
+def _diff_line(row: DiffRow, column: int) -> Text:
+    """Two columns of one aligned row; a differing row is highlighted, a gap is blank."""
+    style = "" if row.same else "bold yellow"
+    text = Text()
+    text.append(_column(row.left, column), style=style)
+    text.append(" | ", style="dim")
+    text.append(_column(row.right, column), style=style)
+    return text
+
+
+def _column(cell: str | None, column: int) -> str:
+    """Fit one side to its column so the two sides stay aligned."""
+    return ("" if cell is None else cell)[:column].ljust(column)
