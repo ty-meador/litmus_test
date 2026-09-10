@@ -1,6 +1,7 @@
 # Serial/UART console transport
 
-**Status: DRAFT — awaiting Ty's read on #91 (Phase 9)**
+**Status: SIGNED — Ty, 2026-09-10** ("all approved", recorded on #91). Implementation
+lands with the MR that carries this status change.
 
 Ty ruled **both** placements on 2026-09-05: `SerialInterface` as a local peer of
 `SshInterface` (console header on the litmus host), and the same transport reached

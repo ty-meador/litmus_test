@@ -68,11 +68,13 @@ Private, with no promise attached:
   (`WaitPredicate`, `HaltReason`, `ExecFn`). They are documented by their expansion.
 - Directory and file names beneath the artifact root. `LitmusTest.log_path` and the
   `result` pointer in the timeline are the API; the layout that produces them is not.
-- The transports, `RemoteInterface` and `SshInterface`. A suite author never
-  constructs one: `TestUtils.use_shell` and `TestUtils.get_shell` open the connection
-  and hand back a `Shell`. Transport authors and the self-tests import
-  `litmus.remote` and `litmus.ssh` directly; a transport contract for third parties is
-  a design note of its own (issues #91, #93–#97).
+- The transports, `RemoteInterface`, `SshInterface`, and `SerialInterface`. A suite
+  author never constructs an SSH transport: `TestUtils.use_shell` and
+  `TestUtils.get_shell` open the connection and hand back a `Shell`. Serial is
+  constructed directly until a `use_shell` shape exists for a device path. Transport
+  authors and the self-tests import `litmus.remote`, `litmus.ssh`, and `litmus.serial`
+  directly; a transport contract for third parties is a design note of its own
+  (issues #91, #93–#97).
 - The Device API backends, `DeviceApiInterface`, `HttpInterface`, `CoapInterface`,
   and `MockDeviceApi`. A suite author never constructs one: `TestUtils.get_http`
   and `TestUtils.get_coap` open the session and hand back a `DeviceApi`. Self-tests

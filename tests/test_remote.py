@@ -1,8 +1,8 @@
 """The remote transport contract: connect, exec, cancel_in_flight.
 
-Serial/UART is out of scope for the port, but the protocol must not preclude it.
-The UART-shaped stub below is that proof — it implements the three hooks and
-nothing SSH-specific.
+SerialInterface is the real UART peer. The stub below stays as the proof that
+`RemoteInterface` does not require SSH — it implements the three hooks and
+nothing protocol-specific.
 """
 
 from __future__ import annotations
