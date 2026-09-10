@@ -460,26 +460,31 @@ class RunContext(dict[str, Any]):
         super().__delitem__(key)
 
     def update(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+        """Merge while the context is open; refused once ``configure()`` has settled."""
         if self.frozen:
             self._refuse(_first_key(args, kwargs, "update(...)"))
         super().update(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType]
 
     def setdefault(self, key: str, default: Any = None) -> Any:
+        """Read an existing key freely; inserting a new one is refused once frozen."""
         if self.frozen and key not in self:
             self._refuse(key)
         return super().setdefault(key, default)
 
     def pop(self, key: str, *default: Any) -> Any:
+        """Remove while open; refused once frozen, since ctx is read-only after ``configure()``."""
         if self.frozen:
             self._refuse(key)
         return super().pop(key, *default)
 
     def popitem(self) -> tuple[str, Any]:
+        """Refused once frozen: a frozen context loses no keys."""
         if self.frozen:
             self._refuse("popitem()")
         return super().popitem()
 
     def clear(self) -> None:
+        """Refused once frozen: a frozen context loses no keys."""
         if self.frozen:
             self._refuse("clear()")
         super().clear()

@@ -1,5 +1,6 @@
-"""The host-side executor choke point: off the loop, never throws on a failed command,
-SIGTERM on abort, no zombies.
+"""The host-side executor choke point.
+
+Off the loop, never throws on a failed command, SIGTERM on abort, no zombies.
 """
 
 from __future__ import annotations

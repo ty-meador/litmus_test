@@ -278,9 +278,11 @@ class ContractViolation(TestFailure):
 
     @property
     def is_bug(self) -> bool:
+        """A contract violation is always a developer bug, never a device fault."""
         return True
 
     def to_json(self) -> dict[str, Any]:
+        """Carry banner, node, and cause so the record names who is at fault and where."""
         payload = super().to_json()
         payload["banner"] = self.BANNER
         payload["node"] = self.node
@@ -370,6 +372,7 @@ class ContextInsufficient(ContractViolation):
         return ContextInsufficient(node, key=self.key, owner=self.owner)
 
     def to_json(self) -> dict[str, Any]:
+        """Carry the missing key and its owner so the record names what ``configure()`` owed."""
         payload = super().to_json()
         payload["key"] = self.key
         if self.owner is not None:
@@ -412,6 +415,7 @@ class ContextImmutable(ContractViolation):
         return ContextImmutable(node, key=self.key, owner=self.owner)
 
     def to_json(self) -> dict[str, Any]:
+        """Carry the written key and its owner so the record names the frozen context touched."""
         payload = super().to_json()
         payload["key"] = self.key
         if self.owner is not None:
@@ -471,6 +475,7 @@ class EvidenceViolation(ContractViolation):
         )
 
     def to_json(self) -> dict[str, Any]:
+        """Carry the offending key so the record names the collision, not just the class."""
         payload = super().to_json()
         payload["key"] = self.key
         return payload
@@ -499,6 +504,7 @@ class MeasurementViolation(ContractViolation):
         self.measurement = measurement
 
     def to_json(self) -> dict[str, Any]:
+        """Carry the measurement name so the record ties the refusal to its reading."""
         payload = super().to_json()
         payload["measurement"] = self.measurement
         return payload
@@ -529,6 +535,7 @@ class MeasurementInvalid(MeasurementViolation):
         self.reason = reason
 
     def to_json(self) -> dict[str, Any]:
+        """Carry the reason so the record says why the value was refused, not only that it was."""
         payload = super().to_json()
         payload["reason"] = self.reason
         return payload

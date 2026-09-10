@@ -1,7 +1,6 @@
-"""``litmus/evidence-fulfilled``: every ``return PASS({...})`` carries what ``@evidence``
-declared (issue #118).
+"""``litmus/evidence-fulfilled``: every ``return PASS({...})`` carries what ``@evidence`` declared.
 
-The declaration is the method's return signature. A bare ``return PASS`` in a decorated
+Issue #118. The declaration is the method's return signature. A bare ``return PASS`` in a decorated
 method, or a literal payload missing a declared key, is flagged where it is written. A
 payload the rule cannot read is left to tier 1.
 """
