@@ -19,6 +19,19 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Inspector main view (issue #89): `litmus.inspector_app.InspectorApp`, a Textual
+  screen over one saved run. A tab row (Inspect, Failures), the structural tree above
+  with Pass, Fail, Aborted, and Pending rendered as distinct states and readings not
+  taken named on the row, and the highlighted node's chronology below, loaded on
+  cursor movement without Enter and labelled with its owner when the node's records
+  rolled up. The guide's keys: `q` and `Ctrl-C` quit, `Tab` cycles the two tabs, arrows
+  move and jump between Fail and Aborted nodes without wrapping, `n`/`p` page, `f`
+  filters to errors while reader diagnostics such as a truncation marker stay in
+  place. Every key handler is one model call and a redraw; the plain text of each
+  redraw is kept on the app so the self-tests and a screenshot can be read back.
+  `textual` becomes a runtime dependency by Ty's ruling of 2026-09-09 (MIT; the tree is
+  GPL-2.0 compatible). The Run tab stays behind its own decision; the artifact modal
+  screen, latest-run discovery, and the `litmus inspect` entry point remain later work.
 - Internal Inspector artifact modal model (issue #89): loads the selected capture,
   or the two sides of a comparison, through the contained capture reader and pages
   the result. A capture is printed in its recorded key order; an unavailable or
