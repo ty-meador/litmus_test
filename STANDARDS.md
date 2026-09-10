@@ -48,11 +48,20 @@ rules and pyright strict — an unannotated def fails `make check`.
 ## 3. Shape of the code
 
 - **OOP at the surface.** Public logic lives in classes as instance methods (private
-  `_method` for internals). No arrow-style lambda wrappers where a method suffices, and
-  never a module-level function on the public surface. Module level holds classes,
-  constants, true singletons (e.g. the `PASS` sentinel), and private stateless helper
-  functions (`_helper`) serving that module's classes — a pure predicate does not earn
-  a class-as-namespace.
+  `_method` for internals). No arrow-style lambda wrappers where a method suffices.
+  Module level holds classes, constants, true singletons (e.g. the `PASS` sentinel),
+  and stateless helper functions — a pure predicate does not earn a class-as-namespace.
+  A module-level function is one of three things, and its name says which:
+  - **On the public surface by ruling.** A decorator or registrar the developer calls
+    by name (`evidence`, #118; `measure`, #86; `cli.main`) sits in `litmus.__all__`
+    because a signed ruling put it there. Nothing reaches the surface as a function
+    without one; the ruling, not this list, is the authority.
+  - **Package-internal, read by a sibling module.** A name outside `litmus.__all__` is
+    package-internal. When a sibling imports it, it keeps a plain name: a
+    `from litmus.x import _helper` line silences the type checker to say what the
+    plain name already says.
+  - **Private to its module.** A helper only its own module calls is `_helper`, so the
+    reader knows without a search that nothing else depends on it.
 - **No nested ternaries.** Ever. Use a default assignment followed by `if`/`elif`.
   A single flat ternary is fine; `x if a else (y if b else z)` is not.
 - **Async-first.** All I/O is `async`. Blocking or native calls enter only through the
