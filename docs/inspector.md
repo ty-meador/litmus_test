@@ -132,8 +132,19 @@ kind for the existing contained capture reader. Empty paths remain selectable an
 produce that reader's unavailable diagnostic. A moved 70-DUT test opens null and named
 captures and the root result without suite execution or saved-byte changes.
 
-This model selects targets only. Async modal loading, content paging and diff rendering,
-terminal screens, latest-run discovery, and the entry point remain later increments
+The internal artifact modal model (`litmus.inspector_artifact_view.ArtifactModal`)
+joins that selection to the saved run's capture reader and pages what it reads. A
+capture is printed in its recorded key order, so two captures of one type line up; an
+unavailable or undecodable capture shows the reader's diagnostic with the recorded
+reference and is never replaced by another file. In diff mode the two captures are
+aligned row by row and one page cursor moves both sides together, as the artifact
+table above specifies; a singleton type stays single without a reload, and every
+change of selection returns to the first page because a capture is read from its top.
+A delayed read never replaces a newer selection, in the pattern of the selection model.
+The shared 70-DUT recording in `tests/inspector_rack.py` proves the composition without
+suite execution or saved-byte changes.
+
+Terminal screens, latest-run discovery, and the entry point remain later increments
 under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
