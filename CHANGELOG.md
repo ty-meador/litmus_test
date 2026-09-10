@@ -23,6 +23,11 @@ of feature parity: the Python Inspector is still separate work.
   sweep): two `measure(...)` calls, either spelling, with the same literal name inside one
   `configure` or test method are reported at the second call. The tier-1 duplicate-name
   guard is unchanged; the rule moves that finding from the first run to the editor.
+- `litmus-check` rule `litmus/measurement-in-node` (issue #133, raised by the #109 sweep):
+  a `measure(...)` call, either spelling, inside `cleanup`, a registered survey or audit,
+  a `before_each`/`after_each` hook, or outside any function is reported with the slot it
+  sits in. The tier-1 outside-a-node guard is unchanged. `SuiteModule.registered_methods`
+  now carries the registrar lookup the ctx-provenance rule kept privately.
 - `litmus inspect [PATH]` (issue #89, Ty's ruling of 2026-09-09): opens a saved run in
   the Inspector. PATH is a run directory or its `result.json`; without PATH the most
   recently modified `result.json` under `LITMUS_ARTIFACT_ROOT` (default `artifacts/`;

@@ -357,10 +357,10 @@ the developer's CI before it reaches a station log:
 | Rule | Flags | Mirrors | Status |
 |---|---|---|---|
 | `litmus/measurement-name-unique` | Two `measure(...)` calls with the same literal name inside one `configure` or test method. | Tier 1: duplicate name. | Shipped (#132). |
-| `litmus/measurement-in-node` | A `measure(...)` call, either spelling, inside `cleanup`, a survey or audit function, a `before_each`/`after_each`, or at module scope. | Tier 1: outside a node. | Its own issue (#133). |
+| `litmus/measurement-in-node` | A `measure(...)` call, either spelling, inside `cleanup`, a survey or audit function, a `before_each`/`after_each`, or at module scope. | Tier 1: outside a node. | Shipped (#133). |
 
-Neither is part of #86; each was raised as its own issue per `docs/litmus-check.md`
-(*Adding a rule*). The `-> Verdict` and `litmus/gated-pass` rules already cover the
+Neither was part of #86; each was raised as its own issue per `docs/litmus-check.md`
+(*Adding a rule*) and both now ship. The `-> Verdict` and `litmus/gated-pass` rules already cover the
 gate a developer writes on `.in_limits`.
 
 ## What #86 delivers
