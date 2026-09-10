@@ -114,7 +114,7 @@ that reader is soon a stranger.
   every public module, class, function, and method under `src/` and `tools/` carries a
   docstring, shaped as above. `pyproject.toml` is the source of truth for the exact set;
   the exemptions there say why each exists (magic methods, `__init__`, the D1 coverage
-  rules under `tests/`). The gate checks presence and shape; whether the words state the
+  rules for test modules, `tests/` and the stub `litmus new` writes). The gate checks presence and shape; whether the words state the
   contract is still the reviewer's call.
 
 ## 6. Tests

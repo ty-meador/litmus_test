@@ -90,8 +90,11 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests document by name (STANDARDS.md §6): the coverage rules (D1xx) are off, the
-# format rules stay on so a docstring that is written is written the same way.
+# format rules stay on so a docstring that is written is written the same way. The
+# basename pattern reaches the pytest stub `litmus new` writes, which
+# tests/test_scaffold.py lints under this config from a temporary directory.
 "tests/**" = ["D1"]
+"test_*.py" = ["D1"]
 # The failure taxonomy's class names are fixed by PLAN.md section 2 and carried from
 # the legacy framework — they are the vocabulary the FT and the artifacts already use.
 # An `Error` suffix would rename a published contract to satisfy a naming convention.
