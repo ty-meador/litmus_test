@@ -19,6 +19,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `docs/hil/can.md`: the signed design note for a CAN bus interface contract —
+  typed frames, immutable acceptance filters, bus-off as an operational
+  condition, and silence as the abort safe-state. Design only; no code
+  change. Signed by Ty in !128 on 2026-09-09; recorded on issue #95.
 - Internal Inspector timeline presentation (issue #89): tail-first paging, errors-only
   filtering that keeps decoding and availability diagnostics, and stable capture
   numbers across the complete loaded chronology. Paging, filtering, and resizing never
