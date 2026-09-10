@@ -22,7 +22,7 @@ from urllib.parse import urljoin, urlsplit
 
 from litmus.errors import DeviceApiOperationFailure
 
-LOGGER = logging.getLogger("litmus")
+LOGGER = logging.getLogger(__name__)
 
 type DeviceMethod = Literal["GET", "PUT", "POST", "DELETE"]
 
