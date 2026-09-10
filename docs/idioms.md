@@ -532,17 +532,6 @@ class MyDevice(LitmusTest):
         raise TestFailure("device unreachable", "exit 0", str(result.exit_code))
 ```
 
-## Via-Routing — Framework-Managed Lifecycle
-Any `LitmusTest` whose `configure()` returns `{"ssh": SshInterface}` (or whose context otherwise carries an SSH interface) can serve as a via target. Pass it as the `via` param in `TestParams` — the framework automatically brings up the via device before `configure()`, merges its ctx (including the SSH interface), and scopes `utils.exec` to route through the tunnel. Cleanup runs automatically after the consuming device's cleanup.
-
-```python
-# Wiring — pass the gateway as `via`:
-gateway = Gateway(name="gateway")
-target = MyDevice(name="target", mac="aa:bb:cc:dd:ee:ff", via=gateway)
-```
-
-The SE never runs the via device's configure or cleanup manually. The framework owns the via device's lifecycle.
-
 ## Composability
 A device-level test can be dropped into a rack-level test without modification. "Push state up" to higher-level components; trust the framework lifecycle.
 
@@ -745,11 +734,3 @@ The runnable [`examples/wait_for_patterns.py`](https://gitlab.com/Tyler-Meador/l
 both placements from the legacy example. It also shows how polling observations flow
 through scoped logs, phase-boundary surveys, point-in-time artifacts, `run_data`, and the
 root `summary_tree` without adding another evidence API.
-
----
-
-## run_data — Structured Evidence
-
-Configure's return values flow into ctx and appear in `RunResult.run_data` automatically; the readings a leaf hands back with its verdict appear on that leaf's record. Class instances and non-serializable values are stripped from the ctx view. Override `run_data` only when you need computed or filtered output from the context.
-
-See `examples/run_data_evidence.py`.
