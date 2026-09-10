@@ -19,11 +19,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
-- `docs/hil/can.md`: the design note for a CAN bus interface contract —
+- `docs/hil/can.md`: the signed design note for a CAN bus interface contract —
   typed frames, immutable acceptance filters, bus-off as an operational
   condition, and silence as the abort safe-state. Design only; no code
-  change. Awaiting Ty's sign-off on the note before an implementation MR
-  opens (issue #95).
+  change. Signed by Ty in !128 on 2026-09-09; recorded on issue #95.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without
