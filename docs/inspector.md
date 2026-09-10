@@ -114,8 +114,48 @@ completed selection read gets a fresh presentation model; selection/load state r
 owned by `InspectorSelection`. The moved 70-DUT test exercises this composition without
 executing suite code or changing saved bytes.
 
-Screens, artifact modal/diff controls, latest-run discovery, and the entry point remain
-later increments under #89. No saved inspection runs suite code.
+The internal artifact navigation model
+(`litmus.inspector_artifact_navigation.ArtifactNavigation`) now groups the complete
+timeline's numbered pointers by recorded type. Types follow first appearance; captures
+within a type retain chronology order. Opening selects exactly the requested number,
+including one above nine or hidden by a filter; an invalid number is rejected instead
+of opening another capture. Single-view type navigation wraps and selects the new
+type's first capture, while capture navigation clamps at either end.
+
+Diff selection requires at least two captures of the same type. It starts with the
+single-view capture on the left and the first other capture on the right. The bracket
+actions cycle the left target and the arrow actions cycle the right target within that
+type. When a move reaches the other target, the two sides swap; they never collapse
+onto one capture. Leaving diff restores the original single-view selection. Targets
+retain their timeline number, full pointer record, recorded reference, and decoding
+kind for the existing contained capture reader. Empty paths remain selectable and
+produce that reader's unavailable diagnostic. A moved 70-DUT test opens null and named
+captures and the root result without suite execution or saved-byte changes.
+
+The internal artifact modal model (`litmus.inspector_artifact_view.ArtifactModal`)
+joins that selection to the saved run's capture reader and pages what it reads. A
+capture is printed in its recorded key order, so two captures of one type line up; an
+unavailable or undecodable capture shows the reader's diagnostic with the recorded
+reference and is never replaced by another file. In diff mode the two captures are
+aligned row by row and one page cursor moves both sides together, as the artifact
+table above specifies; a singleton type stays single without a reload, and every
+change of selection returns to the first page because a capture is read from its top.
+A delayed read never replaces a newer selection, in the pattern of the selection model.
+The shared 70-DUT recording in `tests/inspector_rack.py` proves the composition without
+suite execution or saved-byte changes.
+
+The main view (`litmus.inspector_app.InspectorApp`) is the first terminal screen,
+built on Textual by Ty's ruling of 2026-09-09. It renders the tab row, the tree, and
+the chronology pane from the models above and forwards the quick-reference keys, one
+model call per key: Inspect and Failures share one cursor, the chronology loads on
+cursor movement without Enter and names its owner when the node's records rolled up,
+arrows jump between Fail and Aborted rows without wrapping, `n`/`p` page, and `f`
+filters to errors while a truncation marker stays in place. The plain text of every
+redraw is kept on the app so the self-tests drive it against the recorded runs in
+`tests/inspector_rack.py` and a screenshot can be read back against this guide.
+
+The artifact modal screen, latest-run discovery, and the entry point remain later
+increments under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
