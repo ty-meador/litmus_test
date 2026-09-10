@@ -582,6 +582,333 @@ class RunEnv(Mapping[str, str]):
 
 
 @final
+class NodeRuntime:
+    """The lifecycle-facing half of a node's service object. Package-internal.
+
+    A node's ``TestUtils`` is two things: the surface authored code reads (``exec``,
+    ``ctx``, ``measure``, ...) and the state the lifecycle in ``base.py`` drives
+    around that code (the run bracket, the context phases, transport teardown,
+    timeline ownership, measurement sealing, router inheritance). This class is the
+    second thing. ``base.py`` holds one per node and drives it by these plain names;
+    :class:`TestUtils` holds the same object and reads its state on the author's
+    behalf, so the type checker sees every lifecycle call instead of a suppressed
+    private one (issue #126). Nothing here is in ``litmus.__all__``: a suite never
+    sees a runtime, and :func:`node_runtime` is how the framework reaches it.
+
+    The state is plain attributes, not properties: the runtime is a record the two
+    halves share, and a property on each field would say nothing the name does not.
+    """
+
+    __slots__ = (
+        "artifact_store",
+        "base_logger",
+        "ctx",
+        "env",
+        "env_filter_warning",
+        "in_configure",
+        "integration_hooks",
+        "local_exec",
+        "logger",
+        "measurements",
+        "opened_device_apis",
+        "owns_timeline",
+        "routing",
+        "scope",
+        "signal",
+        "timeline",
+        "timeline_paths",
+        "transports",
+        "utils",
+    )
+
+    def __init__(
+        self,
+        utils: TestUtils[Any],
+        *,
+        ctx: dict[str, Any] | None,
+        env: Mapping[str, str] | None,
+        env_allow: Iterable[str] | None,
+        env_deny: Iterable[str] | None,
+        logger: logging.Logger | None,
+        artifact_root: str | Path | None,
+        output_budget: int,
+        integration_hooks: IntegrationHooks | None,
+    ) -> None:
+        """Build the unscoped run seed behind ``utils``; :meth:`for_node` scopes it."""
+        self.utils = utils
+        self.ctx = RunContext(ctx)
+        self.base_logger = LOGGER if logger is None else logger
+        self.scope: tuple[str, ...] = ()
+        self.logger = ScopedLogger(self.base_logger, self.scope)
+        self.timeline: RunTimeline | None = None
+        self.timeline_paths: TimelinePaths | None = None
+        self.owns_timeline = False
+        source_env = os.environ if env is None else env
+        env_filter = _EnvFilter(allow=env_allow, deny=env_deny)
+        self.env = RunEnv(env_filter.apply(source_env, self.base_logger))
+        self.env_filter_warning: str | None = None
+        if (
+            env_filter.mode is not None
+            and source_env.get(_EnvFilter.DEBUG_KEY) == _EnvFilter.DEBUG_VALUE
+        ):
+            self.env_filter_warning = (
+                f"DEBUG mode detected, ignoring provided {env_filter.mode} list "
+                "and including ALL environment variables"
+            )
+        configured_artifact_root = artifact_root
+        if configured_artifact_root is None:
+            configured_artifact_root = self.env.get(
+                "LITMUS_ARTIFACT_ROOT", Path.cwd() / "artifacts"
+            )
+        self.artifact_store = _ArtifactStore(configured_artifact_root)
+        self.local_exec = LocalExec(output_budget=output_budget)
+        self.transports = _RunTransports(self.local_exec)
+        self.integration_hooks = (
+            IntegrationHooks() if integration_hooks is None else integration_hooks
+        )
+        self.routing = ExecRouting(
+            self.local_exec.run,
+            logger=self.logger,
+            on_open=self.transports.register,
+            output_budget=self.local_exec.output_budget,
+        )
+        self.signal = RunSignal(RunAbort())
+        self.in_configure = False
+        self.opened_device_apis: list[DeviceApiInterface] = []
+        # A list while the node's slots may still record; a tuple once sealed.
+        self.measurements: list[Measurement] | tuple[Measurement, ...] = []
+
+    # --- the run bracket ---------------------------------------------------------
+
+    async def begin_run(self) -> None:
+        """Open the run directory before the root lifecycle emits evidence."""
+        run_root = await asyncio.to_thread(self.artifact_store.begin_run)
+        self.timeline = RunTimeline(run_root)
+
+    async def end_run(self) -> None:
+        """Close any timeline handle left by an exceptional lifecycle exit."""
+        timeline = self.timeline
+        if timeline is not None:
+            await asyncio.to_thread(timeline.close_all)
+
+    async def persist_result(self, result: RunResult) -> Path:
+        """Publish the root result before appending its final timeline pointer."""
+        result_path = await self.artifact_store.persist_result(result)
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        self.logger.info(
+            "run result persisted -> %s",
+            result_path,
+            extra={
+                "artifact_name": "result",
+                "artifact_path": str(result_path),
+                "artifact_timestamp": timestamp,
+                "artifact_type": "run-result",
+            },
+        )
+        return result_path
+
+    # --- one node's view ----------------------------------------------------------
+
+    def for_node(
+        self,
+        node: str,
+        run_abort: RunAbort,
+        *,
+        discrete_log_file: bool,
+        isolate_context: bool,
+        audit_signal: AuditSignal | None = None,
+        inherit_route: bool = True,
+    ) -> NodeRuntime:
+        """Create one node-owned runtime, and its ``TestUtils`` view, from this node's policy."""
+        scoped: NodeRuntime = object.__new__(NodeRuntime)
+        scoped.utils = TestUtils(_runtime=scoped)
+        scoped.artifact_store = self.artifact_store
+        scoped.ctx = RunContext(owner=node) if isolate_context else self.ctx
+        scoped.env = self.env
+        scoped.env_filter_warning = self.env_filter_warning
+        scoped.base_logger = self.base_logger
+        scoped.scope = (*self.scope, node)
+        scoped.timeline = self.timeline
+        scoped.owns_timeline = self.timeline is not None and (
+            discrete_log_file or self.timeline_paths is None
+        )
+        if scoped.owns_timeline:
+            if self.timeline is None:
+                raise FrameworkContractViolation(
+                    node,
+                    detail="a node owns a timeline without an active run timeline",
+                )
+            scoped.timeline_paths = self.timeline.register(scoped.scope)
+        else:
+            scoped.timeline_paths = self.timeline_paths
+        scoped.logger = ScopedLogger(
+            self.base_logger,
+            scoped.scope,
+            timeline=scoped.timeline,
+            timeline_paths=scoped.timeline_paths,
+        )
+        if not self.scope and scoped.env_filter_warning is not None:
+            if scoped.timeline is not None and scoped.timeline_paths is not None:
+                scoped.timeline.write(
+                    scoped.timeline_paths,
+                    scope=scoped.scope,
+                    level=logging.WARNING,
+                    message=scoped.env_filter_warning,
+                    extra=None,
+                )
+            scoped.env_filter_warning = None
+        scoped.local_exec = self.local_exec
+        scoped.transports = self.transports
+        scoped.integration_hooks = self.integration_hooks
+        inherited = self.routing.child_run_params().router if inherit_route else None
+        scoped.routing = ExecRouting(
+            self.local_exec.run,
+            inherited=inherited,
+            logger=scoped.logger,
+            on_open=self.transports.register,
+            output_budget=self.local_exec.output_budget,
+        )
+        scoped.signal = RunSignal(run_abort, audit_signal)
+        scoped.in_configure = False
+        scoped.opened_device_apis = []
+        scoped.measurements = []
+        return scoped
+
+    def halt_signal(self) -> RunAbort:
+        """The run abort this node was scoped with."""
+        return self.signal._run_abort  # pyright: ignore[reportPrivateUsage]
+
+    # --- the context phases -------------------------------------------------------
+
+    def own_context(self, node: str) -> None:
+        """Name the authored instance whose ``configure()`` fills this context."""
+        if self.ctx.owner is None:
+            self.ctx.owner = node
+
+    def enter_configure(self) -> None:
+        """Open the route-declaration window around ``configure()``."""
+        self.in_configure = True
+
+    def merge_context(self, provided: Mapping[str, Any]) -> None:
+        """Merge ``configure()``'s return into the still-open context."""
+        self.ctx._merge(provided)  # pyright: ignore[reportPrivateUsage]
+
+    def exit_configure(self) -> None:
+        """Shut the window once ``configure()`` has settled, returned or raised."""
+        self.in_configure = False
+
+    def freeze_context(self) -> None:
+        """Close the context once ``configure()`` has settled."""
+        self.ctx._freeze()  # pyright: ignore[reportPrivateUsage]
+
+    # --- routing and transport teardown ----------------------------------------------
+
+    def log_exec_routing(self) -> None:
+        """Record this node's topology line, once per executed node.
+
+        Placed after ``configure`` for an authored node, since ``use_shell`` lives there
+        and the route is not final until it returns.
+        """
+        self.logger.info("exec routing: %s", self.routing.routing_line())
+
+    def inherit_router(self, router: ExecRouter | None) -> None:
+        """Install a via device's route so this node's exec borrows that hop.
+
+        A declared via with no hop is a framework bug, not a silent fall-through
+        to local exec.
+        """
+        if router is None:
+            node = self.scope[-1] if self.scope else "<unknown>"
+            raise FrameworkContractViolation(
+                node,
+                detail="a via hop was declared but no exec route was supplied",
+            )
+        self.routing.apply_run_params(RouterRunParams(router))
+
+    async def disconnect_opened(self) -> None:
+        """Close remotes and device-API sessions this node opened."""
+        await self.routing.disconnect_opened()
+        opened = list(reversed(self.opened_device_apis))
+        self.opened_device_apis.clear()
+        for handle in opened:
+            confirmed = False
+            with contextlib.suppress(Exception):
+                await handle.disconnect()
+                confirmed = handle.close_confirmed
+            self.logger.info(
+                "device-api close: %s confirmed=%s",
+                handle.handle_label,
+                confirmed,
+            )
+
+    async def cancel_opened(self) -> None:
+        """Hard-close this node's remotes and device-API sessions."""
+        await self.routing.cancel_opened()
+        opened = list(reversed(self.opened_device_apis))
+        self.opened_device_apis.clear()
+        await asyncio.gather(*(self._cancel_one_device_api(handle) for handle in opened))
+
+    async def cancel_in_flight(self) -> None:
+        """Hard-close every framework-managed transport known to this run."""
+        await self.transports.cancel_in_flight()
+
+    async def _cancel_one_device_api(self, handle: DeviceApiInterface) -> None:
+        confirmed = False
+        with contextlib.suppress(Exception):
+            await handle.cancel_in_flight()
+            confirmed = handle.close_confirmed
+        self.logger.info(
+            "device-api close: %s confirmed=%s",
+            handle.handle_label,
+            confirmed,
+        )
+
+    # --- the node's record ------------------------------------------------------
+
+    def seal_measurements(self) -> tuple[Measurement, ...]:
+        """Close this node's measurement record and return it.
+
+        Called when the node settles, on every terminal state; calling it again
+        returns the same record. Sealing is what makes a late ``measure`` a
+        ``ContractViolation``, in the pattern of ``ContextImmutable``.
+        """
+        if not isinstance(self.measurements, tuple):
+            self.measurements = tuple(self.measurements)
+        return self.measurements
+
+    def owned_log_path(self) -> Path | None:
+        """Return this node's authoritative JSON timeline when it owns one."""
+        if not self.owns_timeline or self.timeline_paths is None:
+            return None
+        return self.timeline_paths.json_lines
+
+    def owned_log_reference(self) -> str | None:
+        """Return the summary-tree link to this node's timeline when it owns one.
+
+        The link is the POSIX path of ``timeline.jsonl`` relative to the run directory,
+        which is the form the Inspector resolves against the directory it opened.
+        """
+        if not self.owns_timeline or self.timeline is None or self.timeline_paths is None:
+            return None
+        return self.timeline_paths.json_lines.relative_to(self.timeline.root).as_posix()
+
+    def close_timeline(self) -> None:
+        """Close this node's files at its terminal boundary."""
+        if self.owns_timeline and self.timeline is not None and self.timeline_paths is not None:
+            self.timeline.close(self.timeline_paths)
+
+
+def node_runtime(utils: TestUtils[Any]) -> NodeRuntime:
+    """The runtime behind a ``TestUtils``; the framework's way in, never the suite's.
+
+    A plain function rather than a property so the surface a suite author reads on
+    ``utils`` stays what the reference table lists.
+    """
+    # The one door between the two halves; every other lifecycle call goes through
+    # the runtime it returns. Kept private on TestUtils so no suite reads it by accident.
+    return utils._runtime  # pyright: ignore[reportPrivateUsage]
+
+
 class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
     """The single fully scoped service object passed to every lifecycle method.
 
@@ -597,29 +924,13 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
     method it types as ``utils: TestUtils[MyCtx]`` — pyright then catches a typo in a
     ctx key at the call site. Nothing forces a suite to parameterize; the default
     ``Mapping[str, Any]`` reproduces today's un-parameterized behavior exactly.
+
+    Everything the lifecycle drives lives on the :class:`NodeRuntime` this object holds;
+    the methods here are the author's reads and writes of that same state.
     """
 
     __test__ = False
-    __slots__ = (
-        "_artifact_store",
-        "_base_logger",
-        "_ctx",
-        "_env",
-        "_env_filter_warning",
-        "_in_configure",
-        "_integration_hooks",
-        "_local_exec",
-        "_logger",
-        "_measurements",
-        "_opened_device_apis",
-        "_owns_timeline",
-        "_routing",
-        "_scope",
-        "_signal",
-        "_timeline",
-        "_timeline_paths",
-        "_transports",
-    )
+    __slots__ = ("_runtime",)
 
     def __init__(
         self,
@@ -632,6 +943,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         artifact_root: str | Path | None = None,
         output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
         _integration_hooks: IntegrationHooks | None = None,
+        _runtime: NodeRuntime | None = None,
     ) -> None:
         """Create an unscoped run seed; lifecycle execution creates node views.
 
@@ -655,52 +967,26 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
                 ``exec`` this run issues, local or SSH. Defaults to
                 ``DEFAULT_EXEC_OUTPUT_BUDGET`` (4 MiB).
         """
-        self._ctx = RunContext(ctx)
-        self._base_logger = LOGGER if logger is None else logger
-        self._scope: tuple[str, ...] = ()
-        self._logger = ScopedLogger(self._base_logger, self._scope)
-        self._timeline: RunTimeline | None = None
-        self._timeline_paths: TimelinePaths | None = None
-        self._owns_timeline = False
-        source_env = os.environ if env is None else env
-        env_filter = _EnvFilter(allow=env_allow, deny=env_deny)
-        self._env = RunEnv(env_filter.apply(source_env, self._base_logger))
-        self._env_filter_warning: str | None = None
-        if (
-            env_filter.mode is not None
-            and source_env.get(_EnvFilter.DEBUG_KEY) == _EnvFilter.DEBUG_VALUE
-        ):
-            self._env_filter_warning = (
-                f"DEBUG mode detected, ignoring provided {env_filter.mode} list "
-                "and including ALL environment variables"
-            )
-        configured_artifact_root = artifact_root
-        if configured_artifact_root is None:
-            configured_artifact_root = self._env.get(
-                "LITMUS_ARTIFACT_ROOT", Path.cwd() / "artifacts"
-            )
-        self._artifact_store = _ArtifactStore(configured_artifact_root)
-        self._local_exec = LocalExec(output_budget=output_budget)
-        self._transports = _RunTransports(self._local_exec)
-        self._integration_hooks = (
-            IntegrationHooks() if _integration_hooks is None else _integration_hooks
+        if _runtime is not None:
+            # A node view over a runtime the lifecycle already scoped (NodeRuntime.for_node).
+            self._runtime = _runtime
+            return
+        self._runtime = NodeRuntime(
+            self,
+            ctx=ctx,
+            env=env,
+            env_allow=env_allow,
+            env_deny=env_deny,
+            logger=logger,
+            artifact_root=artifact_root,
+            output_budget=output_budget,
+            integration_hooks=_integration_hooks,
         )
-        self._routing = ExecRouting(
-            self._local_exec.run,
-            logger=self._logger,
-            on_open=self._transports.register,
-            output_budget=self._local_exec.output_budget,
-        )
-        self._signal = RunSignal(RunAbort())
-        self._in_configure = False
-        self._opened_device_apis: list[DeviceApiInterface] = []
-        # A list while the node's slots may still record; a tuple once sealed.
-        self._measurements: list[Measurement] | tuple[Measurement, ...] = []
 
     @property
     def logger(self) -> ScopedLogger:
         """Logger whose records are tagged with this node's full scope."""
-        return self._logger
+        return self._runtime.logger
 
     @property
     def ctx(self) -> CtxT:
@@ -711,7 +997,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         ``utils: TestUtils[MyCtx]`` (issue #75). An un-parameterized caller sees the
         same ``Mapping[str, Any]`` as before.
         """
-        return cast(CtxT, self._ctx)
+        return cast(CtxT, self._runtime.ctx)
 
     @property
     def env(self) -> RunEnv:
@@ -723,17 +1009,17 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         the mapping, ``RunEnv.require``, ``text``, and ``port`` read a bench variable
         and Fail the run naming it when it is missing or malformed.
         """
-        return self._env
+        return self._runtime.env
 
     @property
     def signal(self) -> RunSignal:
         """Read-only view of the run-level integration halt signal."""
-        return self._signal
+        return self._runtime.signal
 
     @property
     def artifact_root(self) -> Path:
         """Absolute directory where this run's captured evidence is stored."""
-        return self._artifact_store.root
+        return self._runtime.artifact_store.root
 
     @property
     def exec_route(self) -> str:
@@ -746,7 +1032,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         to know whether there is a device on the other end of ``exec`` at the phase it
         fires, which the phase alone cannot say.
         """
-        router = self._routing.router
+        router = self._runtime.routing.router
         if router is None or router.ssh is None:
             return "local"
         return router.ssh.endpoint
@@ -758,9 +1044,9 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         persistence failures therefore produce neither a misleading pointer nor a
         partially published artifact.
         """
-        artifact_path = await self._artifact_store.capture(artifact)
+        artifact_path = await self._runtime.artifact_store.capture(artifact)
         timestamp = artifact.timestamp.isoformat().replace("+00:00", "Z")
-        self._logger.info(
+        self._runtime.logger.info(
             "artifact captured [%s:%s] -> %s",
             artifact.type,
             artifact.name,
@@ -773,22 +1059,6 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             },
         )
         return artifact_path
-
-    async def _persist_result(self, result: RunResult) -> Path:
-        """Publish the root result before appending its final timeline pointer."""
-        result_path = await self._artifact_store.persist_result(result)
-        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        self._logger.info(
-            "run result persisted -> %s",
-            result_path,
-            extra={
-                "artifact_name": "result",
-                "artifact_path": str(result_path),
-                "artifact_timestamp": timestamp,
-                "artifact_type": "run-result",
-            },
-        )
-        return result_path
 
     async def exec(self, command: str) -> ExecResult:
         """Run ``command`` through this node's active route.
@@ -804,21 +1074,22 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         `CancelledError` still propagates: that is TaskGroup teardown, not a
         command outcome.
         """
-        self._logger.info("attempting to run command >%s<", command)
+        logger = self._runtime.logger
+        logger.info("attempting to run command >%s<", command)
         try:
-            result = await self._routing.exec(command)
+            result = await self._runtime.routing.exec(command)
         except ConnectionError as error:
             result = ExecResult.settled("", str(error), None)
         if result.stderr:
-            self._logger.error("stderr: \n%s", result.stderr)
-        self._logger.info("exit code: %s", result.exit_code)
+            logger.error("stderr: \n%s", result.stderr)
+        logger.info("exit code: %s", result.exit_code)
         if result.truncated:
-            self._logger.warning(
+            logger.warning(
                 "exec output truncated: captured %s bytes (budget %s)",
                 result.captured_bytes,
-                self._local_exec.output_budget,
+                self._runtime.local_exec.output_budget,
             )
-        self._logger.info("stdout: \n%s", result.stdout)
+        logger.info("stdout: \n%s", result.stdout)
         return result
 
     async def wait_for(
@@ -864,13 +1135,13 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             mac: Device MAC in any usual form (colons, dashes, or bare hex).
             ping_count: ICMP packets per `ping()`. Defaults to 1.
         """
-        router = self._routing.router
+        router = self._runtime.routing.router
         cache_key = router.label if router is not None else "local"
         return ArpResolver(
             mac=mac,
             ping_count=ping_count,
             exec_fn=self.exec,
-            logger=self._logger,
+            logger=self._runtime.logger,
             cache_key=cache_key,
         )
 
@@ -902,8 +1173,9 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         """
         require_connection_pair(host, username)
         declares = host is not None or via is not None or not inherit or not propagate
-        if declares and not self._in_configure:
-            node = self._scope[-1] if self._scope else "<unknown>"
+        if declares and not self._runtime.in_configure:
+            scope = self._runtime.scope
+            node = scope[-1] if scope else "<unknown>"
             raise ContractViolation(
                 node,
                 detail=(
@@ -913,7 +1185,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
                     "with no arguments to read the active route"
                 ),
             )
-        return await self._routing.use_shell(
+        return await self._runtime.routing.use_shell(
             host=host,
             username=username,
             port=port,
@@ -945,7 +1217,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         propagate: bool = True,
     ) -> Shell:
         """Open an auxiliary endpoint without changing this node's exec route."""
-        return await self._routing.get_shell(
+        return await self._runtime.routing.get_shell(
             host=host,
             username=username,
             port=port,
@@ -993,7 +1265,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             verify=verify,
             follow_redirects=follow_redirects,
             request_timeout=request_timeout,
-            logger=self._logger,
+            logger=self._runtime.logger,
         )
         return await self._open_device_api(backend)
 
@@ -1018,7 +1290,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             base_url=base_url,
             headers=headers,
             request_timeout=request_timeout,
-            logger=self._logger,
+            logger=self._runtime.logger,
         )
         return await self._open_device_api(backend)
 
@@ -1066,225 +1338,29 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
                 recorded in this node, or when the call comes from outside
                 ``configure()`` or the test method.
         """
-        node = self._scope[-1] if self._scope else "<unscoped>"
+        runtime = self._runtime
+        node = runtime.scope[-1] if runtime.scope else "<unscoped>"
         # The task-local binding, not a flag on this object, is the slot guard: an
         # audit sampler shares this object but runs in a task that was created before
         # the slot bound it, so it sees no binding and is refused.
-        if current_utils.get() is not self or isinstance(self._measurements, tuple):
+        if current_utils.get() is not self or isinstance(runtime.measurements, tuple):
             raise MeasurementSealed(node, measurement=measurement_label(name))
         measurement = new_measurement(node, name, value, unit=unit, limits=limits)
-        if any(recorded.name == measurement.name for recorded in self._measurements):
+        if any(recorded.name == measurement.name for recorded in runtime.measurements):
             raise MeasurementDuplicate(node, measurement=measurement.name)
-        self._measurements.append(measurement)
+        runtime.measurements.append(measurement)
         # One scoped line per call, so the chronology carries the number next to what
         # the suite was doing; a warning when out of window so it stands out in
         # timeline.log without the Floor Technician filtering for it.
         level = logging.WARNING if measurement.in_limits is False else logging.INFO
-        self._logger.log(level, "measurement: %s", _measurement_line(measurement))
+        runtime.logger.log(level, "measurement: %s", _measurement_line(measurement))
         return measurement
-
-    def _seal_measurements(self) -> tuple[Measurement, ...]:
-        """Close this node's measurement record and return it. Framework only.
-
-        Called when the node settles, on every terminal state; calling it again
-        returns the same record. Sealing is what makes a late ``measure`` a
-        ``ContractViolation``, in the pattern of ``ContextImmutable``.
-        """
-        if not isinstance(self._measurements, tuple):
-            self._measurements = tuple(self._measurements)
-        return self._measurements
 
     async def _open_device_api(self, backend: DeviceApiInterface) -> DeviceApi:
         """Connect, register for halt, and log the session without credentials."""
-        self._logger.info("device-api connect: %s", backend.handle_label)
+        runtime = self._runtime
+        runtime.logger.info("device-api connect: %s", backend.handle_label)
         await backend.connect()
-        self._opened_device_apis.append(backend)
-        self._transports.register_device_api(backend)
+        runtime.opened_device_apis.append(backend)
+        runtime.transports.register_device_api(backend)
         return DeviceApi(backend)
-
-    def _log_exec_routing(self) -> None:
-        """Record this node's topology line. The engine calls it once per executed node.
-
-        Placed after `configure` for an authored node, since `use_shell` lives there
-        and the route is not final until it returns.
-        """
-        self._logger.info("exec routing: %s", self._routing.routing_line())
-
-    def _inherit_router(self, router: ExecRouter | None) -> None:
-        """Install a via device's route so this node's exec borrows that hop.
-
-        A declared via with no hop is a framework bug, not a silent fall-through
-        to local exec.
-        """
-        if router is None:
-            node = self._scope[-1] if self._scope else "<unknown>"
-            raise FrameworkContractViolation(
-                node,
-                detail="a via hop was declared but no exec route was supplied",
-            )
-        self._routing.apply_run_params(RouterRunParams(router))
-
-    async def _disconnect_opened(self) -> None:
-        """Close remotes and device-API sessions this node opened."""
-        await self._routing.disconnect_opened()
-        await self._disconnect_opened_device_apis()
-
-    async def _cancel_opened(self) -> None:
-        """Hard-close this node's remotes and device-API sessions."""
-        await self._routing.cancel_opened()
-        await self._cancel_opened_device_apis()
-
-    async def _disconnect_opened_device_apis(self) -> None:
-        opened = list(reversed(self._opened_device_apis))
-        self._opened_device_apis.clear()
-        for handle in opened:
-            confirmed = False
-            with contextlib.suppress(Exception):
-                await handle.disconnect()
-                confirmed = handle.close_confirmed
-            self._logger.info(
-                "device-api close: %s confirmed=%s",
-                handle.handle_label,
-                confirmed,
-            )
-
-    async def _cancel_opened_device_apis(self) -> None:
-        opened = list(reversed(self._opened_device_apis))
-        self._opened_device_apis.clear()
-        await asyncio.gather(*(self._cancel_one_device_api(handle) for handle in opened))
-
-    async def _cancel_one_device_api(self, handle: DeviceApiInterface) -> None:
-        confirmed = False
-        with contextlib.suppress(Exception):
-            await handle.cancel_in_flight()
-            confirmed = handle.close_confirmed
-        self._logger.info(
-            "device-api close: %s confirmed=%s",
-            handle.handle_label,
-            confirmed,
-        )
-
-    def _own_context(self, node: str) -> None:
-        """Name the authored instance whose ``configure()`` fills this context. Framework only."""
-        if self._ctx.owner is None:
-            self._ctx.owner = node
-
-    def _merge_context(self, provided: Mapping[str, Any]) -> None:
-        """Merge ``configure()``'s return into the still-open context. Framework only."""
-        self._ctx._merge(provided)  # pyright: ignore[reportPrivateUsage]
-
-    def _freeze_context(self) -> None:
-        """Close the context once ``configure()`` has settled. Framework only."""
-        self._ctx._freeze()  # pyright: ignore[reportPrivateUsage]
-
-    def _enter_configure(self) -> None:
-        """Open the route-declaration window. Framework only, around ``configure()``."""
-        self._in_configure = True
-
-    def _exit_configure(self) -> None:
-        """Shut the window once ``configure()`` has settled, returned or raised."""
-        self._in_configure = False
-
-    def _halt_signal(self) -> RunAbort:
-        """The run abort this node was scoped with. Framework lifecycle only."""
-        return self._signal._run_abort  # pyright: ignore[reportPrivateUsage]
-
-    def _for_node(
-        self,
-        node: str,
-        run_abort: RunAbort,
-        *,
-        discrete_log_file: bool,
-        isolate_context: bool,
-        audit_signal: AuditSignal | None = None,
-        inherit_route: bool = True,
-    ) -> TestUtils:
-        """Create one node-owned view from this node's child inheritance policy."""
-        scoped = object.__new__(TestUtils)
-        scoped._artifact_store = self._artifact_store
-        scoped._ctx = RunContext(owner=node) if isolate_context else self._ctx
-        scoped._env = self._env
-        scoped._env_filter_warning = self._env_filter_warning
-        scoped._base_logger = self._base_logger
-        scoped._scope = (*self._scope, node)
-        scoped._timeline = self._timeline
-        scoped._owns_timeline = self._timeline is not None and (
-            discrete_log_file or self._timeline_paths is None
-        )
-        if scoped._owns_timeline:
-            if self._timeline is None:
-                raise FrameworkContractViolation(
-                    node,
-                    detail="a node owns a timeline without an active run timeline",
-                )
-            scoped._timeline_paths = self._timeline.register(scoped._scope)
-        else:
-            scoped._timeline_paths = self._timeline_paths
-        scoped._logger = ScopedLogger(
-            self._base_logger,
-            scoped._scope,
-            timeline=scoped._timeline,
-            timeline_paths=scoped._timeline_paths,
-        )
-        if not self._scope and scoped._env_filter_warning is not None:
-            if scoped._timeline is not None and scoped._timeline_paths is not None:
-                scoped._timeline.write(
-                    scoped._timeline_paths,
-                    scope=scoped._scope,
-                    level=logging.WARNING,
-                    message=scoped._env_filter_warning,
-                    extra=None,
-                )
-            scoped._env_filter_warning = None
-        scoped._local_exec = self._local_exec
-        scoped._transports = self._transports
-        scoped._integration_hooks = self._integration_hooks
-        inherited = self._routing.child_run_params().router if inherit_route else None
-        scoped._routing = ExecRouting(
-            self._local_exec.run,
-            inherited=inherited,
-            logger=scoped._logger,
-            on_open=self._transports.register,
-            output_budget=self._local_exec.output_budget,
-        )
-        scoped._signal = RunSignal(run_abort, audit_signal)
-        scoped._in_configure = False
-        scoped._opened_device_apis = []
-        scoped._measurements = []
-        return scoped
-
-    async def _cancel_in_flight(self) -> None:
-        """Hard-close every framework-managed transport known to this run."""
-        await self._transports.cancel_in_flight()
-
-    async def _begin_run(self) -> None:
-        """Open the run directory before the root lifecycle emits evidence."""
-        run_root = await asyncio.to_thread(self._artifact_store.begin_run)
-        self._timeline = RunTimeline(run_root)
-
-    async def _end_run(self) -> None:
-        """Close any timeline handle left by an exceptional lifecycle exit."""
-        timeline = self._timeline
-        if timeline is not None:
-            await asyncio.to_thread(timeline.close_all)
-
-    def _owned_log_path(self) -> Path | None:
-        """Return this node's authoritative JSON timeline when it owns one."""
-        if not self._owns_timeline or self._timeline_paths is None:
-            return None
-        return self._timeline_paths.json_lines
-
-    def _owned_log_reference(self) -> str | None:
-        """Return the summary-tree link to this node's timeline when it owns one.
-
-        The link is the POSIX path of ``timeline.jsonl`` relative to the run directory,
-        which is the form the Inspector resolves against the directory it opened.
-        """
-        if not self._owns_timeline or self._timeline is None or self._timeline_paths is None:
-            return None
-        return self._timeline_paths.json_lines.relative_to(self._timeline.root).as_posix()
-
-    def _close_timeline(self) -> None:
-        """Close this node's files at its terminal boundary."""
-        if self._owns_timeline and self._timeline is not None and self._timeline_paths is not None:
-            self._timeline.close(self._timeline_paths)
