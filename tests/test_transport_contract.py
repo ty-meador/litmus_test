@@ -1,8 +1,8 @@
 """Shared RemoteInterface contract, parametrized over every transport.
 
-MockTransport and the loopback SshInterface both sit this bar. A new transport
-lands against the same assertions by adding one fixture and listing it in
-TRANSPORTS — serial/UART is the next name on that list.
+MockTransport, the loopback SshInterface, and SerialInterface all sit this bar.
+A new transport lands against the same assertions by adding one fixture and
+listing it in TRANSPORTS.
 """
 
 from __future__ import annotations
@@ -12,11 +12,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import final
 
 import pytest
+from tests.fake_console import open_pty_console
 from tests.loopback_sshd import LoopbackSshd
 
 from litmus.executor import ExecResult
 from litmus.mock import MockTransport
 from litmus.remote import RemoteInterface
+from litmus.serial import SerialInterface
 from litmus.ssh import SshInterface
 
 type InFlightWaiter = Callable[[RemoteInterface], Awaitable[None]]
@@ -64,6 +66,10 @@ async def _wait_mock_in_flight(transport: RemoteInterface) -> None:
 
 
 async def _wait_ssh_in_flight(_transport: RemoteInterface) -> None:
+    await asyncio.sleep(0.2)
+
+
+async def _wait_serial_in_flight(_transport: RemoteInterface) -> None:
     await asyncio.sleep(0.2)
 
 
@@ -115,8 +121,27 @@ async def ssh_peer() -> AsyncIterator[TransportPeer]:
         await listener.aclose()
 
 
+@pytest.fixture
+async def serial_peer() -> AsyncIterator[TransportPeer]:
+    """Pty-backed SerialInterface. `block` parks until the hard-close kills it."""
+    async with open_pty_console() as (device, _console):
+        transport = SerialInterface(device=device, baud=115200)
+        peer = TransportPeer(
+            transport,
+            success="uname",
+            fail="fail",
+            block="sleep 30",
+            fail_stderr="",
+            wait_in_flight=_wait_serial_in_flight,
+        )
+        try:
+            yield peer
+        finally:
+            await transport.disconnect()
+
+
 # Adding a transport: add one fixture above, then name it here.
-TRANSPORTS = ("mock_peer", "ssh_peer")
+TRANSPORTS = ("mock_peer", "ssh_peer", "serial_peer")
 
 
 @pytest.fixture(params=TRANSPORTS)
@@ -130,8 +155,9 @@ def peer(request: pytest.FixtureRequest) -> TransportPeer:
 async def _assert_named_hard_close(task: asyncio.Task[ExecResult]) -> None:
     """In-flight exec failed because the resource died, named `transport closed`.
 
-    Mock raises `ConnectionError`. SSH absorbs the drop into `ExecResult` with
-    `exit_code == -1`. The cause name is the contract, not the settlement shape.
+    Mock raises `ConnectionError`. SSH and serial absorb the drop into
+    `ExecResult` with `exit_code == -1`. The cause name is the contract, not
+    the settlement shape.
     """
     try:
         result: ExecResult | BaseException = await task

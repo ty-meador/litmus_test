@@ -43,7 +43,7 @@ once, so each note can cite them instead of repeating them.
 | CAN bus | [can.md](can.md) | #95 | SIGNED 2026-09-09 |
 | I2C / SPI | [i2c-spi.md](i2c-spi.md) | #96 | SIGNED 2026-09-09 |
 | Device API (CoAP/HTTP) | [device-api.md](device-api.md) | #97 | SIGNED 2026-09-09 |
-| Serial (UART) | [serial.md](serial.md) | #91 | DRAFT — landed in its own MR |
+| Serial (UART) | [serial.md](serial.md) | #91 | SIGNED 2026-09-10 |
 
 Every note this page introduces is now signed and on `main`. Each landed as an
 independent MR carrying its note and the required `mkdocs.yml` navigation entry,
@@ -55,8 +55,8 @@ that adds the target.
 
 Serial/UART is Cayde's vertical (ruled by Ty as both a local peer of SSH and the
 same transport reached through a `via` hop). It is listed here for navigation
-only — its note lives at `docs/hil/serial.md`, drafted and maintained in its own
-MR, and is not one of the five notes this page introduces.
+only — its note lives at `docs/hil/serial.md` and is not one of the five notes
+this page introduces.
 
 ## What every note holds in common
 
