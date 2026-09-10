@@ -22,7 +22,15 @@ diagnostic. Malformed complete records, duplicate keys, non-finite numbers, and
 unsupported versions are explicit diagnostics, and later valid records remain readable.
 Missing or unreadable logs produce a file-level unavailable diagnostic. These are reader
 observations, never test verdicts. The timeline reader does not open artifact pointers
-or resolve tree ownership.
+or resolve tree ownership. Its `read_reference(run_root, reference)` boundary opens
+a recorded POSIX `log_path` only beneath the selected run directory, preserving the
+complete relative path after a move. Empty, absolute, traversing, missing, non-file,
+and symlink-escaping references produce unavailable diagnostics. The read retains the
+recorded reference and the resolved source path; a reference that cannot resolve has
+no source path. It never searches another directory for a matching basename. Timeline
+and capture readers share one checked, cached loader for the packaged schemas; evidence
+is read afresh on every call. The operator's selected run directory may itself use
+symlinks or `..`; the reader resolves that directory before containing recorded links.
 
 The internal capture reader (`litmus.inspector_artifacts.ArtifactReader`) now reads
 absolute pointers beneath an opened run root. An explicit, established original root
@@ -34,9 +42,80 @@ retaining additive fields and explicit null observations. Missing files, malform
 and unsupported versions are diagnostics that retain the recorded reference. JSON parsing
 is shared with the timeline reader, so duplicate keys and non-finite values are refused
 consistently. The original-root mapping remains an input to this internal component;
-establishing it from saved records belongs to the later saved-run loader. Screens, tree
-ownership, timeline containment, root discovery, and the entry point remain later
-increments under #89.
+the saved-run loader establishes it from publication evidence.
+
+The internal tree reader (`litmus.inspector_tree.TreeReader`) now opens a selected
+result through that validated result boundary. It resolves the operator's selection
+before deriving the run root, so a symlink such as `latest/result.json` or a path with
+`..` opens the same saved evidence as its direct path. References inside saved records
+still obey the capture reader's traversal and containment checks.
+`read_selected()` retains the resolved run directory alongside the validated tree;
+`read()` returns just that tree through the same selection boundary. Unresolvable
+operator paths produce unavailable diagnostics in either form.
+Its `InspectorTree` preserves every recorded node in declaration preorder, including
+pending descendants, and keeps full name components rather than splitting display
+breadcrumbs. Stable row indices keep duplicate names distinct. Inspect selection and
+the Failures projection share the same rows: previous/next failure includes Fail and
+Aborted, skips Pass and pending, and does not wrap. The model retains failure causes,
+timeout fields, and additive evidence; declared readings absent from evidence are
+exposed by name, while null and zero remain present observations.
+
+For an executed selection, the model identifies its own or nearest ancestor's recorded
+timeline link. A pending selection has no owner and must render **not run**. An owner
+identifies a recorded link, not proof the file is available: the model opens no timeline,
+and its caller must still enforce run-root containment and report unavailable files.
+
+The internal selection model (`litmus.inspector_selection.InspectorSelection`) joins
+that tree to contained timeline loading for both Inspect and Failures. Its caller supplies
+the validated tree and the opened directory containing that same result, then navigates
+through the selection model. Selection clears the previous chronology before I/O, keeps
+the claim and its recorded owner together, and reads only through `read_reference`.
+Every request has its own identity: a delayed load cannot overwrite a later selection,
+even if the cursor returned to the same row. Pending rows render **not run**; executed
+rows with no owner or an unreadable file render **log unavailable**. Complete records,
+their scopes, partial reads, and decoding diagnostics remain intact. Reselection reads
+evidence afresh. Cancellation and reader defects propagate to the caller and return only
+the affected current load to idle; they never restore an earlier log or become verdicts.
+
+The internal saved-run loader (`litmus.inspector_run.SavedRunReader`) now opens a
+validated result, its contained root timeline, and a capture reader for that same run.
+It uses `TreeReader.read_selected()` so selection errors and the resolved run boundary
+have one owner. The tree's chronology ownership also governs this opening: a pending
+root supplies no timeline or relocation origin, even if a damaged record gives it a link.
+It establishes the original root only from one final root-scoped pointer with
+`artifact_type="run-result"`, `artifact_name="result"`, and an absolute,
+non-traversing path to `result.json`. The result's ancestor names must agree with its
+tree root; full name components are compared without splitting breadcrumbs, and a
+disagreement names the result defect instead of directing the technician to the log. A missing,
+damaged, ambiguous, or misplaced publication leaves the original root explicitly
+unavailable while preserving the saved tree and timeline diagnostics. Complete records
+without a trailing newline remain readable. The loader never guesses from a basename
+or timestamp, reads the original station, or edits saved pointers. Reopening reads the
+evidence afresh. Without a mapping, captures already beneath the opened root remain
+readable, but pointers outside it cannot relocate.
+
+The internal timeline presentation model (`litmus.inspector_timeline_view.TimelineView`)
+pages a completed selection's chronology without changing its recorded data. It opens
+at the tail with filtering off; toggling errors returns to the first page. The filter
+retains Python `error` and `critical` records (case-insensitively) and every reader
+diagnostic. Custom levels have no inferred severity and remain in the full view.
+Each page retains physical line numbers, scopes, timestamps, and additive fields.
+Resizing changes the number of records per page and clamps the current page; an empty
+projection has one empty page. The terminal supplies that size after reserving its
+header and controls. This model counts records, not wrapped terminal lines.
+
+Structured pointers receive one-based numbers across the complete loaded chronology,
+before paging or filtering. Lookup keeps the same target even when its row is hidden;
+message text never supplies a path. An empty recorded path remains numbered so the
+capture reader can diagnose it. All numbers remain addressable, including those above
+the `1`–`9` direct shortcuts. The returned record supplies the pointer fields to the
+saved run's capture reader, including the distinct `run-result` decoding kind. A new
+completed selection read gets a fresh presentation model; selection/load state remains
+owned by `InspectorSelection`. The moved 70-DUT test exercises this composition without
+executing suite code or changing saved bytes.
+
+Screens, artifact modal/diff controls, latest-run discovery, and the entry point remain
+later increments under #89. No saved inspection runs suite code.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery

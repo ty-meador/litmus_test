@@ -23,17 +23,69 @@ of feature parity: the Python Inspector is still separate work.
   `DeviceApi`, `DeviceRequest`, `DeviceResponse`, and
   `DeviceApiOperationFailure` on the public surface; `TestUtils.get_http` and
   `get_coap` open a session. HTTP 4xx/5xx is data. Retries default to zero and
-  each attempt is evidenced. Abort closes the session. Mock, HTTP/1.1, and
+  each attempt is evidenced. Declared methods are GET, PUT, POST and DELETE;
+  PATCH is refused at the call site as undeclared (signed note #97, decision 7).
+  Abort closes the session. Mock, HTTP/1.1, and
   CoAP CON/ACK backends share one contract suite. Attempt logs withhold every
   header value unless the author opts that name into `evidence_headers` — a
   secret-name allowlist cannot keep credentials out of artifacts. Core install
   unchanged (stdlib asyncio).
+- Device API (CoAP/HTTP) signed interface design note (issue #97): typed
+  request/response, status-as-data, retries as evidence, closed-session
+  abort, deny-by-default request-header values (`evidence_headers`
+  opt-in; CoAP names are registered option names, not numbers),
+  response option values never recorded by the framework, and a
+  refusal to treat HTTP as `exec` with a URL. Design only;
+  no Device API implementation or public Python name is introduced.
+  Signed by Ty in !130 on 2026-09-09; recorded on issue #97. PATCH stays
+  undeclared and refused at the call site; declaring it is a later note.
+- `docs/hil/i2c-spi.md`: the signed design note for I2C and SPI transaction
+  contracts — atomic transfers, I2C NACK/arbitration, SPI chip-select and
+  mode, and a released bus as the abort safe-state. Design only; no code
+  change. Signed by Ty in !129 on 2026-09-09; recorded on issue #96.
+- `docs/hil/can.md`: the signed design note for a CAN bus interface contract —
+  typed frames, immutable acceptance filters, bus-off as an operational
+  condition, and silence as the abort safe-state. Design only; no code
+  change. Signed by Ty in !128 on 2026-09-09; recorded on issue #95.
+- Internal Inspector timeline presentation (issue #89): tail-first paging, errors-only
+  filtering that keeps decoding and availability diagnostics, and stable capture
+  numbers across the complete loaded chronology. Paging, filtering, and resizing never
+  change a number's target or edit the saved records. A moved 70-DUT proof resolves
+  numbered captures through the existing contained reader without suite execution.
+  Terminal screens, artifact modal/diff controls, and the entry point remain later work.
+- Internal Inspector saved-run loader (issue #89): establishes an original run root
+  from one final root-scoped result publication, then relocates captures through the
+  existing contained reader. Missing, damaged, ambiguous, or misplaced publication
+  evidence preserves the tree and chronology with an explicit unavailable mapping.
+  Operator selections share the tree reader's resolution and diagnostic boundary;
+  a pending root cannot supply chronology or relocation from a damaged recorded link.
+  Disagreement between result and tree roots names the result defect explicitly.
+  Tested against a moved 70-DUT run without suite execution or evidence changes;
+  screens, latest-run discovery, and the entry point remain later increments.
+- Internal Inspector selection model (issue #89): Inspect and Failures navigation
+  loads the selected node's contained timeline, clearing the previous chronology
+  before I/O. Each load has its own identity, so delayed completion cannot replace
+  a newer selection's evidence. Pending nodes render not run; missing logs remain
+  explicitly unavailable. Tested from a moved 70-DUT result without suite execution;
+  screens and the entry point remain later increments.
+- Internal Inspector timeline containment (issue #89): reads recorded run-relative
+  log paths beneath the opened run, retains the complete path after relocation, and
+  reports unavailable references without reading another run's chronology. Timeline
+  and capture readers now share checked, cached packaged schemas. Screens and the
+  entry point remain separate increments.
+- Internal Inspector saved-tree model (issue #89): schema-validated result loading,
+  declaration-order rows, shared Fail/Aborted navigation, and nearest-ancestor log
+  ownership. Pending nodes never borrow chronology, duplicate names retain distinct
+  indices, and missing declared readings remain named. Operator selections resolve
+  symlinks and `..` before establishing the run root, without relaxing recorded-reference
+  containment. Tested from a moved 70-DUT result without live suite execution;
+  terminal screens remain a later increment.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without
   substituting captures from the original run. Publishes the existing version-1
   artifact envelope schema; shared strict JSON parsing keeps both Inspector readers
-  consistent. Root discovery, screens, and the entry point remain later work.
+  consistent. Screens and the entry point remain later work.
 - `litmus[pylsp]` extra: a `python-lsp-server` plugin over the `litmus_check`
   registry. Every `--list-rules` finding is a diagnostic on the open buffer;
   `litmus/gated-pass` wraps an unconditional `return PASS` (derived from
