@@ -47,7 +47,7 @@ from litmus.errors import (
 from litmus.run_data import MEASUREMENTS_KEY, JsonObject, invalid_evidence_key, json_evidence
 from litmus.verdict import Verdict
 
-LOGGER = logging.getLogger("litmus")
+LOGGER = logging.getLogger(__name__)
 
 
 class State(StrEnum):
