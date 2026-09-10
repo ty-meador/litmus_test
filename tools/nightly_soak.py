@@ -68,6 +68,7 @@ class SoakRun:
 
     @property
     def green(self) -> bool:
+        """A run is green only when pytest exited 0 and named no failing test."""
         return self.returncode == 0 and not self.failed
 
     def describe(self) -> str:
@@ -89,10 +90,12 @@ class NightReport:
 
     @property
     def green(self) -> bool:
+        """The night is green only when every run was; one red run is a red night."""
         return all(run.green for run in self.runs)
 
     @property
     def red_runs(self) -> tuple[SoakRun, ...]:
+        """The runs that went red, in the order they ran, for the report to name."""
         return tuple(run for run in self.runs if not run.green)
 
     def tally(self) -> str:
@@ -105,6 +108,7 @@ class NightReport:
         return ", ".join(f"{series} {ok}/{total}" for series, (ok, total) in counts.items())
 
     def headline(self) -> str:
+        """One line naming the verdict, the date, and the commit, for the issue and Discord."""
         verdict = "green" if self.green else "RED"
         return f"Nightly soak {verdict} {self.date} at {self.sha}: {self.tally()}"
 
