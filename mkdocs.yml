@@ -39,6 +39,9 @@ nav:
       - Overview: hil/index.md
       - GPIO (design note): hil/gpio.md
       - PWM (design note): hil/pwm.md
+      - CAN bus (design note): hil/can.md
+      - I2C/SPI (design note): hil/i2c-spi.md
+      - Device API (design note): hil/device-api.md
       - Serial/UART (design note): hil/serial.md
 
 plugins:
