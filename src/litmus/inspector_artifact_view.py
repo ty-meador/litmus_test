@@ -56,7 +56,7 @@ class DiffRow:
     same: bool
 
 
-def render_lines(content: ArtifactContent | ArtifactDiagnostic) -> tuple[str, ...]:
+def _render_lines(content: ArtifactContent | ArtifactDiagnostic) -> tuple[str, ...]:
     """Turn a read capture into printable lines, or a diagnostic into two.
 
     A capture is pretty-printed in its recorded key order so that two captures of one
@@ -236,7 +236,7 @@ class ArtifactModal:
 
     async def _pane(self, target: ArtifactTarget) -> ArtifactPane:
         content = await self._reader.read(target.reference, kind=target.kind)
-        return ArtifactPane(target, content, render_lines(content))
+        return ArtifactPane(target, content, _render_lines(content))
 
 
 def single_rows(modal: ArtifactModal) -> tuple[str, ...]:
