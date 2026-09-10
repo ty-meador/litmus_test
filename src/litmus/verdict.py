@@ -1,5 +1,4 @@
-"""The non-forgeable PASS sentinel, the `Verdict` every test method returns, and the
-evidence a verdict carries.
+"""The non-forgeable PASS sentinel and the `Verdict` every test method returns.
 
 A test method has exactly two exits: `return PASS(...)` and `raise TestFailure(...)`.
 Evidence leaves with the verdict. The bare `PASS` is a verdict with no evidence;
@@ -44,6 +43,7 @@ class Verdict[E: Mapping[str, object] = Mapping[str, object]]:
     _bare: ClassVar[Verdict[Never] | None] = None
 
     def __new__(cls) -> Verdict[Never]:
+        """Return the one bare ``PASS``, so identity is the only test the boundary needs."""
         if cls._bare is None:
             bare = cast("Verdict[Never]", super().__new__(cls))
             object.__setattr__(bare, "_evidence", None)

@@ -276,9 +276,11 @@ class TestCleanupGuarantee:
 
 
 class TestBuildSuiteClassification:
-    """Pinned decision from the !17 review: build_suite runs outside any child
-    boundary, so a plain exception raised there escapes main raw. Classification
-    of composition-time errors is deferred to the tier-2 checks (#12, #13)."""
+    """Pinned decision from the !17 review: build_suite runs outside any child boundary.
+
+    A plain exception raised there escapes main raw. Classification of composition-time
+    errors is deferred to the tier-2 checks (#12, #13).
+    """
 
     async def test_plain_build_suite_error_escapes_raw_but_still_cleans_up(self) -> None:
         calls: list[str] = []

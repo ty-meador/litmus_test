@@ -1,5 +1,4 @@
-"""``litmus/ctx-provenance``: every ``utils.ctx["k"]`` read is provided by ``configure()``,
-and ctx is never written.
+"""``litmus/ctx-provenance``: every ctx read is provided by ``configure()``; ctx is never written.
 
 Strict by ruling (issues #112 and #118): a read is provided by ``configure()``'s returned
 dict or ``TypedDict`` and by nothing else. Ctx is read-only after configure returns, so
