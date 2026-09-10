@@ -645,6 +645,7 @@ source = { editable = "." }
 dependencies = [
     { name = "asyncssh" },
     { name = "jsonschema" },
+    { name = "textual" },
 ]
 
 [package.optional-dependencies]
@@ -672,6 +673,7 @@ requires-dist = [
     { name = "asyncssh", specifier = ">=2.21" },
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "python-lsp-server", marker = "extra == 'pylsp'", specifier = ">=1.12" },
+    { name = "textual", specifier = ">=8.2" },
 ]
 provides-extras = ["pylsp"]
 
