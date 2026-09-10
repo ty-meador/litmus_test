@@ -27,6 +27,34 @@ of feature parity: the Python Inspector is still separate work.
   captures and the root result without suite execution or evidence changes. Modal
   loading, content paging/diff rendering, terminal screens, latest-run discovery, and
   the entry point remain later work.
+- Device API (CoAP/HTTP) implementation (issue #119, signed contract #97):
+  `DeviceApi`, `DeviceRequest`, `DeviceResponse`, and
+  `DeviceApiOperationFailure` on the public surface; `TestUtils.get_http` and
+  `get_coap` open a session. HTTP 4xx/5xx is data. Retries default to zero and
+  each attempt is evidenced. Declared methods are GET, PUT, POST and DELETE;
+  PATCH is refused at the call site as undeclared (signed note #97, decision 7).
+  Abort closes the session. Mock, HTTP/1.1, and
+  CoAP CON/ACK backends share one contract suite. Attempt logs withhold every
+  header value unless the author opts that name into `evidence_headers` — a
+  secret-name allowlist cannot keep credentials out of artifacts. Core install
+  unchanged (stdlib asyncio).
+- Device API (CoAP/HTTP) signed interface design note (issue #97): typed
+  request/response, status-as-data, retries as evidence, closed-session
+  abort, deny-by-default request-header values (`evidence_headers`
+  opt-in; CoAP names are registered option names, not numbers),
+  response option values never recorded by the framework, and a
+  refusal to treat HTTP as `exec` with a URL. Design only;
+  no Device API implementation or public Python name is introduced.
+  Signed by Ty in !130 on 2026-09-09; recorded on issue #97. PATCH stays
+  undeclared and refused at the call site; declaring it is a later note.
+- `docs/hil/i2c-spi.md`: the signed design note for I2C and SPI transaction
+  contracts — atomic transfers, I2C NACK/arbitration, SPI chip-select and
+  mode, and a released bus as the abort safe-state. Design only; no code
+  change. Signed by Ty in !129 on 2026-09-09; recorded on issue #96.
+- `docs/hil/can.md`: the signed design note for a CAN bus interface contract —
+  typed frames, immutable acceptance filters, bus-off as an operational
+  condition, and silence as the abort safe-state. Design only; no code
+  change. Signed by Ty in !128 on 2026-09-09; recorded on issue #95.
 - Internal Inspector timeline presentation (issue #89): tail-first paging, errors-only
   filtering that keeps decoding and availability diagnostics, and stable capture
   numbers across the complete loaded chronology. Paging, filtering, and resizing never
