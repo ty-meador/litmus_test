@@ -120,6 +120,17 @@ class TestGateBuildsTheSite:
         assert _recipe("docs", makefile)
         assert "$(MAKE) docs" in _recipe("check", makefile)
 
+    def test_makefile_smoke_target_is_in_check(self) -> None:
+        # The smoke is the only place the wheel itself is exercised (issue #102): it
+        # must run in the gate, from inside .smoke/ so src/ is off the path, and it
+        # must start both console entry points, not just import the package.
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        assert "$(MAKE) smoke" in _recipe("check", makefile)
+        smoke = _recipe("smoke", makefile)
+        assert "uv build" in _recipe("build", makefile)
+        assert "cd .smoke && venv/bin/litmus-check --list-rules" in smoke
+        assert "cd .smoke && venv/bin/litmus run ../examples/hello_world.py" in smoke
+
     def test_pages_job_runs_on_tags(self) -> None:
         ci = CI.read_text(encoding="utf-8")
         assert re.search(r"^pages:", ci, re.MULTILINE)
