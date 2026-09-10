@@ -59,3 +59,10 @@ class SeededBlade(LitmusTest):
     async def _retarget(self, utils: TestUtils) -> object:
         await utils.use_shell(inherit=False)  # seed: litmus/shell-in-configure
         return None
+
+    async def _twice(self, utils: TestUtils) -> Verdict:
+        utils.measure("rail_v", 3.3)
+        utils.measure("rail_v", 3.31)  # seed: litmus/measurement-name-unique
+        if self._limit_c:
+            return PASS
+        raise TestFailure("no limit", "> 0", "0")
