@@ -6,11 +6,44 @@ readme = "README.md"
 license = "GPL-2.0-only"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.14"
+# Discovery metadata (#103). The name is #9's decision and is not settled here.
+# No License classifier: the SPDX expression above is the PEP 639 form and hatchling
+# refuses the deprecated classifier next to it.
+keywords = [
+    "hil",
+    "hardware-in-the-loop",
+    "testing",
+    "asyncio",
+    "manufacturing",
+    "rack",
+    "dut",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Manufacturing",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Embedded Systems",
+    "Topic :: System :: Hardware",
+    "Typing :: Typed",
+]
 dependencies = [
     "asyncssh>=2.21",
     "jsonschema>=4.23",
     "textual>=8.2",
 ]
+
+[project.urls]
+Homepage = "https://tyler-meador.gitlab.io/litmus_test/"
+Documentation = "https://tyler-meador.gitlab.io/litmus_test/"
+Source = "https://gitlab.com/Tyler-Meador/litmus_test"
+Issues = "https://gitlab.com/Tyler-Meador/litmus_test/-/issues"
+Changelog = "https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 pylsp = [
