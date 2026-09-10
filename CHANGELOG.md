@@ -19,14 +19,15 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
-- Device API (CoAP/HTTP) interface design note (issue #97): typed
+- Device API (CoAP/HTTP) signed interface design note (issue #97): typed
   request/response, status-as-data, retries as evidence, closed-session
   abort, deny-by-default request-header values (`evidence_headers`
   opt-in; CoAP names are registered option names, not numbers),
   response option values never recorded by the framework, and a
   refusal to treat HTTP as `exec` with a URL. Design only;
   no Device API implementation or public Python name is introduced.
-  Awaiting Ty's signature on the note.
+  Signed by Ty in !130 on 2026-09-09; recorded on issue #97. PATCH stays
+  undeclared and refused at the call site; declaring it is a later note.
 - Internal Inspector capture reader (issue #89): reads schema-validated artifact
   envelopes and root results beneath the opened run, preserves full relative paths
   under an explicit relocation mapping, and reports unavailable evidence without

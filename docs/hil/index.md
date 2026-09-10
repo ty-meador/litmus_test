@@ -42,7 +42,7 @@ once, so each note can cite them instead of repeating them.
 | PWM | [pwm.md](pwm.md) | #94 | SIGNED 2026-09-08 |
 | CAN bus | `can.md` | #95 | DRAFT — lands in its own MR |
 | I2C / SPI | `i2c-spi.md` | #96 | DRAFT — lands in its own MR |
-| Device API (CoAP/HTTP) | `device-api.md` | #97 | DRAFT — lands in its own MR |
+| Device API (CoAP/HTTP) | [device-api.md](device-api.md) | #97 | SIGNED 2026-09-09 |
 | Serial (UART) | [serial.md](serial.md) | #91 | DRAFT — landed in its own MR |
 
 Each remaining note (#95-#97) links only once its own MR merges. Each opens as
