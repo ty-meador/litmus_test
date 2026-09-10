@@ -51,6 +51,7 @@ def _save(root: Path, *, log_path: str | None = "rack/timeline.jsonl") -> Path:
             "children": [],
             "evidence": None,
             "evidence_declared": None,
+            "measurements": [],
         },
     }
     path = root / "result.json"
