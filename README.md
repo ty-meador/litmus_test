@@ -9,7 +9,7 @@ at runtime.
 ```sh
 make install   # uv sync + git hooks
 make fix       # auto-format + auto-fix lint
-make check     # CI gate: format check, lint, pyright strict, pytest, litmus-check, docs
+make check     # CI gate: format check, lint, pyright strict, pytest under the coverage floors, litmus-check, docs, pip-audit
 make docs      # documentation site (strict: a broken cross-reference is red)
 ```
 
