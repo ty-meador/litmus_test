@@ -46,8 +46,9 @@ from litmus.lifecycle import (
     TimeBudgetClock,
     TimeoutEvidence,
 )
+from litmus.measurement import current_utils
 from litmus.results import NodeType, RunResult, SummaryTreeNode
-from litmus.run_data import JsonObject, snapshot_run_data
+from litmus.run_data import MEASUREMENTS_KEY, JsonObject, snapshot_run_data
 from litmus.utils import TestUtils
 from litmus.verdict import Verdict
 
@@ -979,7 +980,15 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                         ),
                     )
                     async with _active_time_budgets(active_clocks, lineage):
-                        return await boundary.run(Slot.TEST_METHOD, fn(utils))
+                        # The test method is one of the two slots that may measure.
+                        # Binding the node here, and only here, is what makes
+                        # `litmus.measure` find this node and what refuses a call from
+                        # cleanup or an audit task, which run outside the binding.
+                        measuring = current_utils.set(utils)
+                        try:
+                            return await boundary.run(Slot.TEST_METHOD, fn(utils))
+                        finally:
+                            current_utils.reset(measuring)
 
                 value, timeout = await self._run_timed_window(
                     utils,
@@ -1692,6 +1701,16 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         run_data = self.run_data
         if outcome.evidence is not None:
             run_data.update(outcome.evidence)
+        # Measurements are sealed here, on every terminal state including Aborted, and
+        # written into the slot after the author's run_data override ran, so an
+        # override that drops or rebuilds the dict cannot lose the readings. The same
+        # list goes on the tree node because result.json is the root's record and a
+        # leaf's run_data never reaches it (docs/measurements.md).
+        measurements = tuple(
+            measurement.to_json()
+            for measurement in utils._seal_measurements()  # pyright: ignore[reportPrivateUsage]
+        )
+        run_data[MEASUREMENTS_KEY] = list(measurements)
         summary_tree = SummaryTreeNode(
             name=self.name,
             type=node_type,
@@ -1702,6 +1721,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             children=children,
             evidence=outcome.evidence,
             evidence_declared=self._evidence_declared,
+            measurements=measurements,
         )
         object.__setattr__(self, "_summary_tree", summary_tree)
         return RunResult(
@@ -1755,6 +1775,10 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         the context and the route and may not write either.
         """
         utils._enter_configure()  # pyright: ignore[reportPrivateUsage]
+        # configure() is the other slot that may measure (a bring-up reading belongs
+        # here); the binding closes with the slot so cleanup after a failed configure
+        # cannot record either.
+        measuring = current_utils.set(utils)
         try:
             # The framework calls every node's configure() through the same erased
             # TestUtils; CtxT only exists for the suite author's own annotations, so
@@ -1762,6 +1786,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             configured = await self.configure(cast("TestUtils[CtxT]", utils))
             utils._merge_context(configured)  # pyright: ignore[reportPrivateUsage]
         finally:
+            current_utils.reset(measuring)
             utils._exit_configure()  # pyright: ignore[reportPrivateUsage]
             utils._freeze_context()  # pyright: ignore[reportPrivateUsage]
         return configured

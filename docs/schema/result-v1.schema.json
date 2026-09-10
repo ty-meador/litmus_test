@@ -71,14 +71,46 @@
       "properties": {
         "measurements": {
           "type": "array",
-          "description": "Framework-owned slot reserved for the parametric-measurement protocol. Empty in version 1; no statistical semantics may be inferred from its presence."
+          "items": { "$ref": "#/$defs/measurement" },
+          "description": "Framework-owned: one entry per utils.measure call on this node, in call order; empty when the node measured nothing. An authored ctx entry with this name cannot populate or replace it. Aggregation, SPC, and Cpk are the consumer's, not the record's."
         }
       },
       "additionalProperties": true,
-      "description": "Detached structured evidence snapshot. Suite-authored keys beyond the reserved slot are permitted."
+      "description": "Detached structured evidence snapshot. Suite-authored keys beyond the framework-owned slot are permitted."
     }
   },
   "$defs": {
+    "measurement": {
+      "type": "object",
+      "required": ["name", "value", "unit", "limits", "in_limits", "timestamp"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "number" },
+        "unit": { "type": ["string", "null"] },
+        "limits": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["low", "high"],
+              "properties": {
+                "low": { "type": ["number", "null"] },
+                "high": { "type": ["number", "null"] }
+              },
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "in_limits": { "type": ["boolean", "null"] },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timezone-aware UTC timestamp ending in 'Z', matching the timeline's own timestamp field."
+        }
+      },
+      "additionalProperties": true,
+      "description": "One utils.measure call. in_limits is evidence: it never decides the node's state."
+    },
     "state": {
       "type": "string",
       "enum": ["Pass", "Fail", "Aborted"],
@@ -150,7 +182,7 @@
     },
     "summaryTreeNode": {
       "type": "object",
-      "required": ["name", "type", "state", "failure", "timeout", "log_path", "children", "evidence", "evidence_declared"],
+      "required": ["name", "type", "state", "failure", "timeout", "log_path", "children", "evidence", "evidence_declared", "measurements"],
       "properties": {
         "name": { "type": "string", "description": "Stable node name." },
         "type": { "$ref": "#/$defs/nodeType" },
@@ -184,6 +216,13 @@
           "type": ["array", "null"],
           "items": {"type": "string"},
           "description": "The keys the leaf's @evidence declaration promised on PASS, in declaration order. A declared key absent from evidence is a reading that was not taken. Null when the node is not a leaf or declared nothing."
+        },
+        "measurements": {
+          "anyOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/measurement" } },
+            { "type": "null" }
+          ],
+          "description": "Every utils.measure call this node recorded, in call order, on every node that ran (empty when it measured nothing). Null when the node never ran, matching state. Published here because result.json is the root's record and a leaf's run_data never reaches it (issue #86)."
         }
       },
       "description": "One node of the structural view."
