@@ -42,16 +42,16 @@ once, so each note can cite them instead of repeating them.
 | PWM | [pwm.md](pwm.md) | #94 | SIGNED 2026-09-08 |
 | CAN bus | [can.md](can.md) | #95 | SIGNED 2026-09-09 |
 | I2C / SPI | [i2c-spi.md](i2c-spi.md) | #96 | SIGNED 2026-09-09 |
-| Device API (CoAP/HTTP) | `device-api.md` | #97 | DRAFT — lands in its own MR |
+| Device API (CoAP/HTTP) | [device-api.md](device-api.md) | #97 | SIGNED 2026-09-09 |
 | Serial (UART) | [serial.md](serial.md) | #91 | DRAFT — landed in its own MR |
 
-Each remaining note (#95-#97) links only once its own MR merges. Each opens as
-an independent MR carrying its note and the required `mkdocs.yml` navigation
-entry, so the docs checks pass standalone on that branch. This follows the
+Every note this page introduces is now signed and on `main`. Each landed as an
+independent MR carrying its note and the required `mkdocs.yml` navigation entry,
+so the docs checks passed standalone on that branch, following the
 [scope ruling on #94](https://gitlab.com/Tyler-Meador/litmus_test/-/issues/94#note_3799932288).
-This page turns a filename into a link only after the file exists on `main`;
-otherwise it would carry a broken link on every branch but the one that adds
-the target.
+A filename here becomes a link only after the file exists on `main`, so a note
+still in flight would otherwise carry a broken link on every branch but the one
+that adds the target.
 
 Serial/UART is Cayde's vertical (ruled by Ty as both a local peer of SSH and the
 same transport reached through a `via` hop). It is listed here for navigation
