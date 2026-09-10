@@ -249,6 +249,31 @@ class TestFrameworkLoggingDiscipline:
 
         assert violations == []
 
+    def test_module_loggers_use_getlogger_dunder_name_not_a_shared_litmus_literal(
+        self,
+    ) -> None:
+        source_root = Path(__file__).parents[1] / "src" / "litmus"
+        violations: list[str] = []
+
+        for source_path in source_root.rglob("*.py"):
+            tree = ast.parse(source_path.read_text(), filename=str(source_path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                is_get_logger = (isinstance(func, ast.Attribute) and func.attr == "getLogger") or (
+                    isinstance(func, ast.Name) and func.id == "getLogger"
+                )
+                if not is_get_logger:
+                    continue
+                arg = node.args[0] if node.args else None
+                if isinstance(arg, ast.Name) and arg.id == "__name__":
+                    continue
+                relative = source_path.relative_to(source_root)
+                violations.append(f"{relative}:{node.lineno}")
+
+        assert violations == []
+
 
 class _HostChild:
     """Start a host process `utils.exec` can sit on. Not production API."""
