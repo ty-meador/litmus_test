@@ -19,10 +19,11 @@ from litmus import (
 from litmus.lifecycle import RunAbort, State
 from litmus.remote import RemoteInterface
 from litmus.routing import ExecRouter
+from litmus.utils import node_runtime
 
 
 def _router(utils: TestUtils) -> ExecRouter | None:
-    return utils._routing.router  # pyright: ignore[reportPrivateUsage]
+    return node_runtime(utils).routing.router
 
 
 async def _use_loopback(utils: TestUtils, peer: LoopbackSshd) -> None:
@@ -609,14 +610,14 @@ class TestViaHopContracts:
         assert hops[0].connected is False
 
     def test_inherit_router_rejects_a_missing_hop(self) -> None:
-        utils = TestUtils()._for_node(  # pyright: ignore[reportPrivateUsage]
+        runtime = node_runtime(TestUtils()).for_node(
             "target",
             RunAbort(),
             discrete_log_file=True,
             isolate_context=True,
         )
         with pytest.raises(FrameworkContractViolation, match="no exec route"):
-            utils._inherit_router(None)  # pyright: ignore[reportPrivateUsage]
+            runtime.inherit_router(None)
 
     async def test_a_declared_via_that_opens_no_shell_is_a_contract_violation(self) -> None:
         configured: list[str] = []
@@ -789,7 +790,7 @@ class TestViaSurveyAndAuditRouting:
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 calls.append("configure")
                 await _use_loopback(utils, peer)
-                opened.extend(utils._routing.opened)  # pyright: ignore[reportPrivateUsage]
+                opened.extend(node_runtime(utils).routing.opened)
                 return {}
 
             def build_suite(self) -> LitmusTest:
