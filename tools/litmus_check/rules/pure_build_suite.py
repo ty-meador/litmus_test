@@ -63,6 +63,10 @@ class PureBuildSuiteRule(Rule):
     summary = "build_suite returns one composition expression and holds no logic"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report statements and control flow inside ``build_suite``.
+
+        See the ``litmus/pure-build-suite`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for member in klass.body:
                 is_def = isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef)
