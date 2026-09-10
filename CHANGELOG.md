@@ -19,6 +19,15 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Device API (CoAP/HTTP) signed interface design note (issue #97): typed
+  request/response, status-as-data, retries as evidence, closed-session
+  abort, deny-by-default request-header values (`evidence_headers`
+  opt-in; CoAP names are registered option names, not numbers),
+  response option values never recorded by the framework, and a
+  refusal to treat HTTP as `exec` with a URL. Design only;
+  no Device API implementation or public Python name is introduced.
+  Signed by Ty in !130 on 2026-09-09; recorded on issue #97. PATCH stays
+  undeclared and refused at the call site; declaring it is a later note.
 - `docs/hil/i2c-spi.md`: the signed design note for I2C and SPI transaction
   contracts — atomic transfers, I2C NACK/arbitration, SPI chip-select and
   mode, and a released bus as the abort safe-state. Design only; no code
