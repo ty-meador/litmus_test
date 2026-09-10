@@ -204,6 +204,7 @@ class TestWaitForPatternsExample:
             "failure": None,
             "evidence": None,
             "evidence_declared": None,
+            "measurements": [],
             "children": [
                 {
                     "name": "service-health",
@@ -212,6 +213,7 @@ class TestWaitForPatternsExample:
                     "failure": None,
                     "evidence": {"health_response": "ok: service healthy"},
                     "evidence_declared": ["health_response"],
+                    "measurements": [],
                     "children": [],
                 }
             ],
@@ -462,6 +464,17 @@ class TestPiHoleServerExample:
             links,
             owners={"PiHoleServer", "PiHoleServer-main-sequence", "health-checks"},
         )
+        # The sanity claim's round trip is the suite's one measurement. Its value and
+        # timestamp come from the clock, so they are checked by shape here and the
+        # literal below compares the rest of the tree exactly.
+        sanity = payload["summary_tree"]["children"][0]["children"][0]
+        [round_trip] = sanity.pop("measurements")
+        assert round_trip["name"] == "ssh_round_trip_ms"
+        assert round_trip["unit"] == "ms"
+        assert round_trip["limits"] == {"low": None, "high": 2000.0}
+        assert round_trip["in_limits"] is True
+        assert 0.0 <= round_trip["value"] <= 2000.0
+        assert round_trip["timestamp"].endswith("Z")
         assert payload["summary_tree"] == {
             "name": "PiHoleServer",
             "type": "suite",
@@ -469,6 +482,7 @@ class TestPiHoleServerExample:
             "failure": None,
             "evidence": None,
             "evidence_declared": None,
+            "measurements": [],
             "children": [
                 {
                     "name": "PiHoleServer-main-sequence",
@@ -477,6 +491,7 @@ class TestPiHoleServerExample:
                     "failure": None,
                     "evidence": None,
                     "evidence_declared": None,
+                    "measurements": [],
                     "children": [
                         {
                             "name": "sanity-check",
@@ -494,6 +509,7 @@ class TestPiHoleServerExample:
                             "failure": None,
                             "evidence": {"ftl_state": "Active: active (running)"},
                             "evidence_declared": ["ftl_state"],
+                            "measurements": [],
                             "children": [],
                         },
                         {
@@ -503,6 +519,7 @@ class TestPiHoleServerExample:
                             "failure": None,
                             "evidence": None,
                             "evidence_declared": None,
+                            "measurements": [],
                             "children": [
                                 {
                                     "name": "dmesg-clean",
@@ -511,6 +528,7 @@ class TestPiHoleServerExample:
                                     "failure": None,
                                     "evidence": {"kernel_critical_lines": []},
                                     "evidence_declared": ["kernel_critical_lines"],
+                                    "measurements": [],
                                     "children": [],
                                 },
                                 {
@@ -520,6 +538,7 @@ class TestPiHoleServerExample:
                                     "failure": None,
                                     "evidence": {"status_lines": _PIHOLE_STATUS_LINES},
                                     "evidence_declared": ["status_lines"],
+                                    "measurements": [],
                                     "children": [],
                                 },
                             ],

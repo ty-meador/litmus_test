@@ -19,6 +19,17 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Parametric measurements (issue #86, signed note #85): `utils.measure` records a
+  number with a unit and an inclusive window beside the verdict and returns a frozen
+  `Measurement`; `litmus.measure` is the same call resolved to the running node. The
+  node's own `run_data["measurements"]` fills, and every `summary_tree` node carries
+  `measurements` (`null` when it never ran), under result `format_version` 1 unbumped;
+  `docs/schema/result-v1.schema.json` gains `$defs/measurement`. A limit is evidence,
+  never a verdict: `in_limits` is recorded, the state is untouched, and an
+  out-of-window reading logs at `warning`. Four framework guards refuse a malformed
+  reading, a duplicate name, a call outside `configure()` or the test method, and the
+  alias outside a running node. The pi-hole dogfood records `ssh_round_trip_ms` with
+  an upper limit and gates on it in plain sight.
 - Inspector main view (issue #89): `litmus.inspector_app.InspectorApp`, a Textual
   screen over one saved run. A tab row (Inspect, Failures), the structural tree above
   with Pass, Fail, Aborted, and Pending rendered as distinct states and readings not
