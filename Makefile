@@ -36,8 +36,11 @@ build:  ## Wheel and sdist into dist/; a package that cannot build is red before
 # The smoke runs from inside .smoke/ so the source tree is not on the path: what runs
 # is the wheel, not src/. Only the two entry points the floor uses are exercised; the
 # self-tests already cover behaviour, this proves the package imports and starts.
-smoke: build  ## Install the wheel into a clean venv and run both console entry points
+# The old venv is removed before the build, not after: an sdist that sweeps in a venv
+# fails to build, and .gitignore is a courtesy the build must not depend on.
+smoke:  ## Install the wheel into a clean venv and run both console entry points
 	rm -rf .smoke
+	$(MAKE) build
 	uv venv -q .smoke/venv
 	uv pip install -q --python .smoke/venv/bin/python dist/*.whl
 	cd .smoke && venv/bin/litmus-check --list-rules > /dev/null
