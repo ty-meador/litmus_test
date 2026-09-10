@@ -48,6 +48,7 @@ class MeasurementInNodeRule(Rule):
     summary = "measure() is called from configure() or a test method, where a node is running"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report every measure() call whose slot is not a running node, naming the slot."""
         hooks = _run_hooks(module)
         for node in ast.walk(module.tree):
             if isinstance(node, ast.Call) and is_measure(node):
