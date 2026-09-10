@@ -15,6 +15,7 @@ fix: format lint  ## Auto-format + auto-fix lint
 
 typecheck:  ## Pyright strict
 	uv run pyright
+	uv run python tools/import_cycles.py
 
 test:  ## Run the framework self-test suite
 	uv run pytest
@@ -32,6 +33,7 @@ check:  ## CI gate — verify only, no auto-fix. Must be green before push.
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run pyright
+	uv run python tools/import_cycles.py
 	$(MAKE) coverage
 	uv run litmus-check examples
 	$(MAKE) docs
