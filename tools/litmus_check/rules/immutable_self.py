@@ -42,6 +42,10 @@ class ImmutableSelfRule(Rule):
     summary = "self.<attr> is assigned or deleted only inside __init__"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report writes to ``self.<attr>`` that sit outside ``__init__``.
+
+        See the ``litmus/immutable-self`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for node in ast.walk(klass):
                 for target in _write_targets(node):

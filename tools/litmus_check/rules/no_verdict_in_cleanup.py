@@ -37,6 +37,10 @@ class NoVerdictInCleanupRule(Rule):
     summary = "cleanup restores state and does not produce a verdict"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report pass/fail intent leaking into ``cleanup``.
+
+        See the ``litmus/no-verdict-in-cleanup`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for member in klass.body:
                 is_def = isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef)

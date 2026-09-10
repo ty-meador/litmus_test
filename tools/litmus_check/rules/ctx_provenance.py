@@ -1,5 +1,4 @@
-"""``litmus/ctx-provenance`` — every ``utils.ctx["k"]`` read is provided by ``configure()``,
-and ctx is never written.
+"""``litmus/ctx-provenance`` — ctx keys come from ``configure()`` and are never written.
 
 A test method that reads ``utils.ctx["k"]`` relies on ``configure()`` having returned
 ``k``. Nothing else may be relied on: ctx is what ``configure()`` provided and it is
@@ -60,6 +59,10 @@ class CtxProvenanceRule(Rule):
     summary = "every utils.ctx[key] read is provided by configure(); ctx is never written"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report ctx reads ``configure()`` did not provide, and any write.
+
+        See the ``litmus/ctx-provenance`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             provided = _provided_keys(module, klass)
             for method in _reader_methods(module, klass):

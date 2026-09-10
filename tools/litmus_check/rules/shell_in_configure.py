@@ -40,6 +40,10 @@ class ShellInConfigureRule(Rule):
     summary = "use_shell declares the exec route only inside configure()"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
+        """Report a declaring ``use_shell(...)`` that sits outside ``configure``.
+
+        See the ``litmus/shell-in-configure`` row in ``docs/litmus-check.md``.
+        """
         for klass in module.litmus_classes():
             for node in ast.walk(klass):
                 if isinstance(node, ast.Call) and _declares_route(node):
