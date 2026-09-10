@@ -268,8 +268,10 @@ class TestSchemasRefuseTheBreaksThePolicyNames:
             (("summary_tree", "children"), None),
             (("summary_tree", "evidence"), ["not", "an", "object"]),
             (("summary_tree", "evidence_declared"), "reading"),
+            (("summary_tree", "measurements"), {}),
             (("env", "LOT"), 42),
             (("run_data", "measurements"), {}),
+            (("run_data", "measurements"), [{"name": "reading", "value": 1}]),
         ],
     )
     def test_result_schema_rejects_type_and_set_changes(

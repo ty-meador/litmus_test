@@ -25,6 +25,7 @@ the module a name is defined in is an implementation detail. The policy is
 ::: litmus.JsonObject
 ::: litmus.LitmusError
 ::: litmus.LitmusTest
+::: litmus.Measurement
 ::: litmus.MissingVerdict
 ::: litmus.NodeType
 ::: litmus.OperatorInterrupt
@@ -42,3 +43,4 @@ the module a name is defined in is an implementation detail. The policy is
 ::: litmus.TimeoutEvidence
 ::: litmus.Verdict
 ::: litmus.evidence
+::: litmus.measure

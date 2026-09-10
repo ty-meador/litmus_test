@@ -7,7 +7,8 @@ an implementation detail and may move.
 
 Suite authors need `LitmusTest`, `TestUtils`, `Shell`, `DeviceApi`, `DeviceRequest`,
 `DeviceResponse`, `ExecResult`, `Artifact`,
-`JsonObject`, `PASS`, `Verdict`, `evidence`, `TestFailure`, and `ArpResolver`. The
+`JsonObject`, `PASS`, `Verdict`, `evidence`, `measure`, `Measurement`, `TestFailure`,
+and `ArpResolver`. The
 rest of the failure taxonomy is exported because it appears in artifacts and logs,
 where a reader will follow a name back to its meaning (`ExternalIntegrationFailure`,
 `OperatorInterrupt`, `ArpResolutionFailure`, `DeviceApiOperationFailure`,
@@ -51,6 +52,7 @@ from litmus.evidence import evidence
 from litmus.executor import ExecResult
 from litmus.hooks import AfterEachContext, AfterEachHook, BeforeEachContext, BeforeEachHook
 from litmus.lifecycle import Phase, Slot, State, TimeoutEvidence
+from litmus.measurement import Measurement, measure
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.routing import Shell
 from litmus.run_data import JsonObject
@@ -84,6 +86,7 @@ __all__ = [
     "JsonObject",
     "LitmusError",
     "LitmusTest",
+    "Measurement",
     "MissingVerdict",
     "NodeType",
     "OperatorInterrupt",
@@ -101,4 +104,5 @@ __all__ = [
     "TimeoutEvidence",
     "Verdict",
     "evidence",
+    "measure",
 ]
