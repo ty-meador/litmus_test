@@ -161,6 +161,7 @@ class InspectorApp(App[None]):
         self.log_lines: tuple[str, ...] = ()
 
     def compose(self) -> ComposeResult:
+        """Three panes and a footer; the layout is fixed and only the content is redrawn."""
         yield Static(id="tabs")
         yield Static(id="tree")
         yield Static(id="log")
@@ -173,9 +174,11 @@ class InspectorApp(App[None]):
         self.redraw()
 
     def on_resize(self) -> None:
+        """Redraw so the tree and log fit the new height; nothing else changes."""
         self.redraw()
 
     async def action_cycle_tab(self) -> None:
+        """Tab toggles Inspect and Failures; the Run tab is decision-gated and absent."""
         self.tab = "failures" if self.tab == "inspect" else "inspect"
         self.redraw()
 
@@ -188,6 +191,7 @@ class InspectorApp(App[None]):
         self.redraw()
 
     async def action_failure(self, direction: int) -> None:
+        """Jump between failed nodes, so the next problem is reached without walking the tree."""
         if direction > 0:
             await self.selection.next_failure()
         else:
@@ -195,6 +199,7 @@ class InspectorApp(App[None]):
         self.redraw()
 
     def action_page(self, delta: int) -> None:
+        """Page the log; before a timeline is loaded there is nothing to page."""
         if self.timeline_view is not None:
             if delta > 0:
                 self.timeline_view.next_page()
@@ -203,6 +208,7 @@ class InspectorApp(App[None]):
             self.redraw()
 
     def action_toggle_errors(self) -> None:
+        """Show only error rows, or all rows again; the timeline view decides what counts."""
         if self.timeline_view is not None:
             self.timeline_view.toggle_errors()
             self.redraw()
@@ -301,16 +307,19 @@ class ArtifactScreen(ModalScreen[None]):
         self.modal_lines: tuple[str, ...] = ()
 
     def compose(self) -> ComposeResult:
+        """A title over a body; the modal model supplies both."""
         with Vertical(id="modal"):
             yield Static(id="modal-title")
             yield Static(id="modal-body")
 
     async def on_mount(self) -> None:
+        """Load the opened capture only once the screen knows its height."""
         self._fit()
         await self.modal.open()
         self.redraw()
 
     def on_resize(self) -> None:
+        """Re-page to the new height so the first visible row stays in view."""
         self._fit()
         self.redraw()
 
@@ -319,9 +328,11 @@ class ArtifactScreen(ModalScreen[None]):
         self.modal.resize(max(1, self.query_one("#modal-body", Static).size.height))
 
     def action_close(self) -> None:
+        """Return to the main view; the modal holds nothing worth saving."""
         self.dismiss()
 
     async def action_step_type(self, direction: int) -> None:
+        """Move between capture types (`docs/inspector.md`, reading and comparing artifacts)."""
         if direction > 0:
             await self.modal.next_type()
         else:
@@ -329,6 +340,7 @@ class ArtifactScreen(ModalScreen[None]):
         self.redraw()
 
     async def action_step_artifact(self, direction: int) -> None:
+        """Move between captures of the current type."""
         if direction > 0:
             await self.modal.next_artifact()
         else:
@@ -336,6 +348,7 @@ class ArtifactScreen(ModalScreen[None]):
         self.redraw()
 
     def action_page(self, delta: int) -> None:
+        """Page the body; the model clamps at either end."""
         if delta > 0:
             self.modal.next_page()
         else:
@@ -343,6 +356,7 @@ class ArtifactScreen(ModalScreen[None]):
         self.redraw()
 
     async def action_toggle_diff(self) -> None:
+        """Enter or leave side-by-side comparison; the model decides whether a pair exists."""
         await self.modal.toggle_diff()
         self.redraw()
 

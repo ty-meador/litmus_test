@@ -154,10 +154,12 @@ class ArtifactModal:
 
     @property
     def page_size(self) -> int:
+        """Rows per page, set by the screen from its body height."""
         return self._page_size
 
     @property
     def page_index(self) -> int:
+        """The zero-based page in view."""
         return self._page_index
 
     @property
@@ -176,18 +178,22 @@ class ArtifactModal:
         await self._load()
 
     async def next_type(self) -> None:
+        """Step to the next capture type and reload; the navigation model owns the stepping."""
         self._navigation.next_type()
         await self._load()
 
     async def previous_type(self) -> None:
+        """Step to the previous capture type and reload; same rules as ``next_type``."""
         self._navigation.previous_type()
         await self._load()
 
     async def next_artifact(self) -> None:
+        """Step to the next capture of the current type and reload it."""
         self._navigation.next_artifact()
         await self._load()
 
     async def previous_artifact(self) -> None:
+        """Step to the previous capture of the current type and reload it."""
         self._navigation.previous_artifact()
         await self._load()
 
@@ -199,9 +205,11 @@ class ArtifactModal:
             await self._load()
 
     def next_page(self) -> None:
+        """Advance one page, clamped at the last so paging never leaves the capture."""
         self._page_index = min(self._page_index + 1, self.page_count - 1)
 
     def previous_page(self) -> None:
+        """Go back one page, clamped at the first."""
         self._page_index = max(self._page_index - 1, 0)
 
     def resize(self, page_size: int) -> None:
