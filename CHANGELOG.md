@@ -19,6 +19,13 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `SerialInterface`, a `RemoteInterface` peer for a serial/UART console (issue #91).
+  A local device node via `pyserial-asyncio` (`litmus[serial]` extra; core install
+  unchanged) or the same transport through an owned SSH `via` hop. Prompt
+  detection, optional login sequence, CRLF/echo/ANSI line discipline, a
+  `__LITMUS_RC__` exit-status sentinel, `BoundedCapture` output bounding, and
+  BREAK/Ctrl-C/close abort. Off `litmus.__all__`. The shared transport-contract
+  suite gains a pty-backed `serial_peer`.
 - Package metadata for discovery (issue #103): keywords, trove classifiers, and project
   URLs (docs site, source, issue tracker, changelog) in `pyproject.toml`, with the README
   already the long description. The name stays as it is until #9 rules at 1.0.0.
@@ -197,9 +204,8 @@ of feature parity: the Python Inspector is still separate work.
 - `docs/hil/serial.md`: the design note for a serial/UART console transport as a
   `RemoteInterface` peer — prompt detection, timeouts, line discipline,
   exit-status recovery via a sentinel, output bounding, safe-state on abort, and
-  the `via`-hop composition that reaches a remote console over SSH. Design only;
-  no code change. Awaiting Ty's sign-off on the note before an implementation MR
-  opens (issue #91).
+  the `via`-hop composition that reaches a remote console over SSH. Signed by Ty
+  on 2026-09-10; implementation is `SerialInterface` (issue #91).
 - `docs/hil/index.md` and `docs/hil/gpio.md`: the HIL interface design-note index
   and the GPIO interface design note (issue #93), fixing a pin
   direction/level/debounce contract, abort safe-state (every declared output
