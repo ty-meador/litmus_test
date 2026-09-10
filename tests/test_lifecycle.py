@@ -581,8 +581,10 @@ class TestRunAbortSignal:
 
 
 class TestTaskGroupSemantics:
-    """A rack is seventy DUTs in one TaskGroup. What escapes the boundary decides
-    whether one bad unit is data or a run-ending event."""
+    """A rack is seventy DUTs in one TaskGroup.
+
+    What escapes the boundary decides whether one bad unit is data or a run-ending event.
+    """
 
     RACK_SIZE = 70
     BAD_UNIT = 12
