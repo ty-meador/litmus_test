@@ -615,6 +615,7 @@ class NodeRuntime:
         "routing",
         "scope",
         "signal",
+        "suite_target",
         "timeline",
         "timeline_paths",
         "transports",
@@ -633,9 +634,11 @@ class NodeRuntime:
         artifact_root: str | Path | None,
         output_budget: int,
         integration_hooks: IntegrationHooks | None,
+        suite_target: str | None,
     ) -> None:
         """Build the unscoped run seed behind ``utils``; :meth:`for_node` scopes it."""
         self.utils = utils
+        self.suite_target = suite_target
         self.ctx = RunContext(ctx)
         self.base_logger = LOGGER if logger is None else logger
         self.scope: tuple[str, ...] = ()
@@ -722,6 +725,7 @@ class NodeRuntime:
         """Create one node-owned runtime, and its ``TestUtils`` view, from this node's policy."""
         scoped: NodeRuntime = object.__new__(NodeRuntime)
         scoped.utils = TestUtils(_runtime=scoped)
+        scoped.suite_target = self.suite_target
         scoped.artifact_store = self.artifact_store
         scoped.ctx = RunContext(owner=node) if isolate_context else self.ctx
         scoped.env = self.env
@@ -944,6 +948,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
         _integration_hooks: IntegrationHooks | None = None,
         _runtime: NodeRuntime | None = None,
+        _suite_target: str | None = None,
     ) -> None:
         """Create an unscoped run seed; lifecycle execution creates node views.
 
@@ -981,6 +986,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             artifact_root=artifact_root,
             output_budget=output_budget,
             integration_hooks=_integration_hooks,
+            suite_target=_suite_target,
         )
 
     @property

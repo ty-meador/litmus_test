@@ -123,6 +123,13 @@ class RunResult:
     swallowed: BaseException | None = None
     env: Mapping[str, str] = field(default_factory=_empty_env)
     run_data: JsonObject = field(default_factory=default_run_data)
+    suite_target: str | None = None
+    """The loader target that produced the run, ``path.py::SuiteClass``, when known.
+
+    ``litmus run`` records it so ``litmus inspect`` can offer the same suite for the
+    Re-Run tab instead of deriving one from evidence; a run started from a developer's
+    own harness leaves it ``None`` and the Inspector says so (issue #89, 2026-09-10).
+    """
 
     def __post_init__(self) -> None:
         """Defensively snapshot containers and enforce the navigation invariants."""
@@ -177,5 +184,6 @@ class RunResult:
             "summary_tree": self.summary_tree.to_json(),
             "physical_location": self.physical_location,
             "env": dict(self.env),
+            "suite_target": self.suite_target,
             "run_data": self.run_data,
         }

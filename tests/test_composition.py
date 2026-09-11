@@ -25,6 +25,7 @@ class _NonTerminalChild:
         *,
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
+        subtree: tuple[int, ...] | None = None,
     ) -> Outcome:
         return Outcome(Slot.CONFIGURE, "corrupt child", None)
 

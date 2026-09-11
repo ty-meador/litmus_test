@@ -19,6 +19,21 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- The Inspector's Re-Run tab (issue #89, Ty's ruling of 2026-09-10). Inspect stays the
+  archive of the production run and executes nothing; Re-Run shows the same tree
+  unhydrated, and Enter on any node executes that subtree with the code that ran in
+  production, its fresh log in the pane below. Re-run evidence is scratch: a node's
+  previous re-run is deleted when it is re-run again and the directory goes when the
+  Inspector closes. Tab is held during a live re-run; `q` takes the operator-interrupt
+  path and quits once the node settles Aborted. The suite comes from the new
+  `suite_target` field `litmus run` records in `result.json` (absolute file or module,
+  `::`, class) or from `litmus inspect --suite`; a suite whose declared tree differs from
+  the saved one is refused by path. Behind it, `LitmusTest.run(subtree=...)` runs one
+  declared node through the sealed lifecycle with every leaf outside it left pending,
+  and `run(suite_target=...)` records the provenance. The Failures tab is folded into
+  Inspect as `h`, which hides passing rows; the legacy tree glyphs (`├─`, `└─`, `│`) and
+  the cyan owner arrow on the row whose timeline the highlighted node rolled into are
+  back on both tabs.
 - `SerialInterface`, a `RemoteInterface` peer for a serial/UART console (issue #91).
   A local device node via `pyserial-asyncio` (`litmus[serial]` extra; core install
   unchanged) or the same transport through an owned SSH `via` hop. Prompt
