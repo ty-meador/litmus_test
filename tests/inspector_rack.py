@@ -125,8 +125,15 @@ MIXED_ROWS = ("rack", "steps", "power", "checks", "volts", "slow", "later")
 """The mixed run's preorder row names; ``volts`` is Fail, ``slow`` Aborted, ``later`` pending."""
 
 
-async def record_mixed_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SavedRun:
-    """Record the mixed-state run, move it, forbid execution, and reopen it."""
+async def record_mixed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, refuse_execution: bool = True
+) -> SavedRun:
+    """Record the mixed-state run, move it, forbid execution, and reopen it.
+
+    A Re-Run test passes ``refuse_execution=False``: that tab is the one place the
+    Inspector executes suite code by ruling, and its tests prove what it runs rather
+    than that it runs nothing.
+    """
     rack = _Mixed(name="rack")
     await rack.run()
     assert rack.log_path is not None
@@ -134,10 +141,57 @@ async def record_mixed_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> S
     rack.log_path.parent.parent.rename(moved)
     del rack
 
-    def refuse_execution(*args: object, **kwargs: object) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
         raise AssertionError("an Inspector test attempted suite execution")
 
-    monkeypatch.setattr(LitmusTest, "run", refuse_execution)
+    if refuse_execution:
+        monkeypatch.setattr(LitmusTest, "run", refuse)
+    saved = await SavedRunReader().read(moved / "result.json")
+    assert isinstance(saved, SavedRun), saved
+    return saved
+
+
+def mixed_suite() -> LitmusTest:
+    """A fresh instance of the mixed suite, the shape ``record_mixed_run`` saved."""
+    return _Mixed(name="rack")
+
+
+def other_suite() -> LitmusTest:
+    """A fresh rack suite: a different declared tree, for the Re-Run refusal."""
+    return _Rack(name="rack")
+
+
+PARK: dict[str, asyncio.Event | None] = {"event": None}
+"""Set ``PARK["event"]`` to make the parked suite wait; it passes at once otherwise."""
+
+
+class _Parked(LitmusTest):
+    """Passes at once when recording; on re-run, parks until the operator interrupts."""
+
+    def build_suite(self) -> LitmusTest:
+        return self.test("wait", self._wait)
+
+    async def _wait(self, utils: TestUtils) -> Verdict:
+        event = PARK["event"]
+        if event is None:
+            return PASS
+        event.set()
+        await asyncio.sleep(3600)
+        return PASS
+
+
+def parked_suite() -> LitmusTest:
+    """A fresh parked suite, the shape ``record_parked_run`` saved."""
+    return _Parked(name="bench")
+
+
+async def record_parked_run(tmp_path: Path) -> SavedRun:
+    """Record the parked suite passing, move it, and reopen it for a live re-run test."""
+    bench = _Parked(name="bench")
+    await bench.run()
+    assert bench.log_path is not None
+    moved = tmp_path / "parked"
+    bench.log_path.parent.parent.rename(moved)
     saved = await SavedRunReader().read(moved / "result.json")
     assert isinstance(saved, SavedRun), saved
     return saved
