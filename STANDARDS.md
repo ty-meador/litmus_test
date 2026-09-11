@@ -47,7 +47,7 @@ rules and pyright strict — an unannotated def fails `make check`.
   methods as opt-in sugar (issue #75); both parameters default to `Mapping[str, Any]`,
   so a bare `TestUtils` annotation means exactly what it always did, and the object
   exposed at runtime is still the framework-owned dict. Composition — `test`,
-  `sequence`, `parallel`, `via` — stays shape-agnostic. Do not introduce a context
+  `sequence`, `parallel` — stays shape-agnostic. Do not introduce a context
   dataclass or require every suite to parameterize `LitmusTest`.
 - Public packages ship `py.typed`.
 
