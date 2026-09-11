@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
 from tests.inspector_rack import (
     MIXED_ROWS,
+    PARK,
     device_row,
+    mixed_suite,
+    parked_suite,
     record_mixed_run,
+    record_parked_run,
     record_seventy_dut_run,
     saved_bytes,
 )
@@ -18,15 +24,18 @@ from tests.inspector_rack import (
 from litmus.inspector_app import (
     ArtifactScreen,
     InspectorApp,
+    RowDisplay,
     _log_header,  # pyright: ignore[reportPrivateUsage]
     _log_row_text,  # pyright: ignore[reportPrivateUsage]
     _modal_body,  # pyright: ignore[reportPrivateUsage]
     _modal_title,  # pyright: ignore[reportPrivateUsage]
     _row_text,  # pyright: ignore[reportPrivateUsage]
+    _tree_prefixes,  # pyright: ignore[reportPrivateUsage]
     _window,  # pyright: ignore[reportPrivateUsage]
 )
 from litmus.inspector_artifact_view import ArtifactModal
 from litmus.inspector_artifacts import ArtifactReader
+from litmus.inspector_rerun import RerunRecord, RerunSession
 from litmus.inspector_run import SavedRun
 from litmus.inspector_selection import SelectionView
 from litmus.inspector_timeline import TimelineDiagnostic, TimelineRead, TimelineRecord
@@ -35,10 +44,21 @@ from litmus.inspector_tree import TreeRow
 
 SIZE = (100, 30)
 
+MIXED_TREE = (
+    "> rack  Aborted",
+    "  └─ steps  Aborted",
+    "     ├─ power  Pass",
+    "     ├─ checks  Aborted",
+    "     │  ├─ volts  Fail",
+    "     │  └─ slow  Aborted",
+    "     └─ later  Pending",
+)
+"""The mixed run's Inspect tree with the root highlighted: the legacy glyphs, read back."""
+
 
 def _row_name(line: str) -> str:
-    """The node name on a rendered tree line, whatever its depth or cursor."""
-    return line[2:].strip().split("  ")[0]
+    """The node name on a rendered tree line, whatever its depth, glyphs, or cursor."""
+    return line[2:].lstrip(" │├└─").split("  ")[0]
 
 
 def _selected(app: InspectorApp) -> str:
@@ -72,10 +92,7 @@ class TestInspectorApp:
 
             assert app.tab == "inspect"
             assert [_row_name(line) for line in app.tree_lines] == list(MIXED_ROWS)
-            assert app.tree_lines[0].startswith("> rack  Aborted")
-            assert app.tree_lines[4].strip().endswith("volts  Fail")
-            assert app.tree_lines[5].strip().endswith("slow  Aborted")
-            assert app.tree_lines[6].strip().endswith("later  Pending")
+            assert app.tree_lines == MIXED_TREE
             assert app.log_lines[0] == "log: rack"
             assert app.log_lines[1].startswith("page ")
             assert app.timeline_view is not None
@@ -93,10 +110,13 @@ class TestInspectorApp:
             await pilot.pause()
 
             assert _selected(app) == "power"
-            assert app.tree_lines[2].startswith(">     power  Pass")
+            assert app.tree_lines[2].startswith(">    ├─ power  Pass")
             # A leaf composed with self.test rolls into its parent's chronology; the
-            # pane names the owner and says so, never showing the log under the leaf.
+            # pane names the owner and says so, never showing the log under the leaf,
+            # and the owner's row carries the legacy arrow so the eye finds it.
             assert app.log_lines[0] == "log: rack/steps  (rolled up: power has no own log)"
+            assert app.tree_lines[1] == "  └─ steps  Aborted  ←"
+            assert sum(line.endswith("←") for line in app.tree_lines) == 1
             assert any("[1] " in line and "rail" in line for line in app.log_lines)
             assert any("ripple above expectation" in line for line in app.log_lines)
             assert "captures: 1" in app.log_lines[1]
@@ -105,6 +125,7 @@ class TestInspectorApp:
             await pilot.pause()
             assert _selected(app) == "steps"
             assert app.log_lines[0] == "log: rack/steps"
+            assert not any(line.endswith("←") for line in app.tree_lines)
 
     async def test_arrows_jump_between_failures_skipping_passed_and_pending_without_wrap(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -135,7 +156,7 @@ class TestInspectorApp:
             await pilot.pause()
             assert _selected(app) == "rack"
 
-    async def test_failures_tab_lists_attention_rows_and_shares_the_cursor(
+    async def test_h_hides_passing_rows_and_keeps_the_cursor_on_a_visible_row(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         saved = await record_mixed_run(tmp_path, monkeypatch)
@@ -146,22 +167,27 @@ class TestInspectorApp:
             await pilot.pause()
             assert _selected(app) == "power"
 
-            await pilot.press("tab")
+            await pilot.press("h")
             await pilot.pause()
-            assert app.tab == "failures"
+            assert app.hide_passes is True
             names = [_row_name(line) for line in app.tree_lines]
-            assert names == ["rack", "steps", "checks", "volts", "slow"]
-            assert not any(line.startswith("> ") for line in app.tree_lines)
+            assert names == ["rack", "steps", "checks", "volts", "slow", "later"]
+            # The highlighted row vanished with the passes; the cursor lands on the
+            # row above it, and the glyphs close the branch on what is still shown.
+            assert _selected(app) == "steps"
+            assert app.tree_lines[1] == "> └─ steps  Aborted"
+            assert app.tree_lines[2] == "     ├─ checks  Aborted"
+            assert app.tree_lines[5] == "     └─ later  Pending"
 
             await pilot.press("down")
             await pilot.pause()
             assert _selected(app) == "checks"
-            assert app.tree_lines[2].startswith("> ")
             assert app.log_lines[0] == "log: rack/steps/checks"
 
-            await pilot.press("tab")
+            await pilot.press("h")
             await pilot.pause()
-            assert app.tab == "inspect"
+            assert app.hide_passes is False
+            assert [_row_name(line) for line in app.tree_lines] == list(MIXED_ROWS)
             assert _selected(app) == "checks"
             assert app.tree_lines[3].startswith("> ")
 
@@ -263,29 +289,173 @@ class TestInspectorApp:
             assert app.timeline_view is view_before
             assert "captures: 2" in app.log_lines[1]
 
-            # Every node passed: the Failures tab says so instead of showing nothing.
+            # Every node passed: hiding passes says so instead of showing nothing.
+            await pilot.press("h")
+            await pilot.pause()
+            assert app.tree_lines == ("every node passed; h shows them again",)
+            await pilot.press("down", "h")
+            await pilot.pause()
+            assert 1 < len(app.tree_lines) < len(saved.tree.rows)
+            assert sum(line.startswith("> ") for line in app.tree_lines) == 1
+
+
+class TestRerunTab:
+    async def test_enter_re_runs_the_highlighted_node_and_shows_its_fresh_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        saved = await record_mixed_run(tmp_path, monkeypatch, refuse_execution=False)
+        before = saved_bytes(saved.run_root)
+        session = RerunSession(saved, mixed_suite, scratch_parent=tmp_path)
+        app = InspectorApp(saved, session)
+
+        async with app.run_test(size=SIZE) as pilot:
+            await pilot.press("down", "down")
+            await pilot.pause()
+            assert _selected(app) == "power"
+
+            # Enter on Inspect never runs anything: the archive has no such key.
+            await pilot.press("enter")
+            await pilot.pause()
+            assert session.scratch_root is None
+
             await pilot.press("tab")
             await pilot.pause()
-            assert app.tree_lines == ("no Fail or Aborted node in this run",)
+            assert app.tab == "rerun"
+            assert session.available is True, session.unavailable
+            assert _selected(app) == "power"
+            assert [_row_name(line) for line in app.tree_lines] == list(MIXED_ROWS)
+            assert all(line.endswith("not re-run") for line in app.tree_lines)
+            assert app.log_lines == (
+                "log: not re-run yet: press Enter on a node to execute it",
+                "",
+            )
+
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause()
+
+            assert session.record(2) is not None
+            assert app.tree_lines[0] == "  rack  Pass"
+            assert app.tree_lines[1] == "  └─ steps  Pass  ←"
+            assert app.tree_lines[2] == ">    ├─ power  Pass"
+            assert app.tree_lines[4] == "     │  ├─ volts  not re-run"
+            assert app.log_lines[0] == "log: rack/steps  (rolled up: power has no own log)"
+            assert any("ripple above expectation" in line for line in app.log_lines)
+
+            # Moving onto a node the bench never reached says so; the archive's log
+            # for that node is not shown in its place.
+            await pilot.press("down", "down")
+            await pilot.pause()
+            assert _selected(app) == "volts"
+            assert app.log_lines[0] == "log: not re-run yet: press Enter on a node to execute it"
+
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.tab == "inspect"
+            assert app.tree_lines[4].startswith(">    │  ├─ volts  Fail")
+            assert app.log_lines[0] == "log: rack/steps/checks  (rolled up: volts has no own log)"
+
+        # The archive is untouched, and the bench's evidence went with the screen.
+        assert saved_bytes(saved.run_root) == before
+        assert session.scratch_root is None
+
+    async def test_without_a_suite_the_tab_says_why_and_enter_is_inert(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        saved = await record_mixed_run(tmp_path, monkeypatch)
+        app = InspectorApp(saved)
+
+        async with app.run_test(size=SIZE) as pilot:
+            await pilot.press("tab", "down", "down", "enter")
+            await pilot.pause()
+
+            assert app.tab == "rerun"
+            assert app.session.available is False
+            assert app.log_lines[0] == (
+                "log: re-run unavailable: no suite was supplied to this Inspector"
+            )
+            assert app.session.scratch_root is None
+
+    async def test_tab_is_held_during_a_live_re_run_and_q_interrupts_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        saved = await record_parked_run(tmp_path)
+        session = RerunSession(saved, parked_suite, scratch_parent=tmp_path)
+        app = InspectorApp(saved, session)
+        started = asyncio.Event()
+        monkeypatch.setitem(PARK, "event", started)
+        at_close: list[RerunRecord | None] = []
+        original_close = session.close
+
+        def spy_close() -> None:
+            at_close.append(session.record(1))
+            original_close()
+
+        monkeypatch.setattr(session, "close", spy_close)
+
+        async with app.run_test(size=SIZE) as pilot:
+            await pilot.press("tab", "down")
+            await pilot.pause()
+            assert app.tab == "rerun"
+            assert _selected(app) == "wait"
+
+            await pilot.press("enter")
+            await asyncio.wait_for(started.wait(), 5)
+            await pilot.pause()
+            assert session.running == 1
+            assert "Running" in app.tree_lines[1]
+            assert app.log_lines[0] == "log: running bench/wait"
+
+            # Tab is disabled while hardware is live, and a second Enter starts nothing.
+            await pilot.press("tab", "enter")
+            await pilot.pause()
+            assert app.tab == "rerun"
+            assert session.running == 1
+
+            await pilot.press("q")
+            await asyncio.wait_for(
+                app.workers.wait_for_complete(),  # pyright: ignore[reportUnknownMemberType]
+                10,
+            )
+            await pilot.pause()
+
+        assert app.return_code == 0
+        record = at_close[0]
+        assert record is not None
+        assert record.row.state == "Aborted"
 
 
 class TestRendering:
-    def test_tree_row_shows_cursor_depth_state_and_readings_not_taken(self) -> None:
-        row = TreeRow(
-            index=4,
-            parent_index=3,
-            ancestor_names=("rack", "checks", "volts"),
-            record={
-                "name": "volts",
-                "state": "Fail",
-                "evidence": {"present": 1},
-                "evidence_declared": ["present", "missing"],
-            },
-            log_owner_index=4,
+    def test_tree_row_shows_cursor_glyphs_state_readings_not_taken_and_owner(self) -> None:
+        display = RowDisplay(
+            name="volts",
+            prefix="│  ├─ ",
+            label="Fail",
+            style="bold red",
+            not_taken=("missing",),
+            selected=True,
+            owner=False,
         )
 
-        assert _row_text(row, selected=True).plain == ">     volts  Fail  not taken: missing"
-        assert _row_text(row, selected=False).plain == "      volts  Fail  not taken: missing"
+        assert _row_text(display).plain == "> │  ├─ volts  Fail  not taken: missing"
+        assert (
+            _row_text(replace(display, selected=False, owner=True)).plain
+            == "  │  ├─ volts  Fail  not taken: missing  ←"
+        )
+
+    def test_tree_prefixes_close_each_branch_on_its_last_visible_child(self) -> None:
+        assert _tree_prefixes([0, 1, 2, 2, 3, 3, 2]) == [
+            "",
+            "└─ ",
+            "   ├─ ",
+            "   ├─ ",
+            "   │  ├─ ",
+            "   │  └─ ",
+            "   └─ ",
+        ]
+        # Two children of the root: the first keeps a vertical line beside its subtree.
+        assert _tree_prefixes([0, 1, 2, 1, 2]) == ["", "├─ ", "│  └─ ", "└─ ", "   └─ "]
+        assert _tree_prefixes([0]) == [""]
 
     def test_log_rows_number_captures_and_keep_damage_in_place(self) -> None:
         record = TimelineRecord(
