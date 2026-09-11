@@ -1,7 +1,7 @@
 """PLAN §7 target 6 / issue #41: in-flight termination at the transport.
 
 Scattered coverage already lives in ``test_ssh``, ``test_executor``, ``test_mock``,
-``test_via``, ``test_remote``, and ``test_utils``. This module names the three
+``test_parent_route``, ``test_remote``, and ``test_utils``. This module names the three
 acceptance criteria and asserts the parts those files leave implied:
 
 - hard-close is ``abort()`` at the asyncssh socket, not a graceful hangup

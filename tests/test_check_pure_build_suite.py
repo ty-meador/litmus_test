@@ -164,7 +164,7 @@ class TestPureBuildSuiteStaysQuiet:
                         [
                             self.test(f"probe {self._host}", self._probe),
                             self.parallel("sensors", [self.test("t", self._t)]),
-                            Child(name="child", via=self, ports=self._ports[1:]),
+                            Child(name="child", ports=self._ports[1:]),
                             -self._weight,
                             self._names[0] + "-suffix",
                         ],

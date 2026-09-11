@@ -118,8 +118,8 @@ framework binds around each slot that admits measurements, at the seam in
 `src/litmus/base.py` where the child boundary is handed `fn(utils)` for `configure` and
 the test method: `set` before the boundary runs the slot, `reset` in `finally`. A
 `ContextVar` is task-local, and asyncio copies the context into every task it creates,
-so each child of a `parallel` node sees its own binding and a `via` device sees its own
-inside its own slots. `litmus.measure` reads the variable and delegates to that
+so each child of a `parallel` node sees its own binding and a gateway parent sees its
+own inside its own slots. `litmus.measure` reads the variable and delegates to that
 `TestUtils.measure`; when nothing is bound — module scope, a hook, `cleanup`, a helper
 called from outside a run — it raises `ContractViolation` saying that `measure` was
 called outside a running node and naming `utils.measure` inside `configure` or a test
