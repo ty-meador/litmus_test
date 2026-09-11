@@ -77,6 +77,10 @@
       },
       "additionalProperties": true,
       "description": "Detached structured evidence snapshot. Suite-authored keys beyond the framework-owned slot are permitted."
+    },
+    "suite_target": {
+      "type": ["string", "null"],
+      "description": "The loader target that produced the run, as litmus run resolved it: an absolute suite file or module name, '::', and the suite class name. Null when the run was started without one, in which case litmus inspect cannot offer the Re-Run tab unless --suite names the suite. Added within version 1; a consumer written before it treats the field as additive."
     }
   },
   "$defs": {

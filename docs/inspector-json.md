@@ -32,6 +32,7 @@ type `run-result`; consumers do not need to derive the run directory name.
 | `physical_location` | string | `PHYSICAL_LOCATION`, or `unknown` when absent. |
 | `env` | object | Environment snapshot taken at the start of the run, filtered per the run's allow or deny list; see below. |
 | `run_data` | object | Detached structured evidence snapshot: the JSON-safe view of the node's ctx, plus, on a leaf, the evidence its verdict carried. It always contains a framework-owned `measurements` array: one entry per `utils.measure` call on this node, in call order, empty when the node measured nothing. |
+| `suite_target` | string or null | The loader target that produced the run, as `litmus run` resolved it: an absolute suite file or module name, `::`, and the suite class name. `litmus inspect` loads this suite for its Re-Run tab, so the technician re-runs a node with the code that ran in production; `--suite` overrides it. `null` when the run was started without one, from a developer's own harness. Added within version 1 on 2026-09-10; a consumer written before it treats the field as additive. |
 
 A measurement entry is `{name, value, unit, limits, in_limits, timestamp}` as
 `docs/measurements.md` defines it: `limits` is `{low, high}` with `null` for an open

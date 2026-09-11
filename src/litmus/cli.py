@@ -15,7 +15,9 @@ surface (``docs/inspector.md``). ``PATH`` is a run directory or its ``result.jso
 without it the most recently modified ``result.json`` under the artifact root opens,
 the legacy discovery rule carried over by Ty's ruling of 2026-09-09 (issue #89). No
 saved inspection runs suite code: what is not a saved version-1 run is refused with
-the reader's diagnostic.
+the reader's diagnostic. The Re-Run tab is the deliberate exception: it executes the
+suite ``litmus run`` recorded as ``suite_target``, or the one ``--suite`` names, and
+only when the technician presses Enter on a node (Ty's ruling of 2026-09-10).
 
 Exit status is the station contract (``docs/litmus-run.md``):
 
@@ -50,7 +52,8 @@ from litmus.base import LitmusTest
 from litmus.errors import LitmusError
 from litmus.inspector_app import InspectorApp
 from litmus.inspector_artifacts import ArtifactDiagnostic
-from litmus.inspector_run import SavedRunReader
+from litmus.inspector_rerun import RerunSession, SuiteFactory
+from litmus.inspector_run import SavedRun, SavedRunReader
 from litmus.junit import JunitXml
 from litmus.lifecycle import State
 from litmus.results import RunResult
@@ -122,6 +125,38 @@ class SuiteLoader:
             f"{source}: defines {len(defined)} suites ({names}); "
             f"name one as {source}{_SELECTOR}SuiteClass"
         )
+
+    @staticmethod
+    def construct(suite_class: type[LitmusTest]) -> LitmusTest:
+        """Construct ``suite_class`` from its name alone, or raise ``UsageError``.
+
+        The station has nothing but the name to give, so a suite the command line can
+        run is one whose every other constructor parameter has a default.
+        """
+        try:
+            return suite_class(name=suite_class.__name__)
+        except TypeError as exc:
+            raise UsageError(
+                f"{suite_class.__qualname__} cannot be constructed from its name alone "
+                f"({exc}); give every other __init__ parameter a default so a station "
+                "can run it"
+            ) from exc
+        except LitmusError as exc:
+            raise UsageError(f"{suite_class.__qualname__}: {exc}") from exc
+
+    @staticmethod
+    def canonical(target: str, suite_class: type[LitmusTest]) -> str:
+        """The target to record on the run: an absolute file or module name, and the class.
+
+        The class is always named, even when the module defined only one, so the record
+        still selects the same suite after a second one is added beside it. A file path
+        is made absolute so ``litmus inspect`` from another directory finds it.
+        """
+        source, _, _ = target.partition(_SELECTOR)
+        path = Path(source)
+        if source.endswith(".py") or path.exists():
+            source = str(path.resolve())
+        return f"{source}{_SELECTOR}{suite_class.__name__}"
 
     def _import(self, source: str) -> ModuleType:
         path = Path(source)
@@ -264,7 +299,13 @@ class LitmusCommand:
             return EXIT_USAGE
 
     def _inspect(self, args: argparse.Namespace) -> int:
-        """Open the selected or latest saved run in the Inspector; run no suite code."""
+        """Open the selected or latest saved run in the Inspector.
+
+        Opening runs no suite code. The Re-Run tab gets a factory for the suite, not
+        a suite: an explicit ``--suite`` is loaded now so a wrong target is a usage
+        error at the prompt, while the recorded ``suite_target`` is loaded only when
+        the technician first opens that tab, so inspection alone still imports nothing.
+        """
         root = args.artifact_root
         if root is None:
             root = os.environ.get(_ARTIFACT_ROOT_VARIABLE, _DEFAULT_ARTIFACT_ROOT)
@@ -274,14 +315,41 @@ class LitmusCommand:
             # The reader's words are the refusal: what was selected, and why it is not
             # a saved version-1 run. No other file is opened in its place.
             raise UsageError(f"{saved.reference}: {saved.message}")
-        InspectorApp(saved).run()
+        session = RerunSession(saved, self._suite_factory(saved, args.suite))
+        try:
+            InspectorApp(saved, session).run()
+        finally:
+            # Re-run evidence is scratch by ruling: nothing the technician produced
+            # from that tab outlives the Inspector, however it closed.
+            session.close()
         return EXIT_PASS
+
+    @staticmethod
+    def _suite_factory(saved: SavedRun, explicit: str | None) -> SuiteFactory | str:
+        loader = SuiteLoader()
+        if explicit is not None:
+            suite_class = loader.load(explicit)
+            return lambda: loader.construct(suite_class)
+        recorded = saved.tree.result.get("suite_target")
+        if not isinstance(recorded, str):
+            return (
+                "this run did not record the suite that produced it; "
+                "reopen with --suite PATH[::SuiteClass] to re-run its nodes"
+            )
+        return lambda: loader.construct(loader.load(recorded))
 
     def _run_suite(self, args: argparse.Namespace) -> int:
         """Load, construct, and run the suite ``args.target`` selects."""
-        suite = self._construct(SuiteLoader().load(args.target))
+        loader = SuiteLoader()
+        suite_class = loader.load(args.target)
+        suite = loader.construct(suite_class)
         self._attach_console_log()
-        result = asyncio.run(suite.run(env=self._run_env(args.artifact_root)))
+        result = asyncio.run(
+            suite.run(
+                env=self._run_env(args.artifact_root),
+                suite_target=loader.canonical(args.target, suite_class),
+            )
+        )
         self._render(result, json_out=args.json, junit=args.junit)
         return _EXIT_BY_STATE[result.state]
 
@@ -363,8 +431,9 @@ class LitmusCommand:
             description=(
                 "Open PATH, a run directory or its result.json, in the Inspector. Without "
                 "PATH, open the most recently modified result.json under the artifact "
-                "root. No suite code runs; anything that is not a saved version-1 run is "
-                "refused with the reader's diagnostic."
+                "root. Opening runs no suite code; anything that is not a saved version-1 "
+                "run is refused with the reader's diagnostic. The Re-Run tab executes "
+                "the suite the run recorded, or the one --suite names, only on Enter."
             ),
         )
         inspect_parser.add_argument(
@@ -381,20 +450,15 @@ class LitmusCommand:
                 f"(default: {_DEFAULT_ARTIFACT_ROOT})"
             ),
         )
+        inspect_parser.add_argument(
+            "--suite",
+            metavar="TARGET",
+            help=(
+                "suite the Re-Run tab executes, as for litmus run "
+                "(default: the suite_target the run recorded)"
+            ),
+        )
         return parser
-
-    @staticmethod
-    def _construct(suite_class: type[LitmusTest]) -> LitmusTest:
-        try:
-            return suite_class(name=suite_class.__name__)
-        except TypeError as exc:
-            raise UsageError(
-                f"{suite_class.__qualname__} cannot be constructed from its name alone "
-                f"({exc}); give every other __init__ parameter a default so a station "
-                "can run it"
-            ) from exc
-        except LitmusError as exc:
-            raise UsageError(f"{suite_class.__qualname__}: {exc}") from exc
 
     @staticmethod
     def _run_env(artifact_root: str | None) -> Mapping[str, str] | None:
