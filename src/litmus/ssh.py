@@ -7,8 +7,8 @@ it is not on the public surface.
 Via chains are a constructor argument: an upstream `SshInterface` is handed over
 unconnected, brought up before this one, torn down after it, and hard-cancelled
 with it. This interface owns its hop outright — a hop cannot be shared or
-managed externally. Framework-owned `LitmusTest` via lifecycle (`via=` on the
-Testable) sits on top of this: the via device owns the hop, and the consumer
+managed externally. The parent-owns-the-route model sits on top of this: the
+node whose `configure()` opened the hop owns it, and every node it composes
 borrows it through the routing layer's `tunnel=` channel.
 
 `tunnel` is the mirror image, for the routing layer: a *borrowed* hop, handed

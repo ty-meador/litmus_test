@@ -730,14 +730,29 @@ class TestTimeBudgetResourceCancellation:
         assert not transport.connected
         assert not transport.has_in_flight
 
-    async def test_fail_after_bounds_a_via_configure_and_consumer_adopts_evidence(
+    async def test_fail_after_bounds_a_parents_configure_and_its_children_stay_pending(
         self,
         install_mock_connector: ConnectorInstaller,
     ) -> None:
         transport = MockTransport()
         cleaned = asyncio.Event()
+        child_ran = False
 
-        class Via(LitmusTest):
+        class Child(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                nonlocal child_ran
+                del utils
+                child_ran = True
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("unreached", self._pass)
+
+            async def _pass(self, utils: TestUtils) -> Verdict:
+                del utils
+                return PASS
+
+        class Gateway(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
                 install_mock_connector(utils, transport)
                 await utils.use_shell(host="gateway", username="root")
@@ -745,43 +760,31 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.test("unused", self._pass)
-
-            async def _pass(self, utils: TestUtils) -> Verdict:
-                del utils
-                return PASS
+                return Child(name="child")
 
             async def cleanup(self, utils: TestUtils) -> None:
                 del utils
                 assert not transport.connected
                 cleaned.set()
 
-        class Consumer(LitmusTest):
-            def build_suite(self) -> LitmusTest:
-                return self.test("unreached", self._pass)
-
-            async def _pass(self, utils: TestUtils) -> Verdict:
-                del utils
-                return PASS
-
         result = await asyncio.wait_for(
-            Consumer(
-                name="consumer",
-                via=Via(name="gateway", fail_after=_BUDGET),
-            ).run(),
+            Gateway(name="gateway", fail_after=_BUDGET).run(),
             _PROMPT,
         )
 
+        # The bench was not ready, so the device was never asked: the Fail is the
+        # parent's, from its configure slot, and the child never entered its own.
         assert result.state is State.FAIL
         assert result.slot is Slot.CONFIGURE
         assert isinstance(result.failure, TestFailure)
         assert result.timeout is not None
         assert result.timeout.declared == "fail_after"
-        assert result.timeout.clock == "consumer/gateway"
+        assert result.timeout.clock == "gateway"
         assert transport.cancel_count == 1
         assert cleaned.is_set()
+        assert child_ran is False
 
-    async def test_abort_after_on_via_preserves_borrowed_hop_until_cleanup(
+    async def test_abort_after_on_a_middle_node_preserves_the_parents_hop_until_its_cleanup(
         self,
         install_mock_connector: ConnectorInstaller,
     ) -> None:
@@ -789,37 +792,6 @@ class TestTimeBudgetResourceCancellation:
         target = MockTransport()
         cleanup_topology: list[tuple[bool, bool]] = []
 
-        class Gateway(LitmusTest):
-            async def configure(self, utils: TestUtils) -> dict[str, object]:
-                install_mock_connector(utils, {"gateway": hop})
-                await utils.use_shell(host="gateway", username="root")
-                return {}
-
-            def build_suite(self) -> LitmusTest:
-                return self.test("unused", self._pass)
-
-            async def _pass(self, utils: TestUtils) -> Verdict:
-                del utils
-                return PASS
-
-        class TimedVia(LitmusTest):
-            async def configure(self, utils: TestUtils) -> dict[str, object]:
-                install_mock_connector(utils, {"target": target})
-                await utils.use_shell(host="target", username="root")
-                await asyncio.Event().wait()
-                return {}
-
-            def build_suite(self) -> LitmusTest:
-                return self.test("unused", self._pass)
-
-            async def _pass(self, utils: TestUtils) -> Verdict:
-                del utils
-                return PASS
-
-            async def cleanup(self, utils: TestUtils) -> None:
-                del utils
-                cleanup_topology.append((target.connected, hop.connected))
-
         class Consumer(LitmusTest):
             def build_suite(self) -> LitmusTest:
                 return self.test("unreached", self._pass)
@@ -828,96 +800,19 @@ class TestTimeBudgetResourceCancellation:
                 del utils
                 return PASS
 
-        gateway = Gateway(name="gateway")
-        timed_via = TimedVia(
-            name="timed via",
-            via=gateway,
-            abort_after=_BUDGET,
-        )
-        result = await asyncio.wait_for(
-            Consumer(name="consumer", via=timed_via).run(),
-            _PROMPT,
-        )
-
-        assert result.state is State.ABORTED
-        assert result.failure is None
-        assert result.timeout is not None
-        assert result.timeout.declared == "abort_after"
-        assert result.timeout.clock == "consumer/timed via"
-        assert target.cancel_count == 1
-        assert hop.cancel_count == 0
-        assert cleanup_topology == [(False, True)]
-        assert hop.disconnect_count == 1
-
-    async def test_public_configure_only_maps_deadline_abort_to_timeout(self) -> None:
-        cleaned = asyncio.Event()
-
-        class Via(LitmusTest):
+        class Timed(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
-                del utils
+                install_mock_connector(utils, {"target": target})
+                await utils.use_shell(host="target", username="root")
                 await asyncio.Event().wait()
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.test("unused", self._pass)
-
-            async def _pass(self, utils: TestUtils) -> Verdict:
-                del utils
-                return PASS
+                return Consumer(name="consumer")
 
             async def cleanup(self, utils: TestUtils) -> None:
                 del utils
-                cleaned.set()
-
-        via = Via(name="gateway", abort_after=_BUDGET)
-        with pytest.raises(TimeoutError, match="abort_after"):
-            await asyncio.wait_for(via.run_configure_only(), _PROMPT)
-        await via.run_cleanup_only()
-
-        assert cleaned.is_set()
-
-    async def test_public_configure_only_caller_cancel_still_cancels_bring_up(self) -> None:
-        configure_started = asyncio.Event()
-        configure_cancelled = asyncio.Event()
-
-        class Via(LitmusTest):
-            async def configure(self, utils: TestUtils) -> dict[str, object]:
-                del utils
-                configure_started.set()
-                try:
-                    await asyncio.Event().wait()
-                finally:
-                    configure_cancelled.set()
-                return {}
-
-            def build_suite(self) -> LitmusTest:
-                return self.test("unused", self._pass)
-
-            async def _pass(self, utils: TestUtils) -> Verdict:
-                del utils
-                return PASS
-
-        via = Via(name="gateway")
-        running = asyncio.create_task(via.run_configure_only())
-        await asyncio.wait_for(configure_started.wait(), _PROMPT)
-
-        running.cancel()
-
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(running, _PROMPT)
-        await asyncio.wait_for(configure_cancelled.wait(), _PROMPT)
-        configure_task = via._configure_only_task  # pyright: ignore[reportPrivateUsage]
-        assert configure_task is not None
-        await asyncio.gather(configure_task, return_exceptions=True)
-        await via.run_cleanup_only()
-
-    async def test_deadline_cancels_owned_tunnel_but_never_its_borrowed_hop(
-        self,
-        install_mock_connector: ConnectorInstaller,
-    ) -> None:
-        hop = MockTransport()
-        target = MockTransport()
-        target.park("park")
+                cleanup_topology.append((target.connected, hop.connected))
 
         class Gateway(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
@@ -926,11 +821,25 @@ class TestTimeBudgetResourceCancellation:
                 return {}
 
             def build_suite(self) -> LitmusTest:
-                return self.test("unused", self._pass)
+                return Timed(name="timed", abort_after=_BUDGET)
 
-            async def _pass(self, utils: TestUtils) -> Verdict:
-                del utils
-                return PASS
+        result = await asyncio.wait_for(Gateway(name="gateway").run(), _PROMPT)
+
+        # The cut node loses only the tunnel it opened; the hop it inherited is its
+        # parent's and stays up through the cut node's cleanup.
+        assert result.state is State.ABORTED
+        assert target.cancel_count == 1
+        assert hop.cancel_count == 0
+        assert cleanup_topology == [(False, True)]
+        assert hop.disconnect_count == 1
+
+    async def test_deadline_cancels_owned_tunnel_but_never_its_inherited_hop(
+        self,
+        install_mock_connector: ConnectorInstaller,
+    ) -> None:
+        hop = MockTransport()
+        target = MockTransport()
+        target.park("park")
 
         class Consumer(LitmusTest):
             async def configure(self, utils: TestUtils) -> dict[str, object]:
@@ -945,11 +854,16 @@ class TestTimeBudgetResourceCancellation:
                 await utils.exec("park")
                 return PASS
 
-        gateway = Gateway(name="gateway")
-        result = await asyncio.wait_for(
-            Consumer(name="consumer", via=gateway, abort_after=_BUDGET).run(),
-            _PROMPT,
-        )
+        class Rack(LitmusTest):
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                install_mock_connector(utils, {"gateway": hop})
+                await utils.use_shell(host="gateway", username="root")
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return Consumer(name="consumer", abort_after=_BUDGET)
+
+        result = await asyncio.wait_for(Rack(name="rack").run(), _PROMPT)
 
         assert result.state is State.ABORTED
         assert target.cancel_count == 1

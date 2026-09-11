@@ -41,9 +41,7 @@ from litmus.measurement import (
 )
 from litmus.remote import RemoteInterface
 from litmus.routing import (
-    ExecRouter,
     ExecRouting,
-    RouterRunParams,
     Shell,
     require_connection_pair,
 )
@@ -720,7 +718,6 @@ class NodeRuntime:
         discrete_log_file: bool,
         isolate_context: bool,
         audit_signal: AuditSignal | None = None,
-        inherit_route: bool = True,
     ) -> NodeRuntime:
         """Create one node-owned runtime, and its ``TestUtils`` view, from this node's policy."""
         scoped: NodeRuntime = object.__new__(NodeRuntime)
@@ -764,10 +761,9 @@ class NodeRuntime:
         scoped.local_exec = self.local_exec
         scoped.transports = self.transports
         scoped.integration_hooks = self.integration_hooks
-        inherited = self.routing.child_run_params().router if inherit_route else None
         scoped.routing = ExecRouting(
             self.local_exec.run,
-            inherited=inherited,
+            inherited=self.routing.child_run_params().router,
             logger=scoped.logger,
             on_open=self.transports.register,
             output_budget=self.local_exec.output_budget,
@@ -814,20 +810,6 @@ class NodeRuntime:
         and the route is not final until it returns.
         """
         self.logger.info("exec routing: %s", self.routing.routing_line())
-
-    def inherit_router(self, router: ExecRouter | None) -> None:
-        """Install a via device's route so this node's exec borrows that hop.
-
-        A declared via with no hop is a framework bug, not a silent fall-through
-        to local exec.
-        """
-        if router is None:
-            node = self.scope[-1] if self.scope else "<unknown>"
-            raise FrameworkContractViolation(
-                node,
-                detail="a via hop was declared but no exec route was supplied",
-            )
-        self.routing.apply_run_params(RouterRunParams(router))
 
     async def disconnect_opened(self) -> None:
         """Close remotes and device-API sessions this node opened."""
