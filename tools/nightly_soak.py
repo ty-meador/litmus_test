@@ -1,6 +1,6 @@
 """Nightly soak: the full suite and the rack suite many times over, verdict posted. Not shipped.
 
-Runs from the ``nightly-soak`` CI schedule (see .gitlab-ci.yml) on the ``main`` head.
+Runs at the bench on the ``main`` head (``make nightly-record``); there is no CI (#138).
 ``make soak`` exists because one green run proves nothing about timing, and nobody runs
 it unprompted; this is the run nobody has to remember. It executes the full suite
 ``SOAK_RUNS`` times (default 8, as ``make soak``) and ``tests/test_rack_scale.py``
@@ -14,11 +14,13 @@ executes even after a failure, because "3 of 8" is the datum a timing race leave
 Each invocation draws a fresh Hypothesis seed and records its replay command before
 starting pytest. This overrides the fixed gate seed without changing ``make check``.
 
-Environment (CI provides all but the two secrets): ``LITMUS_BOT_TOKEN`` (api scope),
-``DISCORD_WEBHOOK_URL``, ``CI_API_V4_URL``, ``CI_PROJECT_ID``, ``CI_PIPELINE_URL``,
-``CI_COMMIT_SHORT_SHA``. A missing secret is reported, never fatal: the suite verdict
-decides the exit code, and the pipeline stays the record of a night that could not be
-posted. ``--no-post`` runs and prints only (``make nightly``).
+Environment: ``LITMUS_BOT_TOKEN`` (api scope) and ``DISCORD_WEBHOOK_URL`` are the two
+secrets; ``GITLAB_API_V4_URL`` and ``GITLAB_PROJECT_ID`` default to this project. The
+head sha comes from ``git rev-parse`` on the checkout, and the night's record names the
+bench host and the ``.soak/`` directory the logs stayed in. A missing secret is
+reported, never fatal: the suite verdict decides the exit code, and the logs stay the
+record of a night that could not be posted. ``--no-post`` runs and prints only
+(``make nightly``).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import os
 import re
 import secrets
 import shlex
+import socket
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -45,6 +48,8 @@ DEFAULT_SOAK_RUNS = 8
 DEFAULT_RACK_REPEATS = 20
 GREEN_STREAK_TARGET = 14
 DISCORD_MESSAGE_LIMIT = 1900
+DEFAULT_API_V4_URL = "https://gitlab.com/api/v4"
+DEFAULT_PROJECT_ID = "85833370"  # Tyler-Meador/litmus_test
 _FAILURE_LINE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
 _MARKER = re.compile(r"<!-- nightly-soak verdict=(green|red) ")
 
@@ -81,11 +86,11 @@ class SoakRun:
 
 @dataclass(frozen=True)
 class NightReport:
-    """The night's verdict: every run, the head it ran on, and where the pipeline lives."""
+    """The night's verdict: every run, the head it ran on, and where its logs stayed."""
 
     runs: tuple[SoakRun, ...]
     sha: str
-    pipeline_url: str
+    record: str
     date: str
 
     @property
@@ -125,12 +130,12 @@ class NightReport:
         else:
             failures = "\n".join(f"- {run.describe()}" for run in self.red_runs)
             body = f"{self.headline()}. Streak reset.\n\n{failures}"
-        return f"{body}\n\nPipeline: {self.pipeline_url}\n\n{marker}"
+        return f"{body}\n\nRecord: {self.record}\n\n{marker}"
 
     def discord_message(self) -> str:
         """The red-night post for #general, held under Discord's message limit."""
         failures = "\n".join(f"- {run.describe()}" for run in self.red_runs)
-        text = f"{self.headline()}.\n{failures}\nPipeline: {self.pipeline_url}"
+        text = f"{self.headline()}.\n{failures}\nRecord: {self.record}"
         if len(text) > DISCORD_MESSAGE_LIMIT:
             text = text[: DISCORD_MESSAGE_LIMIT - 1] + "…"
         return text
@@ -141,8 +146,11 @@ class NightlySoak:
 
     ``run`` returns the process exit code: 0 when every run was green, 1 otherwise.
     Missing credentials are printed and skipped; a posting call that fails raises, so
-    the pipeline goes red with the cause in its log rather than a night going missing
-    quietly.
+    the bench run exits with the cause on its terminal rather than a night going
+    missing quietly.
+
+    ``sha`` defaults to the checkout's head (``head_sha``) and ``host`` to this
+    machine's name; together with ``log_dir`` they make the night's record line.
     """
 
     def __init__(
@@ -154,6 +162,8 @@ class NightlySoak:
         http: Http | None = None,
         log_dir: Path = LOG_DIR,
         out: TextIO = sys.stdout,
+        sha: str | None = None,
+        host: str | None = None,
     ) -> None:
         self._env = env
         self._post = post
@@ -161,6 +171,8 @@ class NightlySoak:
         self._http: Http = http if http is not None else _http
         self._log_dir = log_dir
         self._out = out
+        self._sha = sha if sha is not None else head_sha(ROOT)
+        self._host = host if host is not None else socket.gethostname()
         self._soak_runs = _count(env, "SOAK_RUNS", DEFAULT_SOAK_RUNS)
         self._rack_repeats = _count(env, "RACK_REPEATS", DEFAULT_RACK_REPEATS)
 
@@ -173,8 +185,8 @@ class NightlySoak:
         ]
         report = NightReport(
             runs=tuple(runs),
-            sha=self._env.get("CI_COMMIT_SHORT_SHA", "local"),
-            pipeline_url=self._env.get("CI_PIPELINE_URL", "(no pipeline)"),
+            sha=self._sha,
+            record=f"{self._host}:{self._log_dir}",
             date=datetime.now(UTC).date().isoformat(),
         )
         self._say(report.headline())
@@ -243,9 +255,10 @@ class NightlySoak:
         return streak
 
     def _api(self, token: str, method: str, path: str, body: object | None = None) -> object:
-        url = f"{self._env['CI_API_V4_URL']}/projects/{self._env['CI_PROJECT_ID']}/{path}"
+        api = self._env.get("GITLAB_API_V4_URL", DEFAULT_API_V4_URL)
+        project = self._env.get("GITLAB_PROJECT_ID", DEFAULT_PROJECT_ID)
         headers = {"PRIVATE-TOKEN": token, "Content-Type": "application/json"}
-        return self._http(method, url, headers, body)
+        return self._http(method, f"{api}/projects/{project}/{path}", headers, body)
 
     def _say(self, line: str) -> None:
         self._out.write(line + "\n")
@@ -262,6 +275,19 @@ def _count(env: Mapping[str, str], name: str, default: int) -> int:
         msg = f"{name} must be at least 1, got {count}"
         raise ValueError(msg)
     return count
+
+
+def head_sha(root: Path) -> str:
+    """The short sha of ``root``'s checked-out head, or ``local`` where git cannot say."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    sha = result.stdout.strip()
+    return sha if result.returncode == 0 and sha else "local"
 
 
 def _run_pytest(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:

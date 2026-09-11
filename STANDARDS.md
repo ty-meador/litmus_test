@@ -12,19 +12,25 @@ source of truth and this doc is the explanation.
 - **ruff** formats and lints. **pyright strict** type-checks. **pytest + pytest-asyncio**
   (auto mode) test.
 - One entry point: `make`. `make install` once, `make fix` while working,
-  `make check` before every push — it is the CI gate and runs verify-only.
+  `make check` before every push — it is the gate and runs verify-only. **There is no
+  CI** (Ty's ruling of 2026-09-10, recorded on #104): the bench run is the gate,
+  permanently. Every MR states "green locally" on its head, the reviewer runs
+  `make check` again on that head before merging, and nothing arms auto-merge on a
+  pipeline.
 - **The locked set is audited, not trusted.** `make check` ends with `make audit`:
   `pip-audit` over every pin in `uv.lock`, red on any published vulnerability. It needs
   the network; there is no offline pass. A finding is fixed by upgrading the pin; if an
   advisory truly does not apply, `--ignore-vuln` goes in the Makefile with the issue that
-  says why. A weekly CI schedule refreshes `uv.lock` and opens the update MR itself
-  (`tools/dependency_update.py`); nobody has to remember to look.
+  says why. `make deps-update` (`tools/dependency_update.py`, run weekly at the bench
+  with `LITMUS_BOT_TOKEN` exported) refreshes `uv.lock` and opens the update MR itself;
+  `make deps-plan` prints the plan and touches nothing.
 - **The package is built and smoke-installed by the gate.** `make check` runs
   `make smoke`: `uv build` into `dist/`, then the wheel installed into a clean venv under
   `.smoke/` where `litmus-check --list-rules` and `litmus run examples/hello_world.py`
   must start. A wheel that cannot build, or that imports from `src/` instead of itself,
   is red before it is tagged, so the developer's `pip install` never delivers a package
-  that cannot import on the floor. Publishing waits on the name decision (#9) and on CI.
+  that cannot import on the floor. Publishing waits on the name decision (#9) and is a
+  bench step of the release checklist, not a pipeline (#138).
 - The pre-commit hook (installed by `make install`) auto-formats and auto-fixes staged
   files. Don't bypass it with `--no-verify`.
 
@@ -144,12 +150,13 @@ that reader is soon a stranger.
 - **One green run proves nothing about a timing race.** A change that touches asyncio
   timing, cancellation, hook scheduling, or transport teardown is attested with
   `make soak` (the full suite eight times over; `SOAK_RUNS=n` overrides), not a single
-  pass — a race can fail 7 of 8 locally while CI's machine wins it every time. CI runs
-  the soak job on every MR as a second net; it does not replace running it at the bench.
-  A nightly CI schedule then runs the full suite and the rack suite many times over on
-  `main` (`tools/nightly_soak.py`, `make nightly` at the bench) and records each night
-  on issue #68; a red night names the failing case and run in #general before an MR
-  meets it.
+  pass — a race can fail 7 of 8 on one machine while another wins it every time. The
+  reviewer runs the soak again on the MR head before merging such a change; there is
+  no second machine unless a person runs one. The nightly soak is a bench run of the
+  full suite and the rack suite many times over on `main`
+  (`tools/nightly_soak.py`: `make nightly` runs and prints, `make nightly-record`
+  also records the night on issue #68 with `LITMUS_BOT_TOKEN` exported); a red night
+  names the failing case and run in #general before an MR meets it.
 - **Generated coverage must remain replayable.** `make check` and `make soak` retain
   the fixed Hypothesis seed in `pyproject.toml`. The nightly driver (`make nightly`)
   draws a fresh seed for every pytest invocation and writes the exact replay command
@@ -165,8 +172,8 @@ that reader is soon a stranger.
   killing test or, where the mutation is behaviorally identical to the original
   (dead code, an unreachable branch), recorded as equivalent with its reasoning in the
   MR that ran the audit. `make mutants` is an audit, not a gate: it is not part of
-  `make check` and CI does not run it — mutation runs are slow and its job is to find
-  gaps for a human to close, not to fail a pipeline.
+  `make check` — mutation runs are slow and its job is to find gaps for a human to
+  close, not to fail the gate.
 
 ## 7. Workflow
 
