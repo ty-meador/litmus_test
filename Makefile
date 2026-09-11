@@ -46,7 +46,7 @@ smoke:  ## Install the wheel into a clean venv and run both console entry points
 	cd .smoke && venv/bin/litmus-check --list-rules > /dev/null
 	cd .smoke && venv/bin/litmus run ../examples/hello_world.py
 
-check:  ## CI gate — verify only, no auto-fix. Must be green before push.
+check:  ## The gate (there is no CI) — verify only, no auto-fix. Green before push; the reviewer re-runs it before merge.
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run pyright
@@ -70,8 +70,17 @@ soak:  ## Race gate — full suite SOAK_RUNS times; one green run proves nothing
 		i=$$((i + 1)); \
 	done
 
-nightly:  ## The nightly soak as CI runs it (soak + rack suite RACK_REPEATS times); posts nothing
+nightly:  ## The nightly soak at the bench (soak + rack suite RACK_REPEATS times); prints, posts nothing
 	SOAK_RUNS=$(SOAK_RUNS) RACK_REPEATS=$(RACK_REPEATS) uv run python tools/nightly_soak.py --no-post
+
+nightly-record:  ## The nightly soak, recorded on issue #68 (needs LITMUS_BOT_TOKEN; DISCORD_WEBHOOK_URL for a red night)
+	SOAK_RUNS=$(SOAK_RUNS) RACK_REPEATS=$(RACK_REPEATS) uv run python tools/nightly_soak.py
+
+deps-plan:  ## Print the uv.lock upgrade plan; touches nothing
+	uv run python tools/dependency_update.py --dry-run
+
+deps-update:  ## Refresh uv.lock and open the update MR (needs LITMUS_BOT_TOKEN); run weekly at the bench
+	uv run python tools/dependency_update.py
 
 mutants:  ## Mutation audit over the kernel of trust (verdict/base/lifecycle); not a gate, see STANDARDS.md §6
 	uv run mutmut run
