@@ -94,6 +94,7 @@ The declared tree is still complete, so you can see what was skipped.
 | `physical_location` | Station / slot name from `PHYSICAL_LOCATION`, or `unknown` if that variable was not in the run environment. |
 | `env` | The run environment as the run declared it. Secrets in an unfiltered environment are in this object verbatim — that is an operator obligation, not a framework rewrite. With `environment=DEBUG` the allow/deny list is ignored and a warning is in the log. |
 | `run_data` | Suite-authored evidence snapshot: what `configure()` provided, minus anything that is not JSON. Version 1 always has a `measurements` array: the numbers this node recorded with `utils.measure`, or empty. Other keys are the suite's. The readings a claim took, and the numbers it measured, are on that claim's node in `summary_tree`, not here. |
+| `suite_target` | Which suite produced this run, as `litmus run` was told it: the file or module, `::`, the class. This is what the Inspector's Re-Run tab executes when you press Enter on a node, so the check you run at the bench is the code that ran in production. `null` means the run was not started by `litmus run`; open the Inspector with `--suite` if you need to re-run from it. |
 
 ### A summary-tree node
 

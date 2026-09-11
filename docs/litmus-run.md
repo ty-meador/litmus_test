@@ -19,6 +19,11 @@ and the **`--json` record**, which is the same `format_version` 1 result the fra
 writes as `result.json`, governed by the policy in `docs/inspector-json.md`. The
 Python module behind the command is private.
 
+The record names the suite that produced it. `litmus run` resolves `TARGET` to an
+absolute file or module name and the class it selected, and writes that as
+`suite_target`, so `litmus inspect` can offer the same suite on its Re-Run tab without
+being told again (`docs/inspector.md`).
+
 ## Exit status
 
 | Status | Meaning |

@@ -18,7 +18,16 @@ from pathlib import Path
 import pytest
 from tests.inspector_rack import record_mixed_run
 
-from litmus.cli import EXIT_PASS, EXIT_USAGE, LitmusCommand, SavedRunLocator, UsageError
+from litmus import LitmusTest
+from litmus.cli import (
+    EXIT_PASS,
+    EXIT_USAGE,
+    LitmusCommand,
+    SavedRunLocator,
+    SuiteLoader,
+    UsageError,
+)
+from litmus.inspector_rerun import RerunSession
 from litmus.inspector_run import SavedRun
 
 
@@ -34,45 +43,71 @@ def _record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return saved.run_root
 
 
+class _Opened:
+    """What the command handed the screen: the saved runs, and the Re-Run sessions."""
+
+    def __init__(self) -> None:
+        self.runs: list[SavedRun] = []
+        self.sessions: list[RerunSession] = []
+
+    @property
+    def roots(self) -> list[Path]:
+        return [saved.run_root for saved in self.runs]
+
+
 @pytest.fixture
-def opened(monkeypatch: pytest.MonkeyPatch) -> list[SavedRun]:
+def opened(monkeypatch: pytest.MonkeyPatch) -> _Opened:
     """Replace the Textual app with a recorder of the runs the command hands it."""
-    runs: list[SavedRun] = []
+    recorded = _Opened()
 
     class _Recorder:
-        def __init__(self, saved: SavedRun) -> None:
+        def __init__(self, saved: SavedRun, session: RerunSession) -> None:
             self._saved = saved
+            recorded.sessions.append(session)
 
         def run(self) -> None:
-            runs.append(self._saved)
+            recorded.runs.append(self._saved)
 
     monkeypatch.setattr("litmus.cli.InspectorApp", _Recorder)
-    return runs
+    return recorded
+
+
+_SUITE = """
+from litmus import PASS, LitmusTest, TestUtils, Verdict
+
+
+class Bench(LitmusTest):
+    def build_suite(self) -> LitmusTest:
+        return self.test("claim", self._claim)
+
+    async def _claim(self, utils: TestUtils) -> Verdict:
+        return PASS
+"""
 
 
 class TestOpening:
     """A selected result, or a selected run directory, opens exactly that run."""
 
     def test_result_path_opens_that_run_without_suite_code(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: list[SavedRun]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
     ) -> None:
         run_root = _record(tmp_path, monkeypatch)
 
         status, out, err = _run("inspect", str(run_root / "result.json"))
 
         assert (status, out, err) == (EXIT_PASS, "", "")
-        assert [saved.run_root for saved in opened] == [run_root.resolve()]
+        assert opened.roots == [run_root.resolve()]
 
     def test_run_directory_selects_its_result(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: list[SavedRun]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
     ) -> None:
         run_root = _record(tmp_path, monkeypatch)
 
         status, _, err = _run("inspect", str(run_root))
 
         assert (status, err) == (EXIT_PASS, "")
-        assert opened[0].run_root == run_root.resolve()
-        assert opened[0].tree.rows[0].ancestor_names == ("rack",)
+        assert opened.runs[0].run_root == run_root.resolve()
+        assert opened.runs[0].tree.rows[0].ancestor_names == ("rack",)
 
     def test_help_names_path_and_the_root(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exit_info:
@@ -83,6 +118,74 @@ class TestOpening:
         assert "PATH" in text
         assert "--artifact-root" in text
         assert "LITMUS_ARTIFACT_ROOT" in text
+        assert "--suite" in text
+
+
+class TestRerunSuite:
+    """Where the Re-Run tab's suite comes from, and what is refused at the prompt."""
+
+    def test_a_run_without_a_recorded_target_leaves_the_tab_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
+    ) -> None:
+        run_root = _record(tmp_path, monkeypatch)
+
+        status, _, _ = _run("inspect", str(run_root))
+
+        assert status == EXIT_PASS
+        (session,) = opened.sessions
+        assert session.available is False
+        assert session.unavailable is not None
+        assert "did not record the suite" in session.unavailable
+        assert "--suite" in session.unavailable
+
+    def test_the_recorded_target_is_loaded_only_when_the_tab_asks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
+    ) -> None:
+        suite = tmp_path / "bench.py"
+        suite.write_text(_SUITE, encoding="utf-8")
+        root = tmp_path / "evidence"
+        assert _run("run", "--artifact-root", str(root), str(suite))[0] == EXIT_PASS
+
+        def refuse_load(self: SuiteLoader, target: str) -> type[LitmusTest]:
+            raise AssertionError("loaded at open")
+
+        monkeypatch.setattr(SuiteLoader, "load", refuse_load)
+
+        status, _, _ = _run("inspect", "--artifact-root", str(root))
+
+        assert status == EXIT_PASS
+        (session,) = opened.sessions
+        assert session.available is False
+        monkeypatch.undo()
+        asyncio.run(session.prepare())
+        assert session.available is True, session.unavailable
+
+    def test_an_explicit_suite_that_cannot_load_is_a_usage_error_at_the_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
+    ) -> None:
+        run_root = _record(tmp_path, monkeypatch)
+
+        status, _, err = _run("inspect", str(run_root), "--suite", str(tmp_path / "gone.py"))
+
+        assert (status, opened.runs) == (EXIT_USAGE, [])
+        assert err.startswith("litmus inspect: error: ")
+        assert "no such file" in err
+
+    def test_an_explicit_suite_of_another_shape_is_refused_on_the_tab(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
+    ) -> None:
+        run_root = _record(tmp_path, monkeypatch)
+        suite = tmp_path / "bench.py"
+        suite.write_text(_SUITE, encoding="utf-8")
+
+        status, _, err = _run("inspect", str(run_root), "--suite", str(suite))
+
+        assert (status, err) == (EXIT_PASS, "")
+        (session,) = opened.sessions
+        asyncio.run(session.prepare())
+        assert session.available is False
+        assert session.unavailable is not None
+        assert session.unavailable.startswith("the supplied suite differs from the saved run")
 
 
 class TestLatestRun:
@@ -101,7 +204,7 @@ class TestLatestRun:
         return older, newer
 
     def test_latest_result_under_the_environment_root(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: list[SavedRun]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
     ) -> None:
         _, newer = self._two_runs(tmp_path, monkeypatch)
         monkeypatch.setenv("LITMUS_ARTIFACT_ROOT", str(tmp_path))
@@ -109,10 +212,10 @@ class TestLatestRun:
         status, _, err = _run("inspect")
 
         assert (status, err) == (EXIT_PASS, "")
-        assert [saved.run_root for saved in opened] == [newer.resolve()]
+        assert opened.roots == [newer.resolve()]
 
     def test_the_flag_overrides_the_environment(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: list[SavedRun]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
     ) -> None:
         older, newer = self._two_runs(tmp_path, monkeypatch)
         monkeypatch.setenv("LITMUS_ARTIFACT_ROOT", str(tmp_path / "second"))
@@ -120,11 +223,11 @@ class TestLatestRun:
         status, _, err = _run("inspect", "--artifact-root", str(tmp_path / "first"))
 
         assert (status, err) == (EXIT_PASS, "")
-        assert [saved.run_root for saved in opened] == [older.resolve()]
-        assert newer.resolve() not in [saved.run_root for saved in opened]
+        assert opened.roots == [older.resolve()]
+        assert newer.resolve() not in opened.roots
 
     def test_the_default_root_is_artifacts_in_the_working_directory(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: list[SavedRun]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
     ) -> None:
         run_root = _record(tmp_path, monkeypatch)
         shutil.move(run_root, tmp_path / "artifacts" / "kept")
@@ -134,7 +237,7 @@ class TestLatestRun:
         status, _, err = _run("inspect")
 
         assert (status, err) == (EXIT_PASS, "")
-        assert opened[0].run_root == (tmp_path / "artifacts" / "kept").resolve()
+        assert opened.runs[0].run_root == (tmp_path / "artifacts" / "kept").resolve()
 
     def test_locator_ignores_a_directory_named_like_the_result(self, tmp_path: Path) -> None:
         (tmp_path / "decoy" / "result.json").mkdir(parents=True)
@@ -149,7 +252,7 @@ class TestRefusals:
     """Nothing to open is exit 3 with the reason; no run is started to manufacture one."""
 
     def test_nothing_under_the_root_names_the_root(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: list[SavedRun]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: _Opened
     ) -> None:
         empty = tmp_path / "empty"
         empty.mkdir()
@@ -157,7 +260,7 @@ class TestRefusals:
 
         status, out, err = _run("inspect")
 
-        assert (status, out, opened) == (EXIT_USAGE, "", [])
+        assert (status, out, opened.runs) == (EXIT_USAGE, "", [])
         assert err.startswith("litmus inspect: error: no saved run under ")
         assert str(empty) in err
         assert "nothing to inspect" in err
@@ -167,37 +270,35 @@ class TestRefusals:
             SavedRunLocator().locate(None, artifact_root=tmp_path / "never")
 
     def test_a_missing_selection_carries_the_reader_diagnostic(
-        self, tmp_path: Path, opened: list[SavedRun]
+        self, tmp_path: Path, opened: _Opened
     ) -> None:
         absent = tmp_path / "gone" / "result.json"
 
         status, _, err = _run("inspect", str(absent))
 
-        assert (status, opened) == (EXIT_USAGE, [])
+        assert (status, opened.runs) == (EXIT_USAGE, [])
         assert err.startswith("litmus inspect: error: ")
         assert str(absent) in err
         assert "unavailable" in err
 
     def test_an_unsupported_version_is_refused_not_guessed(
-        self, tmp_path: Path, opened: list[SavedRun]
+        self, tmp_path: Path, opened: _Opened
     ) -> None:
         result = tmp_path / "result.json"
         result.write_text('{"format_version": 2}', encoding="utf-8")
 
         status, _, err = _run("inspect", str(tmp_path))
 
-        assert (status, opened) == (EXIT_USAGE, [])
+        assert (status, opened.runs) == (EXIT_USAGE, [])
         assert "format_version 2" in err
         assert "reader accepts integer 1" in err
 
-    def test_a_file_that_is_not_a_record_is_refused(
-        self, tmp_path: Path, opened: list[SavedRun]
-    ) -> None:
+    def test_a_file_that_is_not_a_record_is_refused(self, tmp_path: Path, opened: _Opened) -> None:
         result = tmp_path / "result.json"
         result.write_text("not json\n", encoding="utf-8")
 
         status, _, err = _run("inspect", str(result))
 
-        assert (status, opened) == (EXIT_USAGE, [])
+        assert (status, opened.runs) == (EXIT_USAGE, [])
         assert err.startswith("litmus inspect: error: ")
         assert str(result) in err

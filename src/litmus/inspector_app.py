@@ -10,12 +10,19 @@ another's name. The plain text of the last redraw is kept on the app for the sel
 and for anyone reading a screenshot, because a screen that cannot be read back cannot
 be held to the guide.
 
+Two tabs, one cut between them (Ty's ruling of 2026-09-10): Inspect is the archive of
+the production run and never executes anything; Re-Run is the bench, where Enter on a
+node executes it again through ``litmus.inspector_rerun`` and nothing persists. The
+legacy Failures list is folded into Inspect as the ``h`` key, which hides passing rows.
+
 Textual is the terminal library by Ty's ruling of 2026-09-09 (issue #89): the readers
 are asyncio-native, and its headless pilot lets these screens be driven by tests.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import ClassVar, Literal
 
 from rich.text import Text
@@ -23,16 +30,18 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.screen import ModalScreen
+from textual.timer import Timer
 from textual.widgets import Footer, Static
 
 from litmus.inspector_artifact_view import ArtifactModal, DiffRow, diff_rows, single_rows
+from litmus.inspector_rerun import RerunSession
 from litmus.inspector_run import SavedRun
 from litmus.inspector_selection import InspectorSelection, SelectionView
 from litmus.inspector_timeline import TimelineDiagnostic
 from litmus.inspector_timeline_view import TimelineEntry, TimelineView
 from litmus.inspector_tree import TreeRow
 
-type Tab = Literal["inspect", "failures"]
+type Tab = Literal["inspect", "rerun"]
 
 # One style per recorded state. Aborted is neither red nor green because it is a
 # distinct recovery path on the floor; a pending row is dim because null is not a
@@ -43,6 +52,9 @@ _STATE_STYLES: dict[str | None, tuple[str, str]] = {
     "Aborted": ("Aborted", "bold magenta"),
     None: ("Pending", "dim"),
 }
+_NOT_RERUN = ("not re-run", "dim")
+_RUNNING_STYLE = "bold cyan"
+_RUNNING_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 _LEVEL_STYLES: dict[str, str] = {
     "error": "bold red",
@@ -50,23 +62,80 @@ _LEVEL_STYLES: dict[str, str] = {
     "warning": "yellow",
 }
 
+# The legacy tree glyphs, so depth is read from the line and not counted in spaces.
+_TREE_BRANCH = "├─ "
+_TREE_LAST = "└─ "
+_TREE_VERT = "│  "
+_TREE_INDENT = "   "
+_OWNER_ARROW = "←"
+"""Marks the ancestor whose timeline the highlighted node's records rolled into."""
+
+_TAB_LABELS: tuple[tuple[Tab, str], ...] = (("inspect", "Inspect"), ("rerun", "Re-Run"))
+
 LOG_HEADER_LINES = 2
 """The owner line and the page line that precede the chronology in the log pane."""
 
 
-def _row_text(row: TreeRow, *, selected: bool) -> Text:
-    """Render one tree row: cursor, depth, name, state, and any reading not taken."""
-    label, style = _STATE_STYLES[row.state]
-    text = Text("> " if selected else "  ")
-    text.append("  " * (len(row.ancestor_names) - 1))
-    text.append(row.ancestor_names[-1], style="bold" if selected else "")
+@dataclass(frozen=True, slots=True)
+class RowDisplay:
+    """Everything one tree line shows, resolved by the screen from the current tab.
+
+    The label and readings come from the saved row on Inspect and from the re-run's
+    row on Re-Run, so the same renderer never mixes archive and bench evidence.
+    """
+
+    name: str
+    prefix: str
+    label: str
+    style: str
+    not_taken: tuple[str, ...]
+    selected: bool
+    owner: bool
+
+
+def _row_text(display: RowDisplay) -> Text:
+    """Render one tree row: cursor, tree glyphs, name, state, readings not taken, owner."""
+    text = Text("> " if display.selected else "  ")
+    text.append(display.prefix, style="dim")
+    text.append(display.name, style="bold" if display.selected else "")
     text.append("  ")
-    text.append(label, style=style)
-    if row.not_taken:
+    text.append(display.label, style=display.style)
+    if display.not_taken:
         # A declared reading absent from the evidence was never taken; the guide asks
         # for it by name so the technician does not read the gap as a zero.
-        text.append("  not taken: " + ", ".join(row.not_taken), style="yellow")
+        text.append("  not taken: " + ", ".join(display.not_taken), style="yellow")
+    if display.owner:
+        text.append(f"  {_OWNER_ARROW}", style="cyan")
     return text
+
+
+def _tree_prefixes(depths: Sequence[int]) -> list[str]:
+    """The glyph prefix of every displayed row, from the depths of the displayed rows.
+
+    Computed over what is on screen rather than the full tree, so hiding passing rows
+    still closes each branch on its last visible child. A row is the last of its
+    siblings when no later row at its depth appears before a shallower one.
+    """
+    last = [False] * len(depths)
+    continuing: set[int] = set()
+    for position in range(len(depths) - 1, -1, -1):
+        depth = depths[position]
+        last[position] = depth not in continuing
+        continuing = {other for other in continuing if other < depth}
+        continuing.add(depth)
+    prefixes: list[str] = []
+    last_at_depth: dict[int, bool] = {}
+    for position, depth in enumerate(depths):
+        last_at_depth[depth] = last[position]
+        if depth == 0:
+            prefixes.append("")
+            continue
+        lines = "".join(
+            _TREE_INDENT if last_at_depth.get(level, True) else _TREE_VERT
+            for level in range(1, depth)
+        )
+        prefixes.append(lines + (_TREE_LAST if last[position] else _TREE_BRANCH))
+    return prefixes
 
 
 def _window(count: int, selected: int, height: int) -> range:
@@ -116,7 +185,7 @@ def _log_row_text(row: TimelineEntry | TimelineDiagnostic) -> Text:
 
 
 class InspectorApp(App[None]):
-    """Inspect and Failures over one saved run; the Run tab waits on its own decision."""
+    """Inspect and Re-Run over one saved run; the session behind Re-Run owns execution."""
 
     TITLE = "litmus inspect"
     CSS = """
@@ -131,11 +200,13 @@ class InspectorApp(App[None]):
         Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
         # Priority, because Textual's screen otherwise takes Tab for focus movement;
         # the guide gives Tab to the tab row.
-        Binding("tab", "cycle_tab", "Inspect / Failures", priority=True),
+        Binding("tab", "cycle_tab", "Inspect / Re-Run", priority=True),
         Binding("up", "move(-1)", "Up", show=False),
         Binding("down", "move(1)", "Down", show=False),
         Binding("left", "failure(-1)", "Previous failure"),
         Binding("right", "failure(1)", "Next failure"),
+        Binding("h", "toggle_passes", "Hide passes"),
+        Binding("enter", "rerun", "Re-run node", priority=True),
         Binding("n", "page(1)", "Next page"),
         Binding("p", "page(-1)", "Previous page"),
         Binding("f", "toggle_errors", "Errors only"),
@@ -147,16 +218,27 @@ class InspectorApp(App[None]):
         ],
     ]
 
-    def __init__(self, saved: SavedRun) -> None:
+    def __init__(self, saved: SavedRun, session: RerunSession | None = None) -> None:
         super().__init__()
         self.saved = saved
         # Not ``self.tree``: Textual already uses that name for its widget tree.
         self.saved_tree = saved.tree
         self.selection = InspectorSelection(saved.tree, saved.run_root)
+        # A screen opened without a session still has the tab, and the tab says why
+        # it cannot run: the operator supplied no suite through the command line.
+        self.session = (
+            session
+            if session is not None
+            else RerunSession(saved, "no suite was supplied to this Inspector")
+        )
         self.tab: Tab = "inspect"
+        self.hide_passes = False
         self.timeline_view: TimelineView | None = None
         self._timeline_source: object = None
         self._page_size = 1
+        self._quit_after_run = False
+        self._spin = 0
+        self._ticker: Timer | None = None
         self.tree_lines: tuple[str, ...] = ()
         self.log_lines: tuple[str, ...] = ()
 
@@ -173,21 +255,76 @@ class InspectorApp(App[None]):
         await self.selection.select(0)
         self.redraw()
 
+    def on_unmount(self) -> None:
+        """Scratch evidence goes with the screen; the command line closes it again, harmlessly."""
+        self.session.close()
+
     def on_resize(self) -> None:
         """Redraw so the tree and log fit the new height; nothing else changes."""
         self.redraw()
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Offer each tab only its own keys, and nothing that would disturb a live re-run."""
+        running = self.session.running is not None
+        if action == "rerun":
+            if self.tab != "rerun":
+                return None
+            return self.session.available and not running
+        if action == "toggle_passes":
+            return None if self.tab != "inspect" else True
+        if action == "cycle_tab":
+            return not running
+        return True
+
+    async def action_quit(self) -> None:
+        """Quit at once from a saved view; from a live re-run, interrupt and quit once it settles.
+
+        Quitting live hardware execution is not the harmless act it is on the archive:
+        the run must reach Aborted through bounded cleanup before the terminal is given
+        back (``docs/inspector.md``, the Re-Run tab).
+        """
+        if self.session.running is None:
+            self.exit()
+            return
+        self._quit_after_run = True
+        self.session.interrupt()
+        self.redraw()
+
     async def action_cycle_tab(self) -> None:
-        """Tab toggles Inspect and Failures; the Run tab is decision-gated and absent."""
-        self.tab = "failures" if self.tab == "inspect" else "inspect"
+        """Tab toggles Inspect and Re-Run; the first entry to Re-Run loads the suite."""
+        if self.session.running is not None:
+            return
+        self.tab = "rerun" if self.tab == "inspect" else "inspect"
+        if self.tab == "rerun":
+            await self.session.prepare()
+            await self._sync_rerun_log()
+        self.redraw()
+
+    async def action_toggle_passes(self) -> None:
+        """Hide or show passing rows on Inspect, keeping the cursor on something visible."""
+        if self.tab != "inspect":
+            return
+        self.hide_passes = not self.hide_passes
+        visible = self._visible_rows()
+        selected = self.selection.view.selected.index
+        if visible and all(row.index != selected for row in visible):
+            # The highlighted row just disappeared: land on the nearest row above it,
+            # or the first below, rather than on a row the technician cannot see.
+            above = [row for row in visible if row.index < selected]
+            target = above[-1] if above else visible[0]
+            await self.selection.select(target.index)
         self.redraw()
 
     async def action_move(self, offset: int) -> None:
-        """Up and down: through the tree, or through the failure list on that tab."""
-        if self.tab == "failures":
-            await self.action_failure(offset)
+        """Up and down through the rows the tab shows; hidden rows are stepped over."""
+        visible = self._visible_rows()
+        if not visible:
             return
-        await self.selection.move(offset)
+        selected = self.selection.view.selected.index
+        position = next((i for i, row in enumerate(visible) if row.index == selected), 0)
+        target = min(max(0, position + offset), len(visible) - 1)
+        await self.selection.select(visible[target].index)
+        await self._sync_rerun_log()
         self.redraw()
 
     async def action_failure(self, direction: int) -> None:
@@ -196,6 +333,32 @@ class InspectorApp(App[None]):
             await self.selection.next_failure()
         else:
             await self.selection.previous_failure()
+        await self._sync_rerun_log()
+        self.redraw()
+
+    def action_rerun(self) -> None:
+        """Enter on the Re-Run tab executes the highlighted node; nothing else ever does."""
+        if self.tab != "rerun" or self.session.running is not None or not self.session.available:
+            return
+        index = self.selection.view.selected.index
+        self._ticker = self.set_interval(0.2, self._tick)
+        self.run_worker(self._execute(index), group="rerun", exclusive=True, exit_on_error=False)
+        self.redraw()
+
+    async def _execute(self, index: int) -> None:
+        try:
+            await self.session.run(index, on_start=self.redraw)
+            await self._sync_rerun_log()
+        finally:
+            if self._ticker is not None:
+                self._ticker.stop()
+                self._ticker = None
+            self.redraw()
+            if self._quit_after_run:
+                self.exit()
+
+    def _tick(self) -> None:
+        self._spin += 1
         self.redraw()
 
     def action_page(self, delta: int) -> None:
@@ -224,14 +387,14 @@ class InspectorApp(App[None]):
 
     def redraw(self) -> None:
         """Render every pane from the models; the only place the screen reads them."""
-        view = self.selection.view
+        view = self.selection.view if self.tab == "inspect" else self.session.view
         self._sync_timeline_view(view)
         tabs = Text()
-        for name, label in (("inspect", "Inspect"), ("failures", "Failures")):
+        for name, label in _TAB_LABELS:
             tabs.append(f" {label} ", style="reverse" if self.tab == name else "")
             tabs.append("  ")
         tree_lines = self._tree_lines(view)
-        log_lines = [*_log_header(view, self.timeline_view)]
+        log_lines = [*self._log_header(view)]
         if self.timeline_view is not None:
             log_lines.extend(_log_row_text(row) for row in self.timeline_view.rows)
         self.tree_lines = tuple(line.plain for line in tree_lines)
@@ -240,30 +403,86 @@ class InspectorApp(App[None]):
         self.query_one("#tree", Static).update(Text("\n").join(tree_lines))
         self.query_one("#log", Static).update(Text("\n").join(log_lines))
 
-    def _tree_lines(self, view: SelectionView) -> list[Text]:
-        rows = self.saved_tree.rows if self.tab == "inspect" else self.saved_tree.failures
-        selected = view.selected.index
-        if self.tab == "failures":
-            position = next((i for i, row in enumerate(rows) if row.index == selected), 0)
-            if not rows:
-                return [Text("no Fail or Aborted node in this run", style="dim")]
+    def _log_header(self, view: SelectionView | None) -> tuple[Text, Text]:
+        if view is not None:
+            return _log_header(view, self.timeline_view)
+        # Re-Run with nothing to show for the highlighted node: say what the bench is
+        # doing, or what it is waiting for, rather than an empty pane.
+        owner = Text("log: ")
+        running = self.session.running
+        if running is not None:
+            name = "/".join(self.saved_tree.rows[running].ancestor_names)
+            owner.append(f"running {name}", _RUNNING_STYLE)
+        elif self.session.diagnostic is not None:
+            owner.append(self.session.diagnostic, "yellow")
+        elif not self.session.available:
+            owner.append(f"re-run unavailable: {self.session.unavailable}", "yellow")
         else:
-            position = selected
-        height = self.query_one("#tree", Static).size.height
-        return [
-            _row_text(rows[index], selected=rows[index].index == selected)
-            for index in _window(len(rows), position, height)
-        ]
+            owner.append("not re-run yet: press Enter on a node to execute it", "dim")
+        return owner, Text()
 
-    def _sync_timeline_view(self, view: SelectionView) -> None:
+    def _visible_rows(self) -> tuple[TreeRow, ...]:
+        rows = self.saved_tree.rows
+        if self.tab == "inspect" and self.hide_passes:
+            return tuple(row for row in rows if row.state != "Pass")
+        return rows
+
+    def _tree_lines(self, view: SelectionView | None) -> list[Text]:
+        rows = self._visible_rows()
+        if not rows:
+            return [Text("every node passed; h shows them again", style="dim")]
+        selected = self.selection.view.selected.index
+        position = next((i for i, row in enumerate(rows) if row.index == selected), 0)
+        height = self.query_one("#tree", Static).size.height
+        prefixes = _tree_prefixes([len(row.ancestor_names) - 1 for row in rows])
+        owner: int | None = None
+        if view is not None and view.owner is not None and view.owner.index != view.selected.index:
+            owner = view.owner.index
+        running = self.session.running_indices() if self.tab == "rerun" else range(0)
+        lines: list[Text] = []
+        for index in _window(len(rows), position, height):
+            row = rows[index]
+            evidence: TreeRow | None = row
+            if self.tab == "rerun":
+                record = self.session.record(row.index)
+                evidence = None if record is None else record.row
+            if row.index in running:
+                frame = _RUNNING_FRAMES[self._spin % len(_RUNNING_FRAMES)]
+                label, style = f"{frame} Running", _RUNNING_STYLE
+            elif evidence is None:
+                label, style = _NOT_RERUN
+            else:
+                label, style = _STATE_STYLES[evidence.state]
+            lines.append(
+                _row_text(
+                    RowDisplay(
+                        name=row.ancestor_names[-1],
+                        prefix=prefixes[index],
+                        label=label,
+                        style=style,
+                        not_taken=() if evidence is None else evidence.not_taken,
+                        selected=row.index == selected,
+                        owner=row.index == owner,
+                    )
+                )
+            )
+        return lines
+
+    async def _sync_rerun_log(self) -> None:
+        """Keep the Re-Run log on the highlighted node; Inspect keeps its own selection."""
+        if self.tab == "rerun":
+            await self.session.select(self.selection.view.selected.index)
+
+    def _sync_timeline_view(self, view: SelectionView | None) -> None:
         """A fresh presentation model per loaded chronology; a resize keeps the current one."""
         page_size = max(1, self.query_one("#log", Static).size.height - LOG_HEADER_LINES)
-        if view.timeline is None:
+        timeline = None if view is None else view.timeline
+        if timeline is None:
             self.timeline_view = None
             self._timeline_source = None
-        elif view.timeline is not self._timeline_source:
-            self.timeline_view = TimelineView(view.timeline, page_size=page_size)
-            self._timeline_source = view.timeline
+        elif timeline is not self._timeline_source:
+            self.timeline_view = TimelineView(timeline, page_size=page_size)
+            self._timeline_source = timeline
         elif self.timeline_view is not None and page_size != self._page_size:
             self.timeline_view.resize(page_size)
         self._page_size = page_size
