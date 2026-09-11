@@ -83,11 +83,12 @@ infinities, NaN, and non-numbers are rejected before execution.
   beyond the bounded subtree. Siblings outside that subtree are untouched under the
   Group Isolation Contract. Expiry is never classified as a BUG.
 - Expiry cancels the coroutine and hard-cancels at the resource every transport the cut
-  node itself opened. An inherited route or borrowed `via` hop is never in that owned
-  set and is not touched; it remains available to its owner and other tunneled siblings.
-- A node used as `via=` still owns its configure window. Its declaration bounds
-  framework configure-only bring-up; a consumer adopts the via's Fail or Aborted state
-  and timeout evidence, while teardown releases any borrowed hop through its owner.
+  node itself opened. An inherited route is never in that owned set and is not touched;
+  it remains the parent's, available to the parent and to every sibling behind it.
+- A parent whose `configure()` opens the hop owns its own configure window. If that
+  window expires, the Fail or Aborted state and its timeout evidence are the parent's,
+  and the children it never composed render as the Lifecycle Contract says for a parent
+  that never reached a testable state.
 - Every cut node carries structured `timeout` evidence with `reason="timeout"`, the
   declared name, the declared budget in seconds, active elapsed seconds, and the
   root-to-node path of the clock that fired. This evidence appears on `RunResult`, in
@@ -238,10 +239,6 @@ evidence references.
 The private `_run_lifecycle()` entry point is not a full run and therefore does not
 create a timestamped run directory. Framework self-tests that invoke it directly may
 leave point-in-time artifacts at the configured base root; authored suites use `run()`.
-Standalone `run_configure_only()` likewise creates no run directory: artifacts captured
-during that bring-up remain at the configured base root. Via bring-up inside a full
-`run()` instead shares the existing run's artifact store. These configure-only paths
-are framework-owned; suite authors declare `via=` and let the framework manage it.
 
 ---
 
@@ -327,8 +324,9 @@ The operator-signal handler is installed by `run()`/`main()` only while that run
 - **Ownership.** The node whose `configure()` opened a shell, through `use_shell` or `get_shell`, owns it. The framework closes it at that node's cleanup (after the post-cleanup survey, before the hop it tunnels through), never earlier and never from another node.
 - **Hooks and audits observe the route; they do not set it.** They read `utils.exec_route` and exec through what `configure()` committed to. A survey runs at phases before `configure()` and after `cleanup()`, and an audit runs concurrently with the test method, so neither has a moment at which one route could be declared once. `get_shell` stays open to them: an auxiliary endpoint changes nothing the routing line states.
 - `propagate=False` on `use_shell` stops this node's router from flowing to children; they start local. `propagate` on `get_shell` is a documented no-op.
+- **The parent owns the route.** A route is owned by the node whose `configure()` declared it and is inherited by every node that node composes, down the tree, until a descendant declares `inherit=False` (or the owner declared `propagate=False`). A device class never takes a routing argument: a gateway is a parent whose `configure()` opens the hop and whose `build_suite()` composes the devices behind it, and those devices are routed by being its children. The `LitmusTest` constructor has no `via=`; the only `via` is the tunnel argument to `use_shell` / `get_shell`, declared inside `configure()` by the node that owns the route (issue #137).
 - Children inherit the route through run params (`RouterRunParams`), never through ctx. ctx is instance-local domain data, not infrastructure.
-- Routed tunnels are borrowed; the router owns hop lifecycle. Every hop the router resolves — an explicit `via=` Shell or an inherited route — is already live, so the connector threads it through the transport's borrowed `tunnel=` channel, never the owned `via=` one. The opened interface must not disconnect, cancel, or collapse its hop. What a node opened is recorded on the node (`opened`), stays connected through the node's post-cleanup survey, and closes after that survey and before the hop it tunnels through — the same lifetime an inherited via hop has, so a survey that execs at post-cleanup reads the device, not a closed transport; a hard abort on the hop kills everything tunneled through it at the socket (In-Flight Termination Contract). A dead hop at open time is an error, not something the router silently brings up.
+- Routed tunnels are borrowed; the router owns hop lifecycle. Every hop the router resolves — an explicit `via=` Shell or an inherited route — is already live, so the connector threads it through the transport's borrowed `tunnel=` channel, never the owned `via=` one. The opened interface must not disconnect, cancel, or collapse its hop. What a node opened is recorded on the node (`opened`), stays connected through the node's post-cleanup survey, and closes after that survey and before the hop it tunnels through — the parent's hop closes at the same point of the parent's own lifecycle, after every child is done with it (issue #115), so a survey that execs at post-cleanup reads the device, not a closed transport; a hard abort on the hop kills everything tunneled through it at the socket (In-Flight Termination Contract). A dead hop at open time is an error, not something the router silently brings up.
 
 - Local exec and every SSH session this router opens share the run's `output_budget` (see the Utils Contract). A fat command is truncated and killed at the resource; it does not take the rest of the rack with it.
 - A transport's address is fixed while it is live. `connect(host, port)` re-points an addressed transport only through a closed handle; asking a live one for a different address is refused, never silently replaced. After a flash or DHCP churn the flow is `disconnect()`, reacquire, `connect(new_ip)`. There is no self-healing: a socket the framework killed stays dead (In-Flight Termination Contract), and an unexpected drop reaches the author as a `ConnectionError` on the next `exec`, not as a quiet redial.

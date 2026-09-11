@@ -369,27 +369,6 @@ class TestAuthorContractViolations:
         )
         _assert_names_rule_and_fix(raised.value.detail)
 
-    async def test_a_live_via_target_names_the_fix(self) -> None:
-        class Suite(LitmusTest):
-            def build_suite(self) -> LitmusTest:
-                return self.test("claim", self._claim)
-
-            async def _claim(self, utils: object) -> Verdict:
-                return PASS
-
-        suite = Suite(name="rack")
-        await suite.run_configure_only()
-        try:
-            with pytest.raises(ContractViolation) as raised:
-                await suite.main(TestUtils())
-            assert raised.value.detail == (
-                "this instance is already up as a via target; "
-                "construct a separate instance to run, or tear the hop down first"
-            )
-            _assert_names_rule_and_fix(raised.value.detail)
-        finally:
-            await suite.run_cleanup_only()
-
 
 class TestContextAndVerdictMessages:
     def test_missing_ctx_key_names_the_configure_fix(self) -> None:
