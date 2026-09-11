@@ -67,8 +67,6 @@ _SEALED_METHODS = frozenset(
         "main",
         "_execute_run",
         "run",
-        "run_configure_only",
-        "run_cleanup_only",
         "sequence",
         "_run_lifecycle",
         "_run_timed_window",
@@ -77,11 +75,6 @@ _SEALED_METHODS = frozenset(
         "_deadline_failure",
         "_run_parallel",
         "_run_sequence",
-        "_run_configure_only",
-        "_run_cleanup_only",
-        "_bring_up_via",
-        "_tear_down_via",
-        "_adopt_via_outcome",
         "_node_type",
         "_pending_summary_tree",
         "_pending_children",
@@ -368,17 +361,15 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
     ``CtxT`` is opt-in sugar (issue #75): a suite that narrows ``configure``'s return
     to a local ``TypedDict`` and declares ``class MySuite(LitmusTest[MyCtx])`` gets
     ``utils: TestUtils[MyCtx]`` in ``configure``, ``cleanup``, and any test method that
-    asks for it. Composition and internal plumbing (``via``, sequence/parallel
-    children, the leaf/sequence/parallel specializations) hold ``LitmusTest[Any]``
-    instead of the bare, defaulted alias: they compose nodes of any ``CtxT`` and must
-    not force every via-gateway or child onto one suite's context shape.
+    asks for it. Composition and internal plumbing (sequence/parallel children, the
+    leaf/sequence/parallel specializations) hold ``LitmusTest[Any]`` instead of the
+    bare, defaulted alias: they compose nodes of any ``CtxT`` and must not force every
+    child onto one suite's context shape.
     """
 
     __slots__ = (
         "_audits",
         "_children",
-        "_configure_only_task",
-        "_configure_only_utils",
         "_ctx",
         "_discrete_log_file",
         "_evidence_declared",
@@ -390,16 +381,12 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         "_summary_tree",
         "_surveys",
         "_time_budget",
-        "_via",
-        "_via_lease_count",
-        "_via_leased",
     )
 
     def __init__(
         self,
         *,
         name: str,
-        via: LitmusTest[Any] | None = None,
         discrete_log_file: bool = True,
         fail_after: float | None = None,
         abort_after: float | None = None,
@@ -408,11 +395,6 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
 
         Args:
             name: Stable node name used by logs, artifacts, and failures.
-            via: Optional gateway Testable. The framework brings it up before this
-                node's pre-configure survey, routes exec through its SSH hop, and
-                tears it down after this node's post-cleanup survey and after the
-                shells this node opened have closed. Authors never call
-                configure/cleanup on it.
             discrete_log_file: Own a per-node timeline. Set false only when this
                 composed node should roll its records into its parent.
             fail_after: Positive finite seconds before this subtree renders Fail.
@@ -421,7 +403,6 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         self._frozen = False
         self._has_run = False
         self._name = name
-        self._via = via
         self._discrete_log_file = discrete_log_file
         self._time_budget = _time_budget(
             name,
@@ -429,10 +410,6 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             abort_after=abort_after,
         )
         self._log_path: Path | None = None
-        self._via_leased = False
-        self._via_lease_count = 0
-        self._configure_only_task: asyncio.Task[Outcome] | None = None
-        self._configure_only_utils: TestUtils | None = None
         self._surveys: list[SurveyHook] = []
         self._audits: list[AuditHook] = []
         self._fn: _TestFunction | None = None
@@ -845,51 +822,6 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             await runtime.end_run()
 
     @final
-    async def run_configure_only(self, utils: TestUtils | None = None) -> dict[str, Any]:
-        """Bring this node and its via up without running the suite.
-
-        Idempotent. Framework-owned: Inspector isolation and via-device bring-up.
-        Suite authors pass ``via=`` at construction instead of calling this.
-        A declared ``abort_after`` expiry raises ``TimeoutError`` on this imperative
-        adapter; internal consumers retain and adopt the structured Aborted outcome.
-        """
-        seed = TestUtils() if utils is None else utils
-        try:
-            outcome = await self._run_configure_only(seed, RunAbort())
-        except asyncio.CancelledError:
-            # Shielded waiters do not cancel the shared via handshake. This node's
-            # own bring-up still has to stop so configure does not run after cancel.
-            task = self._configure_only_task
-            if task is not None and not task.done():
-                task.cancel()
-            raise
-        if outcome.state is None:
-            configured = self._configure_only_utils
-            if configured is None:
-                return {}
-            return dict(configured.ctx)
-        if outcome.failure is not None:
-            raise outcome.failure
-        if outcome.timeout is not None and outcome.state is State.ABORTED:
-            raise TimeoutError(
-                f"{self.name} configure-only expired: "
-                f"{outcome.timeout.declared}={outcome.timeout.budget_seconds:g}s"
-            )
-        raise FrameworkContractViolation(
-            self.name,
-            detail="configure-only settled in a terminal state without a failure",
-        )
-
-    @final
-    async def run_cleanup_only(self) -> None:
-        """Tear this node and its via down after :meth:`run_configure_only`.
-
-        Idempotent. Paired with :meth:`run_configure_only`; a full :meth:`run`
-        already performs this teardown.
-        """
-        await self._run_cleanup_only()
-
-    @final
     async def _run_lifecycle(
         self,
         utils: TestUtils,
@@ -911,12 +843,6 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             raise ContractViolation(
                 self.name,
                 "a LitmusTest instance may run only once; construct a new instance for each run",
-            )
-        if self._configure_only_utils is not None:
-            raise ContractViolation(
-                self.name,
-                "this instance is already up as a via target; "
-                "construct a separate instance to run, or tear the hop down first",
             )
         object.__setattr__(self, "_has_run", True)
 
@@ -1093,111 +1019,106 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             ran_test = False
             suite: LitmusTest[Any] | None = None
             try:
-                # Hop first, teardown last. The test budget begins at configure,
-                # after the borrowed via and pre-configure survey are ready.
-                via_failed = await self._bring_up_via(utils, run_abort)
-                if via_failed is None:
-                    await self._run_surveys(boundary, utils, Phase.PRE_CONFIGURE)
-                if via_failed is not None:
-                    outcome = self._adopt_via_outcome(via_failed)
-                else:
+                # The test budget begins at configure, after the pre-configure
+                # survey has read the bench.
+                await self._run_surveys(boundary, utils, Phase.PRE_CONFIGURE)
 
-                    async def run_authored(
-                        active_clocks: tuple[TimeBudgetClock, ...],
-                        lineage: object,
-                    ) -> Outcome:
-                        nonlocal boundary, ran_test, suite, summary_children
-                        boundary = ChildBoundary(
-                            self.name,
-                            run_abort,
-                            utils.logger,
-                            node_audit_signal,
-                            time_budget_clocks=active_clocks,
+                async def run_authored(
+                    active_clocks: tuple[TimeBudgetClock, ...],
+                    lineage: object,
+                ) -> Outcome:
+                    nonlocal boundary, ran_test, suite, summary_children
+                    boundary = ChildBoundary(
+                        self.name,
+                        run_abort,
+                        utils.logger,
+                        node_audit_signal,
+                        time_budget_clocks=active_clocks,
+                    )
+                    async with _active_time_budgets(active_clocks, lineage):
+                        configured = await boundary.run(
+                            Slot.CONFIGURE, self._configure_and_merge_context(utils)
                         )
-                        async with _active_time_budgets(active_clocks, lineage):
-                            configured = await boundary.run(
-                                Slot.CONFIGURE, self._configure_and_merge_context(utils)
-                            )
-                            if configured.state is not None:
-                                return configured
-                            runtime.log_exec_routing()
-                            await self._run_surveys(boundary, utils, Phase.POST_CONFIGURE)
-                            suite = self.build_suite()
-                            await self._run_surveys(boundary, utils, Phase.PRE_TEST)
-                        # The authored suite is this node's only child, position 0; the
-                        # selection was checked against the declared tree in ``run``.
-                        _, suite_subtree = _child_subtree(subtree, 0)
-                        if self._audits:
-                            if node_audit_signal is None:
-                                raise FrameworkContractViolation(
-                                    self.name,
-                                    detail="registered audits have no cancellation signal",
-                                )
-                            suite_result, audit_outcome = await self._run_suite_with_audits(
-                                suite,
-                                utils,
-                                run_abort,
-                                node_audit_signal,
-                                time_budget_clocks=active_clocks,
-                                subtree=suite_subtree,
-                            )
-                        else:
-                            suite_result = await suite._run_lifecycle(
-                                utils,
-                                run_abort,
-                                audit_signal=node_audit_signal,
-                                time_budget_clocks=active_clocks,
-                                subtree=suite_subtree,
-                            )
-                            audit_outcome = None
-                        ran_test = True
-                        if audit_outcome is not None:
-                            summary_children = (suite._pending_summary_tree(),)
-                            return audit_outcome
-                        if suite_result is None:
+                        if configured.state is not None:
+                            return configured
+                        runtime.log_exec_routing()
+                        await self._run_surveys(boundary, utils, Phase.POST_CONFIGURE)
+                        suite = self.build_suite()
+                        await self._run_surveys(boundary, utils, Phase.PRE_TEST)
+                    # The authored suite is this node's only child, position 0; the
+                    # selection was checked against the declared tree in ``run``.
+                    _, suite_subtree = _child_subtree(subtree, 0)
+                    if self._audits:
+                        if node_audit_signal is None:
                             raise FrameworkContractViolation(
                                 self.name,
-                                detail="suite settled without a result or audit verdict",
+                                detail="registered audits have no cancellation signal",
                             )
-                        summary_children = (suite_result.summary_tree,)
-                        return Outcome(
-                            Slot.TEST_METHOD,
-                            self.name,
-                            suite_result.state,
-                            failure=suite_result.failure,
-                            value=suite_result.value,
-                            timeout=suite_result.timeout,
-                        )
-
-                    value, timeout = await self._run_timed_window(
-                        utils,
-                        run_abort,
-                        time_budget_clocks,
-                        extra_time_budgets,
-                        run_authored,
-                    )
-                    if timeout is not None:
-                        if suite is not None:
-                            summary_children = (suite._pending_summary_tree(),)
-                        else:
-                            summary_children = self._pending_children()
-                        slot = (
-                            boundary.outcome.slot
-                            if boundary.outcome is not None and boundary.outcome.timeout == timeout
-                            else Slot.TEST_METHOD
-                        )
-                        outcome = self._deadline_outcome(
-                            timeout,
-                            slot=slot,
-                            children=summary_children,
-                        )
-                    elif not isinstance(value, Outcome):
-                        raise FrameworkContractViolation(
-                            self.name,
-                            detail="an authored time window settled without an Outcome",
+                        suite_result, audit_outcome = await self._run_suite_with_audits(
+                            suite,
+                            utils,
+                            run_abort,
+                            node_audit_signal,
+                            time_budget_clocks=active_clocks,
+                            subtree=suite_subtree,
                         )
                     else:
-                        outcome = value
+                        suite_result = await suite._run_lifecycle(
+                            utils,
+                            run_abort,
+                            audit_signal=node_audit_signal,
+                            time_budget_clocks=active_clocks,
+                            subtree=suite_subtree,
+                        )
+                        audit_outcome = None
+                    ran_test = True
+                    if audit_outcome is not None:
+                        summary_children = (suite._pending_summary_tree(),)
+                        return audit_outcome
+                    if suite_result is None:
+                        raise FrameworkContractViolation(
+                            self.name,
+                            detail="suite settled without a result or audit verdict",
+                        )
+                    summary_children = (suite_result.summary_tree,)
+                    return Outcome(
+                        Slot.TEST_METHOD,
+                        self.name,
+                        suite_result.state,
+                        failure=suite_result.failure,
+                        value=suite_result.value,
+                        timeout=suite_result.timeout,
+                    )
+
+                value, timeout = await self._run_timed_window(
+                    utils,
+                    run_abort,
+                    time_budget_clocks,
+                    extra_time_budgets,
+                    run_authored,
+                )
+                if timeout is not None:
+                    if suite is not None:
+                        summary_children = (suite._pending_summary_tree(),)
+                    else:
+                        summary_children = self._pending_children()
+                    slot = (
+                        boundary.outcome.slot
+                        if boundary.outcome is not None and boundary.outcome.timeout == timeout
+                        else Slot.TEST_METHOD
+                    )
+                    outcome = self._deadline_outcome(
+                        timeout,
+                        slot=slot,
+                        children=summary_children,
+                    )
+                elif not isinstance(value, Outcome):
+                    raise FrameworkContractViolation(
+                        self.name,
+                        detail="an authored time window settled without an Outcome",
+                    )
+                else:
+                    outcome = value
                 settled_outcome = outcome
             finally:
                 try:
@@ -1214,11 +1135,10 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                                 await self._run_surveys(boundary, utils, Phase.POST_CLEANUP)
                             finally:
                                 # Owned shells outlive the post-cleanup survey and close
-                                # before the hop they may tunnel through (#115).
-                                try:
-                                    await runtime.disconnect_opened()
-                                finally:
-                                    await self._tear_down_via()
+                                # before the parent's hop they may tunnel through, which
+                                # the parent closes at this same point of its own
+                                # lifecycle (#115).
+                                await runtime.disconnect_opened()
             result = self._to_result(outcome, utils, children=summary_children)
             settled_result = result
             after_each_started = True
@@ -2067,8 +1987,8 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         """Finish cleanup before allowing cancellation to leave this node.
 
         Shells this node opened stay connected here: the post-cleanup survey still
-        execs through them. The caller disconnects them after that survey and
-        before the via lease is released.
+        execs through them. The caller disconnects them after that survey; a hop
+        this node inherited belongs to its parent and outlives this node entirely.
         """
         cleanup = asyncio.create_task(
             boundary.run(
@@ -2090,168 +2010,6 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 with contextlib.suppress(asyncio.CancelledError):
                     await asyncio.shield(cleanup)
             raise
-
-    @final
-    async def _run_configure_only(self, seed: TestUtils, run_abort: RunAbort) -> Outcome:
-        """Configure this node and its via, without building or running a suite.
-
-        Idempotent: concurrent and later callers await the same bring-up rather than
-        reading a half-built hop. Nested via devices come up first so this node's
-        configure already execs through them.
-        """
-        task = self._configure_only_task
-        if task is None:
-
-            async def bring_up() -> Outcome:
-                runtime = node_runtime(seed).for_node(
-                    self.name,
-                    run_abort,
-                    discrete_log_file=self.discrete_log_file,
-                    isolate_context=True,
-                    inherit_route=False,
-                )
-                utils = runtime.utils
-                object.__setattr__(self, "_configure_only_utils", utils)
-                object.__setattr__(
-                    self,
-                    "_log_path",
-                    runtime.owned_log_path(),
-                )
-                via_failed = await self._bring_up_via(utils, run_abort)
-                if via_failed is not None:
-                    return via_failed
-                boundary = ChildBoundary(self.name, run_abort, utils.logger)
-
-                async def configure_window(
-                    active_clocks: tuple[TimeBudgetClock, ...],
-                    lineage: object,
-                ) -> Outcome:
-                    nonlocal boundary
-                    boundary = ChildBoundary(
-                        self.name,
-                        run_abort,
-                        utils.logger,
-                        time_budget_clocks=active_clocks,
-                    )
-                    async with _active_time_budgets(active_clocks, lineage):
-                        return await boundary.run(
-                            Slot.CONFIGURE,
-                            self._configure_and_merge_context(utils),
-                        )
-
-                value, timeout = await self._run_timed_window(
-                    utils,
-                    run_abort,
-                    (),
-                    (),
-                    configure_window,
-                )
-                if timeout is not None:
-                    outcome = self._deadline_outcome(timeout, slot=Slot.CONFIGURE)
-                elif isinstance(value, Outcome):
-                    outcome = value
-                else:
-                    raise FrameworkContractViolation(
-                        self.name,
-                        detail="a configure-only time window settled without an Outcome",
-                    )
-                if outcome.state is None:
-                    runtime.log_exec_routing()
-                return outcome
-
-            task = asyncio.create_task(bring_up())
-            object.__setattr__(self, "_configure_only_task", task)
-        # Shielded: cancelling one waiter must not cancel a shared via handshake.
-        return await asyncio.shield(task)
-
-    @final
-    async def _run_cleanup_only(self) -> None:
-        """Idempotent teardown of a configure-only node and its via chain."""
-        task = self._configure_only_task
-        if task is not None:
-            if not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    while not task.done():
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await asyncio.shield(task)
-                    raise
-                except Exception:
-                    # Bring-up already failed; teardown still has to run.
-                    pass
-            object.__setattr__(self, "_configure_only_task", None)
-        utils = self._configure_only_utils
-        if utils is None:
-            return
-        object.__setattr__(self, "_configure_only_utils", None)
-        runtime = node_runtime(utils)
-        boundary = ChildBoundary(self.name, runtime.halt_signal(), utils.logger)
-        try:
-            await self._run_cleanup(boundary, utils)
-        finally:
-            try:
-                await runtime.disconnect_opened()
-            finally:
-                try:
-                    await self._tear_down_via()
-                finally:
-                    runtime.close_timeline()
-
-    @final
-    async def _bring_up_via(self, utils: TestUtils, run_abort: RunAbort) -> Outcome | None:
-        """Configure the via device, then borrow its exec hop for this node.
-
-        Returns a terminal outcome when the via failed to reach a testable state.
-        A second consumer waits for bring-up to finish; teardown fires on last release.
-        """
-        via = self._via
-        if via is None:
-            return None
-        object.__setattr__(via, "_via_lease_count", via._via_lease_count + 1)
-        object.__setattr__(self, "_via_leased", True)
-        outcome = await via._run_configure_only(utils, run_abort)
-        if outcome.state is not None:
-            return outcome
-        via_utils = via._configure_only_utils
-        if via_utils is None:
-            raise FrameworkContractViolation(
-                self.name,
-                detail="a via hop was declared but the via device is not up",
-            )
-        router = node_runtime(via_utils).routing.router
-        node_runtime(utils).inherit_router(router)
-        return None
-
-    @final
-    async def _tear_down_via(self) -> None:
-        """Release this consumer's via lease; the last holder tears the device down."""
-        via = self._via
-        if via is None or not self._via_leased:
-            return
-        object.__setattr__(self, "_via_leased", False)
-        remaining = via._via_lease_count - 1
-        if remaining < 0:
-            raise FrameworkContractViolation(
-                self.name,
-                detail="a via lease was released more times than it was acquired",
-            )
-        object.__setattr__(via, "_via_lease_count", remaining)
-        if remaining == 0:
-            await via._run_cleanup_only()
-
-    @final
-    def _adopt_via_outcome(self, outcome: Outcome) -> Outcome:
-        """Attribute a via bring-up failure to this consumer's configure slot."""
-        return Outcome(
-            Slot.CONFIGURE,
-            self.name,
-            outcome.state,
-            failure=outcome.failure,
-            timeout=outcome.timeout,
-            value=outcome.value,
-            swallowed=outcome.swallowed,
-        )
 
 
 @final

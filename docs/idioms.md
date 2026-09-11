@@ -87,27 +87,38 @@ async def _check_voltage(self, utils: TestUtils) -> Verdict[VoltageEvidence]: ..
 `litmus-check` enforces the declaration statically as `litmus/evidence-fulfilled` and the
 read-only context as part of `litmus/ctx-provenance`.
 
-## Via-Routing — Framework-Managed Lifecycle
+## The Parent Owns the Route
 
-Any Testable whose `configure()` calls `utils.use_shell()` can serve as a via target.
-Pass it as `via=` at construction. The framework brings the via device up before the
-consumer's pre-configure survey, routes `utils.exec` through that hop for configure,
-surveys, tests, and audits, and tears the via down after the consumer's post-cleanup
-survey. A survey or in-flight audit that execs therefore measures the hop, not the
-test host. Authors never call `run_configure_only()` or `run_cleanup_only()` by hand.
+The node that opens a hop owns it, and everything composed under it inherits it. A
+gateway is a parent node: its `configure()` calls `utils.use_shell(host=..., ...)`,
+and its `build_suite()` composes the devices behind the hop. The framework routes the
+gateway's own `utils.exec` through that hop and hands the route to every child, so a
+device's configure, surveys, tests, and audits all land on the far side without the
+device saying so. A device class never takes a routing argument; it is written once
+and reused on every bench.
 
 ```python
-gateway = Gateway(name="gateway")
-target = MyDevice(name="target", mac="aa:bb:cc:dd:ee:ff", via=gateway)
+class Gateway(LitmusTest):
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+        await utils.use_shell(host="10.0.0.1", username="ops")
+        return {}
+
+    def build_suite(self) -> LitmusTest:
+        return MyDevice(name="target", mac="aa:bb:cc:dd:ee:ff")
 ```
 
-The via device's ctx stays instance-local. Cross-instance data still moves through
-constructor params. The hop itself is borrowed: a consumer `get_shell()` tunnels
-through it without owning it, so cancelling that tunnel leaves the gateway up until
-the framework tears the via device down. A via shared by more than one consumer
-stays up until the last consumer finishes — the first teardown does not drop the
-hop out from under a sibling. A declared via that never opens a shell is a
-`FrameworkContractViolation`, not local exec under Pass.
+`MyDevice` run on its own reads the test host; composed under `Gateway` it reads the
+gateway. Same bytes. A child that must run locally declares `use_shell(inherit=False)`
+in its own `configure()`; a parent that must not hand its route down declares
+`propagate=False`. The hop stays up until the parent's own teardown, after every
+child has cleaned up — a child that fails or expires loses only the transports it
+opened itself, never its parent's hop. A gateway that cannot come up Fails in its
+own `configure()`, and the children it never composed stay pending: the bench was
+not ready, so the device was never asked.
+
+The only `via` in the framework is the tunnel argument to `use_shell` / `get_shell`
+(see SSH Tunnel below). That is the parent's tool for reaching through a jump host
+inside its own `configure()`; it is never a child's burden.
 
 ## run_data — Automatic Structured Evidence
 The default `run_data` returns a detached snapshot of all serializable values from
@@ -311,14 +322,13 @@ window keeps the shared ancestor clock moving; another sibling's hook or cleanup
 lend it extra time. Do not catch or suppress `asyncio.CancelledError` around awaited
 work.
 
-A deadline closes only transports opened by the cut node. An inherited route and a
-borrowed `via` hop remain their owner's resources; this is what keeps a timed-out DUT
-from taking down a healthy sibling behind the same gateway.
+A deadline closes only transports opened by the cut node. An inherited route remains
+the parent's resource; this is what keeps a timed-out DUT from taking down a healthy
+sibling behind the same gateway.
 
-A `LitmusTest` used as `via=` may declare the same budget pair. Its clock begins when
-that via enters `configure`; if bring-up expires, the consumer adopts its state and
-timeout evidence, then the framework runs the via's cleanup and releases any borrowed
-upstream hop.
+A gateway parent may declare the same budget pair. Its clock begins when it enters
+`configure`; if the hop is not open by then, the Fail or Aborted state and its timeout
+evidence are the gateway's own, and the devices behind it are never asked.
 
 ## Pass/Fail/Aborted Contract
 - A test method returning `PASS`, or `PASS(evidence)` with its readings → test passes (state `Pass`). The check is `isinstance(result, Verdict)`, and only `PASS` mints one. The string `"PASS"` does not pass, and a `PASS` missing a key its `@evidence` declared is a contract violation, not a pass.
@@ -484,9 +494,8 @@ owns; a key `configure()` never provided is still a runtime `ContractViolation` 
 than a static one; and `run_data` still strips class instances, functions, and live
 handles value by value.
 
-Composition stays unparameterized on purpose. `self.test()`, `self.sequence()`,
-`self.parallel()`, and the `via` argument speak of `LitmusTest` nodes of any context
-shape, because a rack composes suites that do not share one context — pinning them to
+Composition stays unparameterized on purpose. `self.test()`, `self.sequence()`, and
+`self.parallel()` speak of `LitmusTest` nodes of any context shape, because a rack composes suites that do not share one context — pinning them to
 a single `CtxT` would make the parameter contagious rather than opt-in.
 
 ```python
@@ -603,7 +612,7 @@ they need the live value; they never write the canonical Inspector file themselv
 | Physical hardware component | `LitmusTest` |
 | Networked device (MAC-based) | `LitmusTest` + `utils.get_arp_resolver()` in configure |
 | Device reached over SSH, connection shared across tests | `LitmusTest` with configure returning `{"ssh": ...}` |
-| Device behind a jump host or OOB gateway | `LitmusTest` with `via` param |
+| Device behind a jump host or OOB gateway | The gateway is a `LitmusTest` whose `configure()` opens the hop and whose `build_suite()` composes the device |
 | Standalone test procedure | `LitmusTest` |
 
 ---
@@ -650,22 +659,21 @@ See `examples/networked_device.py`.
 
 ---
 
-## ArpResolver with Via-Routing
+## ArpResolver Behind a Gateway
 
-When the test host cannot reach the target network directly, the SE code is identical to the local case. Pass the gateway as `via` in `TestParams` and the framework handles everything — the SE never touches SSH.
+When the test host cannot reach the target network directly, the SE code is identical to the local case. Compose the device under a gateway parent whose `configure()` opened the hop, and the framework routes the lookup — the SE never touches SSH.
 
 ```python
-# configure() — no SSH awareness, identical to local ArpResolver usage:
+# DutDevice.configure() — no SSH awareness, identical to local ArpResolver usage:
 arp = utils.get_arp_resolver(mac=self._mac)
 resolved = await arp.resolve()
 return {**resolved, "arp": arp}
 
-# Wiring:
-gateway = Gateway(name="gateway")
-target = MyDevice(name="target", mac="aa:bb:cc:dd:ee:ff", via=gateway)
+# Gateway.build_suite() — the parent names what sits behind its hop:
+return self.sequence(self.name, [self.test("gateway-up", self._gateway_up), DutDevice(name="dut")])
 ```
 
-See `examples/networked_device.py`. The DUT class is the same one used locally.
+See `examples/networked_device.py`. `litmus run ...::DutDevice` reads the test host's ARP table; `litmus run ...::Gateway` runs the same DUT class through the hop.
 
 ---
 
