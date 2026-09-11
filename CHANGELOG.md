@@ -391,6 +391,19 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- The gate is the bench run, and the tree now says so (issue #138, Ty's ruling of
+  2026-09-10 on #104: no CI, permanently). `STANDARDS.md` §1 and §6, the README, and
+  the Makefile no longer name a pipeline: `make check` on the MR head is the gate, the
+  reviewer runs it again before merging, and nothing arms auto-merge. `.gitlab-ci.yml`
+  loses the `check` and `soak` jobs and the `nightly-soak` and `dependency-update`
+  schedules; only the tag-only `pages` job remains, pending Ty's ruling on where the
+  docs site is hosted. Both bench tools post without a pipeline: `tools/nightly_soak.py`
+  takes the head sha from `git rev-parse`, defaults its API root and project id to this
+  project (`GITLAB_API_V4_URL` / `GITLAB_PROJECT_ID` override), and names the bench
+  host and `.soak/` directory as the night's record where it used to name a pipeline
+  URL; `tools/dependency_update.py` carries the same defaults. New targets:
+  `make nightly-record` (the soak, recorded on #68), `make deps-plan`, and
+  `make deps-update`.
 - The lifecycle seam inside the framework (issue #126, Ty's ruling of 2026-09-10,
   raised by the #109 sweep): the half of `TestUtils` that `base.py` drives, the run
   bracket, the context phases, transport teardown, timeline ownership, measurement

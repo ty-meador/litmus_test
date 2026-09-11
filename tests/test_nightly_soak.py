@@ -12,24 +12,28 @@ from unittest.mock import patch
 
 import pytest
 from tools.nightly_soak import (
+    DEFAULT_API_V4_URL,
+    DEFAULT_PROJECT_ID,
     GREEN_STREAK_TARGET,
     ISSUE_IID,
+    ROOT,
     NightlySoak,
     NightReport,
     SoakRun,
+    head_sha,
 )
 
 RACK = "tests/test_rack_scale.py"
-CI_ENV: Mapping[str, str] = {
-    "CI_API_V4_URL": "https://gitlab.example/api/v4",
-    "CI_PROJECT_ID": "85833370",
-    "CI_PIPELINE_URL": "https://gitlab.example/p/1",
-    "CI_COMMIT_SHORT_SHA": "abc1234",
+BENCH_ENV: Mapping[str, str] = {
+    "GITLAB_API_V4_URL": "https://gitlab.example/api/v4",
+    "GITLAB_PROJECT_ID": "85833370",
     "LITMUS_BOT_TOKEN": "glpat-test",
     "DISCORD_WEBHOOK_URL": "https://discord.example/hook",
     "SOAK_RUNS": "2",
     "RACK_REPEATS": "3",
 }
+SHA = "abc1234"
+HOST = "bench-01"
 
 
 class _FakeRunner:
@@ -87,12 +91,21 @@ def _soak(
     runner: _FakeRunner,
     http: _FakeHttp,
     tmp_path: Path,
-    env: Mapping[str, str] = CI_ENV,
+    env: Mapping[str, str] = BENCH_ENV,
     *,
     post: bool = True,
 ) -> tuple[NightlySoak, io.StringIO]:
     out = io.StringIO()
-    soak = NightlySoak(env=env, post=post, runner=runner, http=http, log_dir=tmp_path, out=out)
+    soak = NightlySoak(
+        env=env,
+        post=post,
+        runner=runner,
+        http=http,
+        log_dir=tmp_path,
+        out=out,
+        sha=SHA,
+        host=HOST,
+    )
     return soak, out
 
 
@@ -112,7 +125,7 @@ class TestSoakRun:
 
 class TestNightReport:
     def _report(self, *runs: SoakRun) -> NightReport:
-        return NightReport(runs, sha="abc1234", pipeline_url="https://p/1", date="2026-09-05")
+        return NightReport(runs, sha=SHA, record="bench-01:/srv/litmus/.soak", date="2026-09-05")
 
     def test_tally_counts_green_over_total_per_series_in_order(self) -> None:
         report = self._report(
@@ -130,7 +143,7 @@ class TestNightReport:
 
         assert f"Green night 5 of {GREEN_STREAK_TARGET} consecutive" in note
         assert "<!-- nightly-soak verdict=green sha=abc1234 -->" in note
-        assert "https://p/1" in note
+        assert "Record: bench-01:/srv/litmus/.soak" in note
 
     def test_red_note_names_every_failing_run_and_resets_the_streak(self) -> None:
         report = self._report(
@@ -172,7 +185,7 @@ class TestNightlySoak:
             return runner(argv)
 
         soak = NightlySoak(
-            env=CI_ENV, post=False, runner=run_with_record, log_dir=tmp_path, out=out
+            env=BENCH_ENV, post=False, runner=run_with_record, log_dir=tmp_path, out=out, sha=SHA
         )
         with patch("secrets.randbits", side_effect=seeds):
             assert soak.run() == 1
@@ -204,7 +217,7 @@ class TestNightlySoak:
 
     def test_defaults_are_eight_soak_runs_and_twenty_rack_repeats(self, tmp_path: Path) -> None:
         runner, http = _FakeRunner({}), _FakeHttp()
-        env = {key: value for key, value in CI_ENV.items() if not key.endswith(("RUNS", "REPEATS"))}
+        env = {k: v for k, v in BENCH_ENV.items() if not k.endswith(("RUNS", "REPEATS"))}
         soak, _ = _soak(runner, http, tmp_path, env)
 
         soak.run()
@@ -213,7 +226,7 @@ class TestNightlySoak:
 
     def test_a_run_count_below_one_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="SOAK_RUNS must be at least 1"):
-            _soak(_FakeRunner({}), _FakeHttp(), tmp_path, {**CI_ENV, "SOAK_RUNS": "0"})
+            _soak(_FakeRunner({}), _FakeHttp(), tmp_path, {**BENCH_ENV, "SOAK_RUNS": "0"})
 
     def test_green_night_extends_the_streak_on_the_issue_and_stays_off_discord(
         self, tmp_path: Path
@@ -229,6 +242,27 @@ class TestNightlySoak:
         assert "soak 2/2, rack 3/3" in body
         assert http.posts_to("discord.example") == []
         assert f"recorded on #{ISSUE_IID}" in out.getvalue()
+        assert f"Record: {HOST}:{tmp_path}" in body
+        assert all(
+            url.startswith("https://gitlab.example/api/v4/projects/85833370/")
+            for _, url, _, _ in http.calls
+        )
+
+    def test_api_root_and_project_default_to_this_project(self, tmp_path: Path) -> None:
+        env = {k: v for k, v in BENCH_ENV.items() if not k.startswith("GITLAB_")}
+        http = _FakeHttp([_green_marker()])
+        soak, _ = _soak(_FakeRunner({}), http, tmp_path, env)
+
+        assert soak.run() == 0
+        prefix = f"{DEFAULT_API_V4_URL}/projects/{DEFAULT_PROJECT_ID}/"
+        assert prefix == "https://gitlab.com/api/v4/projects/85833370/"
+        assert all(url.startswith(prefix) for _, url, _, _ in http.calls)
+
+    def test_head_sha_reads_the_checkout_or_says_local(self, tmp_path: Path) -> None:
+        checkout = head_sha(ROOT)
+        assert checkout != "local"
+        assert all(c in "0123456789abcdef" for c in checkout)
+        assert head_sha(tmp_path) == "local"
 
     def test_red_night_names_the_case_and_run_on_the_issue_and_in_general(
         self, tmp_path: Path
@@ -277,7 +311,9 @@ class TestNightlySoak:
         runner = _FakeRunner({(RACK, 1): RACK_FAILURE})
         http = _FakeHttp()
         env = {
-            k: v for k, v in CI_ENV.items() if k not in {"LITMUS_BOT_TOKEN", "DISCORD_WEBHOOK_URL"}
+            k: v
+            for k, v in BENCH_ENV.items()
+            if k not in {"LITMUS_BOT_TOKEN", "DISCORD_WEBHOOK_URL"}
         }
         soak, out = _soak(runner, http, tmp_path, env)
 
@@ -294,4 +330,4 @@ class TestNightlySoak:
         assert soak.run() == 0
         assert http.calls == []
         assert "posting disabled; nothing recorded" in out.getvalue()
-        assert "at local: soak 2/2, rack 3/3" in out.getvalue()
+        assert f"at {SHA}: soak 2/2, rack 3/3" in out.getvalue()
