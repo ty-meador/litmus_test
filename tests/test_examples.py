@@ -713,7 +713,7 @@ async def _scripted_local_exec(self: LocalExec, command: str) -> ExecResult:
 
 
 class TestNetworkedDeviceExample:
-    """ArpResolver in configure, locally and through a via hop."""
+    """ArpResolver in configure, locally and behind a `Gateway` that owns the hop."""
 
     async def test_local_resolve_ping_and_firmware(
         self,
@@ -755,7 +755,7 @@ class TestNetworkedDeviceExample:
         assert "DUT_MAC" in result.failure.fail_message
 
     async def test_half_set_gateway_env_fails_naming_the_missing_var(self, tmp_path: Path) -> None:
-        result = await DutDevice(name="networked device").run(
+        result = await Gateway(name="gateway").run(
             env={
                 "LITMUS_ARTIFACT_ROOT": str(tmp_path),
                 "DUT_MAC": "aa:bb:cc:dd:ee:ff",
@@ -769,7 +769,7 @@ class TestNetworkedDeviceExample:
         assert "GATEWAY_USER" in result.failure.fail_message
 
     async def test_garbage_gateway_port_from_env_fails_in_configure(self, tmp_path: Path) -> None:
-        result = await DutDevice(name="networked device").run(
+        result = await Gateway(name="gateway").run(
             env={
                 "LITMUS_ARTIFACT_ROOT": str(tmp_path),
                 "DUT_MAC": "aa:bb:cc:dd:ee:ff",
@@ -808,7 +808,7 @@ class TestNetworkedDeviceExample:
         assert "did not appear on the network" in result.failure.fail_message
         assert result.failure.is_bug is False
 
-    async def test_via_hop_resolves_through_the_gateway(
+    async def test_the_gateway_composes_the_dut_and_arp_resolves_through_the_hop(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -816,25 +816,26 @@ class TestNetworkedDeviceExample:
         transport = MockTransport()
         _script_arp_dut(transport)
         _patch_ssh_connector(monkeypatch, transport)
-        gateway = Gateway(
+        result = await Gateway(
             name="gateway",
             host="10.0.0.1",
             username="ops",
             password="gateway-secret",
-        )
-        result = await DutDevice(
-            name="networked device",
-            mac="aa:bb:cc:dd:ee:ff",
-            via=gateway,
+            behind=DutDevice(name="networked device", mac="aa:bb:cc:dd:ee:ff"),
         ).run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
 
         assert result.state is State.PASS
-        assert result.run_data["ip"] == "10.0.0.50"
+        assert transport.commands[0] == "true"
         assert "cat /proc/net/arp" in transport.commands
         assert "ping -c 1 10.0.0.50" in transport.commands
+        assert "curl -sf http://10.0.0.50/api/version" in transport.commands
+        assert transport.connect_count == 1
         assert transport.connected is False
+        dut = result.summary_tree.children[0].children[1]
+        assert dut.name == "networked device"
+        assert dut.state is State.PASS
 
-    async def test_gateway_env_routes_arp_through_the_hop(
+    async def test_gateway_from_env_runs_the_same_dut_through_the_hop(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -842,7 +843,7 @@ class TestNetworkedDeviceExample:
         transport = MockTransport()
         _script_arp_dut(transport)
         _patch_ssh_connector(monkeypatch, transport)
-        result = await DutDevice(name="networked device").run(
+        result = await Gateway(name="gateway").run(
             env={
                 "LITMUS_ARTIFACT_ROOT": str(tmp_path),
                 "DUT_MAC": "aa:bb:cc:dd:ee:ff",
@@ -852,10 +853,30 @@ class TestNetworkedDeviceExample:
         )
 
         assert result.state is State.PASS
-        assert result.run_data["ip"] == "10.0.0.50"
         assert "cat /proc/net/arp" in transport.commands
         assert "ping -c 1 10.0.0.50" in transport.commands
         assert transport.connected is False
+
+    async def test_an_unreachable_gateway_fails_and_the_dut_is_never_asked(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transport = MockTransport()
+        transport.fail_next_connect(ConnectionError("peer unreachable"))
+        _patch_ssh_connector(monkeypatch, transport)
+        result = await Gateway(
+            name="gateway",
+            host="10.0.0.1",
+            username="ops",
+            behind=DutDevice(name="networked device", mac="aa:bb:cc:dd:ee:ff"),
+        ).run(env={"LITMUS_ARTIFACT_ROOT": str(tmp_path)})
+
+        assert result.state is State.FAIL
+        assert isinstance(result.failure, TestFailure)
+        assert "SSH connect failed" in result.failure.fail_message
+        assert transport.commands == ()
+        assert result.summary_tree.children == ()
 
 
 class TestHardwareDeviceLifecycleExample:
