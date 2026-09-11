@@ -70,7 +70,7 @@ regardless of backend:
       node-local: it never fires the shared run halt and never cascades past
       the bounded subtree (`docs/contracts.md`, Time Budget Contract). It
       drives only the pins the cut subtree itself opened; an inherited
-      controller or a borrowed `via` hop is never in that owned set, and a
+      controller or an inherited hop is never in that owned set, and a
       sibling outside the subtree is untouched under the Group Isolation
       Contract. On a rack of thirty units, one node overrunning its clock must
       not idle the other twenty-nine.

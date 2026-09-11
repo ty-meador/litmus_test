@@ -14,9 +14,10 @@ and each one is a deliberate design choice rather than a convenience:
 - **The shell is not in ctx.** Ctx is for values the claims read; the route is
   carried by the framework. Putting the handle in ctx would invite a claim to bypass
   the route, and would put a non-serializable object in the record for nothing.
-- **The device is eligible as a `via`.** Because the hop is class-owned, another
-  suite can pass this one as `via=` and inherit the route. See
-  `networked_device.py` for the other side of that arrangement.
+- **The device is eligible as a parent.** Because the hop is class-owned, anything
+  this class composes in `build_suite()` inherits the route: the parent owns the
+  route, and a child is routed by being a child. See `networked_device.py` for a
+  gateway built on exactly that.
 
 A constructor argument wins when given (the self-tests pass the loopback sshd). A
 `None` is resolved from `utils.env`: `SSH_HOST` / `SSH_USER`, optional
