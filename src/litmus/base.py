@@ -293,6 +293,32 @@ def _bind_test_arguments(
     return bound
 
 
+def _child_subtree(
+    subtree: tuple[int, ...] | None, position: int
+) -> tuple[bool, tuple[int, ...] | None]:
+    """Whether the child at ``position`` runs under ``subtree``, and what it passes down.
+
+    ``None`` means no selection is in force, and an exhausted path means the current
+    node is the selected one: both run every child unselected. Otherwise only the child
+    at the path's head runs, carrying the rest of the path.
+    """
+    if subtree is None or not subtree:
+        return True, None
+    if position != subtree[0]:
+        return False, None
+    return True, subtree[1:]
+
+
+def declared_tree(suite: LitmusTest[Any]) -> SummaryTreeNode:
+    """The tree ``suite`` declares, every node pending, without running anything.
+
+    Package-internal: the Inspector's Re-Run adapter compares this against a saved
+    run before it offers to execute any of it, so a suite that no longer matches the
+    evidence is refused instead of running the wrong node under a familiar name.
+    """
+    return suite._pending_summary_tree()  # pyright: ignore[reportPrivateUsage]
+
+
 def _function(member: object) -> object:
     """Return an instance function; class/static descriptors are not authored methods."""
     if isinstance(member, (classmethod, staticmethod)):
@@ -682,6 +708,8 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         fail_after: float | None = None,
         abort_after: float | None = None,
         output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
+        subtree: Sequence[int] | None = None,
+        suite_target: str | None = None,
     ) -> RunResult:
         """Execute once, fanning root-owned integration hooks across every node.
 
@@ -689,6 +717,20 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         publishes; see ``TestUtils`` for the contract. Raises ``ValueError`` when both
         are given. ``output_budget`` is the combined stdout+stderr ceiling for every
         ``exec`` this run issues, local or SSH.
+
+        ``subtree`` confines execution to one declared node: child positions from the
+        root, so ``(0, 1)`` is the second child of the root's suite. Every node on the
+        path to it still runs its own configure and cleanup, because that is their
+        lifecycle and the only way the selected node meets the hop its ancestors own;
+        every leaf outside the subtree is left pending, never executed. This is what
+        the Inspector's Re-Run tab calls (Ty's ruling of 2026-09-10, ``docs/inspector.md``);
+        it is not ancestor-configure replay, which stays prohibited. A position the
+        declared tree does not have raises ``ContractViolation`` before anything runs.
+
+        ``suite_target`` is recorded in ``result.json`` as the loader target that
+        produced the run (``path.py::SuiteClass``), so ``litmus inspect`` can offer the
+        same suite for re-running without deriving one from evidence. ``litmus run``
+        supplies it; a run started from a developer's own harness may leave it unset.
         """
         run_budget = _time_budget(
             self.name,
@@ -701,6 +743,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 "a root time budget is already declared; declare exactly one "
                 "fail_after or abort_after across construction and run",
             )
+        selected = None if subtree is None else self._declared_subtree(subtree)
         hooks = IntegrationHooks(
             before_each=before_each,
             after_each=after_each,
@@ -712,17 +755,38 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             env_deny=env_deny,
             output_budget=output_budget,
             _integration_hooks=hooks,
+            _suite_target=suite_target,
         )
-        return await self._execute_run(utils, run_budget)
+        return await self._execute_run(utils, run_budget, selected)
 
     @final
     async def main(self, utils: TestUtils | None = None) -> RunResult:
         """Execute the sealed lifecycle with an optional framework test seed."""
         seed = TestUtils() if utils is None else utils
-        return await self._execute_run(seed, None)
+        return await self._execute_run(seed, None, None)
 
     @final
-    async def _execute_run(self, seed: TestUtils, run_budget: TimeBudget | None) -> RunResult:
+    def _declared_subtree(self, subtree: Sequence[int]) -> tuple[int, ...]:
+        """Check ``subtree`` against the declared tree before the run directory exists."""
+        node = self._pending_summary_tree()
+        for depth, position in enumerate(subtree):
+            if not 0 <= position < len(node.children):
+                raise ContractViolation(
+                    self.name,
+                    f"subtree {tuple(subtree)} names child {position} of {node.name!r}, "
+                    f"which declares {len(node.children)} children at depth {depth}; "
+                    "give positions from the declared tree",
+                )
+            node = node.children[position]
+        return tuple(subtree)
+
+    @final
+    async def _execute_run(
+        self,
+        seed: TestUtils,
+        run_budget: TimeBudget | None,
+        subtree: tuple[int, ...] | None,
+    ) -> RunResult:
         """Execute one full run with an optional root declaration from ``run()``."""
         runtime = node_runtime(seed)
         await runtime.begin_run()
@@ -741,6 +805,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                     run_abort,
                     isolate_context=False,
                     extra_time_budgets=extra,
+                    subtree=subtree,
                 )
             except BaseException as exc:
                 # Task.__step__ re-raises KeyboardInterrupt/SystemExit into the loop
@@ -834,8 +899,14 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
         extra_time_budgets: tuple[TimeBudget, ...] = (),
+        subtree: tuple[int, ...] | None = None,
     ) -> RunResult:
-        """Execute one node while preserving the tree's shared halt signal."""
+        """Execute one node while preserving the tree's shared halt signal.
+
+        ``subtree`` is the remaining selection below this node: ``None`` runs everything
+        beneath it, a tuple names the one child path that executes while its siblings
+        stay pending (see ``run``).
+        """
         if self._has_run:
             raise ContractViolation(
                 self.name,
@@ -922,6 +993,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                             children,
                             audit_signal=node_audit_signal,
                             time_budget_clocks=active_clocks,
+                            subtree=subtree,
                         )
                     return await self._run_parallel(
                         utils,
@@ -929,6 +1001,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                         children,
                         audit_signal=node_audit_signal,
                         time_budget_clocks=active_clocks,
+                        subtree=subtree,
                     )
 
                 value, timeout = await self._run_timed_window(
@@ -1051,6 +1124,9 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                             await self._run_surveys(boundary, utils, Phase.POST_CONFIGURE)
                             suite = self.build_suite()
                             await self._run_surveys(boundary, utils, Phase.PRE_TEST)
+                        # The authored suite is this node's only child, position 0; the
+                        # selection was checked against the declared tree in ``run``.
+                        _, suite_subtree = _child_subtree(subtree, 0)
                         if self._audits:
                             if node_audit_signal is None:
                                 raise FrameworkContractViolation(
@@ -1063,6 +1139,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                                 run_abort,
                                 node_audit_signal,
                                 time_budget_clocks=active_clocks,
+                                subtree=suite_subtree,
                             )
                         else:
                             suite_result = await suite._run_lifecycle(
@@ -1070,6 +1147,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                                 run_abort,
                                 audit_signal=node_audit_signal,
                                 time_budget_clocks=active_clocks,
+                                subtree=suite_subtree,
                             )
                             audit_outcome = None
                         ran_test = True
@@ -1517,22 +1595,32 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         *,
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
+        subtree: tuple[int, ...] | None = None,
     ) -> RunResult:
-        """Run every child to settlement unless a harness-level halt escapes."""
-        tasks: list[asyncio.Task[RunResult]] = []
+        """Run every selected child to settlement unless a harness-level halt escapes.
+
+        A child outside ``subtree`` is never scheduled and is recorded pending, so the
+        verdict below aggregates only the children that ran.
+        """
+        # Keyed by declared position so the recorded children keep declaration order
+        # with a pending entry where a sibling was left out of the selection.
+        executed: dict[int, asyncio.Task[RunResult]] = {}
         try:
             async with asyncio.TaskGroup() as task_group:
-                tasks.extend(
-                    task_group.create_task(
+                for position, child in enumerate(children):
+                    runs, child_subtree = _child_subtree(subtree, position)
+                    if not runs:
+                        continue
+                    executed[position] = task_group.create_task(
                         child._run_lifecycle(
                             utils,
                             run_abort,
                             audit_signal=audit_signal,
                             time_budget_clocks=time_budget_clocks,
+                            subtree=child_subtree,
                         )
                     )
-                    for child in children
-                )
+                tasks = list(executed.values())
                 active = set(tasks)
                 try:
                     while active:
@@ -1557,14 +1645,16 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             # taxonomy's class-intact halt instead of leaking an ExceptionGroup.
             raise failures.exceptions[0] from None
 
-        outcomes = tuple(task.result() for task in tasks)
+        outcomes = tuple(task.result() for task in executed.values())
+        trees = tuple(
+            executed[position].result().summary_tree
+            if position in executed
+            else child._pending_summary_tree()
+            for position, child in enumerate(children)
+        )
         if all(outcome.state is State.PASS for outcome in outcomes):
             aggregate = Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=outcomes)
-            return self._to_result(
-                aggregate,
-                utils,
-                children=tuple(outcome.summary_tree for outcome in outcomes),
-            )
+            return self._to_result(aggregate, utils, children=trees)
 
         # Aborted outranks Fail, and the first child in that state tells the parallel node's story.
         if any(outcome.state is State.ABORTED for outcome in outcomes):
@@ -1581,11 +1671,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             value=outcomes,
             timeout=reported.timeout,
         )
-        return self._to_result(
-            aggregate,
-            utils,
-            children=tuple(outcome.summary_tree for outcome in outcomes),
-        )
+        return self._to_result(aggregate, utils, children=trees)
 
     @final
     async def _run_sequence(
@@ -1596,15 +1682,28 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         *,
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
+        subtree: tuple[int, ...] | None = None,
     ) -> RunResult:
-        """Run dependent children in order and stop at the first non-pass verdict."""
+        """Run dependent children in order and stop at the first non-pass verdict.
+
+        A child outside ``subtree`` is recorded pending and skipped without breaking
+        the order; fail-fast still applies among the children that run.
+        """
         outcomes: list[RunResult] = []
+        trees: list[SummaryTreeNode] = []
+        skipped = 0
         for index, child in enumerate(children):
+            runs, child_subtree = _child_subtree(subtree, index)
+            if not runs:
+                trees.append(child._pending_summary_tree())
+                skipped += 1
+                continue
             outcome = await child._run_lifecycle(
                 utils,
                 run_abort,
                 audit_signal=audit_signal,
                 time_budget_clocks=time_budget_clocks,
+                subtree=child_subtree,
             )
             outcomes.append(outcome)
             if outcome.state in (State.FAIL, State.ABORTED):
@@ -1618,20 +1717,16 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 )
                 pending = tuple(child._pending_summary_tree() for child in children[index + 1 :])
                 return self._to_result(
-                    aggregate,
-                    utils,
-                    children=(
-                        *(result.summary_tree for result in outcomes),
-                        *pending,
-                    ),
+                    aggregate, utils, children=(*trees, outcome.summary_tree, *pending)
                 )
             if outcome.state is not State.PASS:
                 raise FrameworkContractViolation(
                     self.name,
                     detail="a sequence child settled without a terminal state",
                 )
+            trees.append(outcome.summary_tree)
 
-        all_ran = len(outcomes) == len(children)
+        all_ran = len(outcomes) + skipped == len(children)
         all_passed = all(outcome.state is State.PASS for outcome in outcomes)
         if not (all_ran and all_passed):
             raise FrameworkContractViolation(
@@ -1639,11 +1734,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 detail="a sequence reached no explicit terminal verdict",
             )
         aggregate = Outcome(Slot.TEST_METHOD, self.name, State.PASS, value=tuple(outcomes))
-        return self._to_result(
-            aggregate,
-            utils,
-            children=tuple(outcome.summary_tree for outcome in outcomes),
-        )
+        return self._to_result(aggregate, utils, children=tuple(trees))
 
     @final
     def _node_type(self) -> NodeType:
@@ -1737,6 +1828,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             type=node_type,
             env=utils.env,
             run_data=run_data,
+            suite_target=node_runtime(utils).suite_target,
         )
 
     @final
@@ -1903,6 +1995,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         audit_signal: AuditSignal,
         *,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
+        subtree: tuple[int, ...] | None = None,
     ) -> tuple[RunResult | None, Outcome | None]:
         """Race the authored suite against independent framework-owned audit loops."""
         suite_task = asyncio.create_task(
@@ -1911,6 +2004,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                 run_abort,
                 audit_signal=audit_signal,
                 time_budget_clocks=time_budget_clocks,
+                subtree=subtree,
             )
         )
         audit_tasks = [

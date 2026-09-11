@@ -5,12 +5,16 @@ It carries the legacy Floor Technician guide into the Python port, adjusted for 
 signed decisions on [#88](https://gitlab.com/Tyler-Meador/litmus_test/-/issues/88),
 [#106](https://gitlab.com/Tyler-Meador/litmus_test/-/issues/106), and
 [#107](https://gitlab.com/Tyler-Meador/litmus_test/-/issues/107).
-It specifies the terminal UI to build; **the Python Inspector is not shipped yet**.
-The [Floor Technician guide](floor-technician.md) remains the station page for reading
-today's evidence. The controls below describe the target, not commands available today.
-The [review rulings on !119](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/119#note_3796094775)
-set the implementation order: ship Inspect and Failures first. Run is a separate
-increment behind its own decision and does not gate saved-evidence inspection.
+It specifies the terminal UI, which `litmus inspect` now opens. The
+[Floor Technician guide](floor-technician.md) remains the station page for reading the
+evidence by hand. The
+[review rulings on !119](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/119#note_3796094775)
+set the implementation order: Inspect first, Run as a separate increment behind its
+own decision. Ty ruled on that increment on 2026-09-10: the Re-Run tab ships, the
+Failures list is folded into Inspect as a key that hides passing rows, and the cut
+between the two tabs is the one the legacy tool drew. Inspect is the archive of the
+production run and executes nothing. Re-Run is the bench, where a node is executed
+again with the code that ran in production and nothing it produces persists.
 
 The internal timeline reader (`litmus.inspector_timeline.TimelineReader`) is implemented
 as a foundation for the log pane. It asynchronously reads a selected timeline path,
@@ -147,12 +151,27 @@ suite execution or saved-byte changes.
 The main view (`litmus.inspector_app.InspectorApp`) is the first terminal screen,
 built on Textual by Ty's ruling of 2026-09-09. It renders the tab row, the tree, and
 the chronology pane from the models above and forwards the quick-reference keys, one
-model call per key: Inspect and Failures share one cursor, the chronology loads on
+model call per key: Inspect and Re-Run share one cursor, the chronology loads on
 cursor movement without Enter and names its owner when the node's records rolled up,
-arrows jump between Fail and Aborted rows without wrapping, `n`/`p` page, and `f`
-filters to errors while a truncation marker stays in place. The plain text of every
-redraw is kept on the app so the self-tests drive it against the recorded runs in
-`tests/inspector_rack.py` and a screenshot can be read back against this guide.
+the owner's row carries the cyan arrow, arrows jump between Fail and Aborted rows
+without wrapping, `h` hides passing rows, `n`/`p` page, and `f` filters to errors while
+a truncation marker stays in place. Tree depth is drawn with the legacy glyphs (`├─`,
+`└─`, `│`), computed over the rows on screen so a hidden branch still closes on its
+last visible child. The plain text of every redraw is kept on the app so the
+self-tests drive it against the recorded runs in `tests/inspector_rack.py` and a
+screenshot can be read back against this guide.
+
+The re-run session (`litmus.inspector_rerun.RerunSession`) is the adapter behind the
+Re-Run tab. It receives a suite factory from the command line, never a suite derived
+from evidence; loads it on the tab's first opening, off the event loop; refuses a
+suite whose declared tree differs from the saved one, naming the first row that
+differs; executes the pressed node through `LitmusTest.run(subtree=...)`, the sealed
+lifecycle with every leaf outside that subtree left pending; reads the result back
+through the same saved-run reader the archive uses, so the tab shows a re-run's
+states and chronology with the same code paths; and keeps that evidence under a
+scratch directory emptied per node on each re-run and removed when the Inspector
+closes. Interrupting a live re-run raises the operator signal, so the framework's own
+termination contract settles the node Aborted with bounded cleanup.
 
 The artifact modal screen (`litmus.inspector_app.ArtifactScreen`) opens from a digit
 in the log pane over the capture carrying that number and owns the artifact keys until
@@ -167,7 +186,10 @@ its `result.json`; without PATH the most recently modified `result.json` under t
 artifact root opens (`LITMUS_ARTIFACT_ROOT`, default `artifacts/`; `--artifact-root DIR`
 overrides), the legacy discovery rule carried over. Nothing under the root, or a
 selection that is not a saved version-1 run, is refused with the reader's diagnostic on
-stderr and exit status 3. No saved inspection runs suite code.
+stderr and exit status 3. Opening runs no suite code. `--suite TARGET` names the suite
+the Re-Run tab executes, in the form `litmus run` accepts, and is loaded at the prompt
+so a wrong target is exit 3 there; without it the tab uses the `suite_target` the run
+recorded, loaded only when the tab is first opened.
 
 The Inspector serves the person at the station when a test stops the line. Its test of
 success is concrete: find what happened, categorize it, and begin the station's recovery
@@ -208,31 +230,38 @@ result publication. Preserve any surviving timeline evidence for diagnosis.
 
 ## The screen layout
 
-The terminal has a tab bar, a tree or failure list above, and the highlighted node's
-timeline below. This illustration shows the target arrangement, not a captured run:
+The terminal has a tab bar, the tree above, and the highlighted node's timeline below.
+This illustration shows the arrangement, not a captured run:
 
 ```text
-  [ Inspect ]   Failures
+  [ Inspect ]   Re-Run
   ---------------------------------------------------------
-  rack  Aborted
-    server-01  Pass
-    server-02  Fail
-      thermal check  Fail  -> temperature 87 C exceeds 75 C
-    server-03  Aborted  -> operator interrupted the run
-    firmware check  Pending
-  up/down navigate | left/right jump failures | Tab switch
+    rack  Aborted
+    └─ servers  Aborted  ←
+       ├─ server-01  Pass
+       ├─ server-02  Fail
+  >    │  └─ thermal check  Fail  not taken: fan_rpm
+       ├─ server-03  Aborted
+       └─ firmware check  Pending
   ---------------------------------------------------------
-  thermal check -> timeline owned by server-02
-    #  Time       Level  Message
-   37  14:02:11Z  info   starting thermal ramp
-   38  14:02:45Z  info   survey captured [1]
-   39  14:03:02Z  error  temperature 87 C exceeds 75 C
-  n next | p previous | f errors | 1-9 artifact | q quit
+  log: rack/servers  (rolled up: thermal check has no own log)
+  page 4/7  errors only: off  captures: 1  (1-9 opens a capture)
+      14:02:11Z info     starting thermal ramp
+  [1] 14:02:45Z info     survey captured
+      14:03:02Z error    temperature 87 C exceeds 75 C
+  q Quit  Tab Inspect / Re-Run  ← → failures  h Hide passes  n p page  f Errors only
 ```
 
 The log updates on cursor movement. Enter is never required to read it. A delayed load
 for the previous selection must not overwrite the currently highlighted node's view.
-Show the selected node and, when different, the ancestor that owns its timeline.
+Show the selected node and, when different, the ancestor that owns its timeline: the
+pane names that owner, and the owner's row ends in the cyan `←` so the eye finds the
+file the highlighted node's records went into.
+
+Depth is drawn with the legacy glyphs: `├─` for a child with siblings below it, `└─`
+for the last child, `│` continuing a branch that has more children further down. They
+are computed over the rows on screen, so when passing rows are hidden each remaining
+branch still closes on its last visible child.
 
 Tree order is declaration order, including in parallel compositions. A parent marked
 Fail may summarize a failing child; keep the descendants visible so the technician can
@@ -258,47 +287,70 @@ skipping Pass and pending rows. Preserve the legacy implementation's inclusion o
 Fail and Aborted in that navigation, while keeping their labels and recovery meanings
 distinct. At either end, leave the cursor where it is; do not wrap unexpectedly.
 
+`h` hides every Pass row and shows them again. This replaces the legacy Failures list
+(Ty, 2026-09-10): the same recorded tree with the passing branches folded away, so a
+failure buried inside a large rack is found without leaving the tree or losing its
+place in it. Pending rows stay visible; they are not passes. If the cursor was on a
+row that just disappeared, it lands on the nearest visible row above it. When every
+node passed, the pane says so rather than showing nothing.
+
 Show the selected leaf's `evidence` beside its claim and failure. For every name in
 `evidence_declared` absent from `evidence`, show **not taken** by name. An absent reading
 is neither zero nor a successful measurement. Do not present the reserved empty
 `run_data["measurements"]` slot as an implemented measurement or SPC feature.
 
-### Run — a separate, decision-gated increment
+### Re-Run — the bench
 
-If Run is approved and implemented, retain the legacy deliberate Enter interaction:
-move to a node and press Enter to request execution. Switching tabs or highlighting a
-node must never run it. Inspect and Failures ship without this capability; a saved
-evidence directory alone never makes Run available.
+The same tree, unhydrated: every row reads **not re-run** until the technician executes
+it. Move to any node and press Enter to execute that node and everything beneath it
+with the code that ran in production. Switching tabs or highlighting a node never runs
+anything; Enter on the Inspect tab does nothing. The purpose is the floor's quick
+check: the ping failed, the cable is reseated, the one claim is re-run with the
+production code, and only then is the whole suite restarted through the station's
+normal procedure.
 
-**Ancestor-configure replay is prohibited.** The legacy `↑ctx` behavior does not port,
-including behind a flag. The Python
-[instance-local context idiom](idioms.md#immutable-self-convention) keeps a device
-self-contained when it is removed from a rack and run at the bench. Replaying a parent's
-configure to make that device runnable would introduce the hidden dependency this
-contract prevents. The framework continues to own configure and cleanup.
+**What executes is the sealed lifecycle, confined to one subtree.** `LitmusTest.run`
+takes `subtree=`, the child positions from the root to the pressed node. Every node on
+the path to it runs its own configure and cleanup, because that is their lifecycle and
+the only way the pressed node meets the hop its ancestors own; every leaf outside the
+subtree is left pending, never executed. The framework continues to own configure and
+cleanup. This is not the legacy `↑ctx` ancestor-configure replay, which stays
+prohibited: no parent's configure is replayed outside the lifecycle to make a device
+runnable, and the
+[instance-local context idiom](idioms.md#immutable-self-convention) is untouched.
 
-**The Run entry point still requires its own shared decision under #89.** The operator
-must supply a runnable suite through a sanctioned entry point; the Inspector holds an
-adapter to it. Never derive a runnable suite from `result.json`, artifact contents, or
-source discovered beside the run directory. Version-1 results carry no suite factory
-or constructor arguments. This specification establishes the boundary, not a new
-execution API.
+**The suite is supplied, never derived.** `litmus run` records the loader target it
+used in `result.json` as `suite_target` (absolute file or module name, `::`, class),
+and `litmus inspect` loads that suite the first time the tab is opened; `--suite
+TARGET` names another, and is loaded at the prompt. Nothing is reconstructed from
+`result.json`, artifact contents, or source found beside the run directory. Before any
+node runs, the supplied suite's declared tree is compared with the saved one, name and
+type in preorder; a difference is refused by path, and the pane says which suite to
+name instead. A run that recorded no target, one started from a developer's own
+harness, leaves the tab unavailable with that reason until `--suite` is given.
 
-During an eventual live run, Tab remains disabled as in the legacy UI. Quitting a saved
-inspection is harmless; quitting live hardware execution is a different operation. Its
-implementation must use the existing
-[termination contract](contracts.md#in-flight-termination-contract), preserve bounded
-cleanup and evidence, and expose operator interruption as Aborted. The legacy promise
-that Ctrl-C always exits immediately with nothing at stake does not apply to a live run.
+**Nothing the bench produces persists.** Each re-run writes its evidence under a
+scratch directory, in a subdirectory per pressed node. Re-running the same node
+empties that subdirectory first, so the ninth re-run leaves nothing of the eighth. The
+whole scratch directory is removed when the Inspector closes. After a re-run the
+pressed node, its descendants that ran, and the ancestors that configured show their
+fresh states; rows the re-run never reached keep whatever an earlier re-run left, or
+**not re-run**. The log pane shows the highlighted node's re-run chronology, read by
+the same reader as the archive, with the same owner arrow; a node no re-run reached
+says so instead of borrowing the archive's log.
 
-### Failures
+The run's recorded environment seeds the re-run, so the station's variables travel with
+the record; the live environment overrides it, so a technician can change one
+deliberately before pressing Enter.
 
-Preserve the flat list for finding failures buried inside a large rack, with up/down
-selection and the selected node's log below. This is a navigation projection of the
-same recorded tree, not a second verdict calculation. Retain the legacy list's
-navigation controls, but make Failures available during saved inspection without a
-runnable suite. Both Fail and Aborted nodes remain reachable through Inspect's arrow
-navigation as well. Run's separate decision does not gate either saved-evidence view.
+**A live re-run is live hardware.** Tab is held while a node runs, as in the legacy UI,
+and Enter starts nothing else. `q` during a re-run is the operator interrupt: it takes
+the framework's
+[termination contract](contracts.md#in-flight-termination-contract), the node settles
+Aborted with bounded cleanup, and only then does the Inspector exit. A second `q`
+during that cleanup exits immediately, as a second signal does at the station. The
+legacy promise that Ctrl-C always exits immediately with nothing at stake applies to
+the archive, not to the bench.
 
 ## The main workflow: diagnosing a failure
 
@@ -404,11 +456,12 @@ recorded differences, not an automatic diagnosis of hardware truth.
 | Context | Key | Action |
 |---|---|---|
 | Saved inspection, including a modal | `q` / `Ctrl-C` | Quit without changing evidence or touching hardware. |
-| Main view | `Tab` | Cycle Inspect / Failures; include Run only after its separate approved implementation. Disabled during a live run. |
-| Inspect tree | `↑` / `↓` | Move through the tree. |
-| Inspect tree | `←` / `→` | Previous / next Fail or Aborted node; skip passed and pending rows. |
-| Run tree, when enabled | `↑` / `↓`, then `Enter` | Select a node, then deliberately request execution. |
-| Failures list | `↑` / `↓` | Move through the list and load the selected node's log. |
+| Live re-run | `q` / `Ctrl-C` | Operator interrupt: the node settles Aborted through bounded cleanup, then the Inspector exits. A second press during cleanup exits at once. |
+| Main view | `Tab` | Switch Inspect / Re-Run. Held during a live re-run. |
+| Either tree | `↑` / `↓` | Move through the rows on screen; hidden passes are stepped over. |
+| Either tree | `←` / `→` | Previous / next Fail or Aborted node of the saved run; skip passed and pending rows. |
+| Inspect tree | `h` | Hide passing rows, or show them again. |
+| Re-Run tree | `Enter` | Execute the highlighted node and everything beneath it; nothing else runs anything. |
 | Log pane, no modal | `n` / `p` | Next / previous page. |
 | Log pane, no modal | `f` | Toggle errors-only filtering. |
 | Log pane, no modal | `1`–`9` | Open the artifact carrying that number. |
@@ -440,17 +493,21 @@ terminal and driven by a recorded 70-DUT rack:
   specified keys, including the two-artifact index collision.
 - Preserve complete lines under truncation and distinguish unavailable evidence,
   malformed records, unsupported versions, and nodes that never ran.
-- Make Inspect and Failures usable from saved evidence without source or hardware;
-  neither waits for Run. The saved-view command and discovery rule are the ones under
-  "Opening a run".
+- Make Inspect usable from saved evidence without source or hardware, hidden passes
+  included; it never waits for a suite. The saved-view command and discovery rule are
+  the ones under "Opening a run".
 - Verify moved-run resolution preserves the complete run-relative path and remains
   under the opened root. Exercise captures with identical basenames in different nodes,
   an unestablished root mapping, and unavailable files; preserve the recorded reference
   in every unavailable diagnostic and never substitute another capture.
-- Keep Run behind its own decision and increment. Its adapter accepts only an
-  operator-supplied suite through a sanctioned entry point, never reconstruction from
-  evidence or neighboring source. Ancestor-configure replay stays prohibited. Any live
-  execution must preserve bounded cleanup, evidence, and operator-interrupt Aborted.
+- Hold Re-Run to its ruling. Its adapter accepts only an operator-supplied suite
+  through the command line (`suite_target` or `--suite`), never reconstruction from
+  evidence or neighboring source, and refuses a suite whose declared tree differs from
+  the saved one. Execution is `LitmusTest.run(subtree=...)`: ancestors' own lifecycle,
+  the pressed subtree, every other leaf pending. Ancestor-configure replay stays
+  prohibited. Scratch evidence is replaced per node and removed on close. A live
+  re-run holds Tab, and quitting it goes through the operator-interrupt path to
+  Aborted with bounded cleanup before the Inspector exits.
 
 If the message, chronology, and captures do not establish a recovery category, keep the
 run directory and escalate with the selected node's path. The Inspector must make that
@@ -459,9 +516,10 @@ uncertainty visible. Evidence earns a conclusion; the screen cannot supply one f
 ## Migration references
 
 The behavioral reference is the read-only `litmus-test-legacy/docs/inspector.md`, with
-navigation checked against `src/inspector/InspectTab.mts`, `FailuresTab.mts`,
-`DebugView.mts`, and `ArtifactModal.mts` in that repository. The guide's workflow,
-split panes, optional Run, failure navigation, modal, and diff controls are retained.
+navigation checked against `src/inspector/InspectTab.mts`, `RunTab.mts`,
+`TreePanel.mts`, `DebugView.mts`, and `ArtifactModal.mts` in that repository. The
+guide's workflow, split panes, Run tab, tree glyphs, owner arrow, failure navigation,
+modal, and diff controls are retained; the Failures list became the `h` key.
 Python record names, the five current categories, instance-local ctx, explicit evidence,
 and interruption semantics follow this port's contracts. No TypeScript runtime or
 language-server behavior is required to specify this saved-evidence viewer.

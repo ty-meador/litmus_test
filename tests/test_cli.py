@@ -369,6 +369,9 @@ class TestRecords:
         assert record["test_case"] == "Passing"
         assert record["summary_tree"]["name"] == "Passing"
         assert record["state"] == "Pass"
+        # The record names the suite that produced it, absolute and by class, so
+        # `litmus inspect` from any directory can offer the same suite for re-running.
+        assert record["suite_target"] == f"{suite.resolve()}::Passing"
         assert "litmus run: Passing: Pass" in err
 
     def test_junit_writes_a_report(self, tmp_path: Path) -> None:
