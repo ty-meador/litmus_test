@@ -391,6 +391,19 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- The parent owns the route (issue #137, Ty's ruling of 2026-09-10, signed
+  2026-09-11). A route is owned by the node whose `configure()` declared it with
+  `use_shell` and is inherited by every node it composes until a descendant declares
+  `inherit=False`; a device class never takes a routing argument. A gateway is a
+  parent whose `configure()` opens the hop and whose `build_suite()` composes the
+  devices behind it, and its hop closes in its own teardown after every child's. A
+  gateway that cannot come up Fails in its own configure slot and the children it
+  never composed stay pending. `examples/networked_device.py` is rebuilt on this
+  shape: `DutDevice(name, mac, firmware_version)` has no routing surface, and
+  `litmus run ...::Gateway` runs the same DUT class through the hop. The Exec
+  Routing Contract, the Time Budget Contract, and the idioms say so; the #115
+  ruling (owned hops outlive the post-cleanup survey) now describes the only kind
+  of hop there is.
 - The lifecycle seam inside the framework (issue #126, Ty's ruling of 2026-09-10,
   raised by the #109 sweep): the half of `TestUtils` that `base.py` drives, the run
   bracket, the context phases, transport teardown, timeline ownership, measurement
@@ -478,4 +491,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Removed
 
+- `via=` on the `LitmusTest` constructor, with the framework-owned via lifecycle
+  behind it: `run_configure_only`, `run_cleanup_only`, the via lease count, and the
+  adoption of a via's failure into the consumer's configure slot (issue #137). The
+  only `via` left is the tunnel argument to `use_shell` / `get_shell`, declared
+  inside `configure()` by the node that owns the route. Pre-1.0: no deprecation
+  period; the `tests/test_via.py` suite is replaced by `tests/test_parent_route.py`.
 - `self.case` and `self.group` (issue #110). Pre-1.0: no deprecation period.
