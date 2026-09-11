@@ -1,14 +1,15 @@
-"""Scheduled dependency update: refresh uv.lock and open the MR. Not shipped.
+"""Weekly dependency update: refresh uv.lock and open the MR. Not shipped.
 
-Runs from the ``dependency-update`` CI schedule (see .gitlab-ci.yml). It records the
+Runs at the bench (``make deps-update``); there is no CI (#138). It records the
 upgrade plan from ``uv lock --upgrade --dry-run``, applies the upgrade, and, when the
 lock actually changed, pushes a ``deps-update-*`` branch and opens a merge request
-whose description carries the plan. The MR's own pipeline then runs the gate, audit
-included, over the new set. With ``--dry-run`` it only prints the plan.
+whose description carries the plan. The reviewer's ``make check`` on that MR runs the
+gate, audit included, over the new set. With ``--dry-run`` (``make deps-plan``) it only
+prints the plan.
 
-Environment (CI provides all but the first): ``LITMUS_BOT_TOKEN`` (api +
-write_repository), ``CI_API_V4_URL``, ``CI_PROJECT_ID``, ``CI_PROJECT_PATH``,
-``CI_SERVER_HOST``.
+Environment: ``LITMUS_BOT_TOKEN`` (api + write_repository) is required for the full
+run; ``GITLAB_API_V4_URL``, ``GITLAB_PROJECT_ID``, ``GITLAB_PROJECT_PATH``, and
+``GITLAB_SERVER_HOST`` default to this project.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ from typing import Any, cast
 from urllib import request
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_API_V4_URL = "https://gitlab.com/api/v4"
+DEFAULT_PROJECT_ID = "85833370"  # Tyler-Meador/litmus_test
+DEFAULT_PROJECT_PATH = "Tyler-Meador/litmus_test"
+DEFAULT_SERVER_HOST = "gitlab.com"
 BRANCH_PREFIX = "deps-update-"
 ASSIGNEE_IDS = (1880678,)  # Ty
 REVIEWER_IDS = (41761657,)  # Commander Zavala; the hourly MR watch keys on this
@@ -34,11 +39,11 @@ COMMIT_AUTHOR = (
 
 
 class DependencyUpdate:
-    """One scheduled pass over the locked dependency set.
+    """One weekly pass over the locked dependency set.
 
     ``run`` returns the process exit code. 0 means the set is current, an MR was
     opened, or an earlier update MR is still open; anything the update could not
-    finish raises, so the scheduled pipeline goes red and somebody looks.
+    finish raises, so the bench run exits red and somebody looks.
     """
 
     def __init__(self, *, dry_run: bool) -> None:
@@ -103,10 +108,10 @@ class DependencyUpdate:
         return None
 
     def _push(self, token: str) -> None:
-        host = os.environ["CI_SERVER_HOST"]
-        path = os.environ["CI_PROJECT_PATH"]
-        # The token rides in the URL for this one push only; GitLab masks the variable
-        # in job logs, and the remote is never saved to the checkout's config.
+        host = os.environ.get("GITLAB_SERVER_HOST", DEFAULT_SERVER_HOST)
+        path = os.environ.get("GITLAB_PROJECT_PATH", DEFAULT_PROJECT_PATH)
+        # The token rides in the URL for this one push only; the command is never
+        # echoed, and the remote is never saved to the checkout's config.
         _git("push", "-q", f"https://oauth2:{token}@{host}/{path}.git", "HEAD")
 
     def _open_mr(self, token: str, plan: str) -> str:
@@ -115,9 +120,9 @@ class DependencyUpdate:
             "target_branch": "main",
             "title": f"Update the locked dependency set ({self._stamp[:8]})",
             "description": (
-                "Scheduled dependency update (#72). Plan from `uv lock --upgrade --dry-run`:"
+                "Weekly dependency update (#72). Plan from `uv lock --upgrade --dry-run`:"
                 f"\n\n```\n{plan}\n```\n\n"
-                "The gate on this MR runs `make audit` over the new set."
+                "The reviewer's `make check` on this head runs `make audit` over the new set."
             ),
             "remove_source_branch": True,
             "labels": "type::tooling",
@@ -131,7 +136,9 @@ class DependencyUpdate:
     def _api(
         token: str, method: str, path: str, body: Mapping[str, object] | None = None
     ) -> object:
-        url = f"{os.environ['CI_API_V4_URL']}/projects/{os.environ['CI_PROJECT_ID']}/{path}"
+        api = os.environ.get("GITLAB_API_V4_URL", DEFAULT_API_V4_URL)
+        project = os.environ.get("GITLAB_PROJECT_ID", DEFAULT_PROJECT_ID)
+        url = f"{api}/projects/{project}/{path}"
         data = None if body is None else json.dumps(body).encode()
         req = request.Request(
             url,

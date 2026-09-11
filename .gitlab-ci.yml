@@ -1,26 +1,14 @@
-# CI gate — mirrors `make check` exactly: verify only, no auto-fix. A red
-# pipeline means the change does not merge; there is no passing a subset.
-#
-# The image carries uv on a Debian base with make and Python 3.14 preinstalled,
-# matching .python-version. `uv sync --locked` refuses a stale uv.lock rather
-# than silently re-resolving, so lockfile drift fails here, loudly, before the
-# gate runs.
+# There is no CI gate (Ty's ruling of 2026-09-10, recorded on #104): `make check`
+# at the bench before every merge is the gate, permanently; the reviewer runs it
+# again before merging, and nothing arms auto-merge on a pipeline. The gate jobs
+# and the nightly-soak and dependency-update schedules that once lived here are
+# gone (#138). What remains is the one job that has no bench equivalent: a version
+# tag rebuilding the docs site into `public/` for Pages. Whether that job stays
+# or the site moves to a host with a bench publish step is ruled on #138.
 
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_COMMIT_TAG
-
-# Gate jobs run on MRs and main; a schedule selects its own job by SCHEDULED_JOB.
-.gate-job:
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    - if: $CI_COMMIT_TAG
-      when: never
-    - when: on_success
 
 .uv-job:
   image: ghcr.io/astral-sh/uv:python3.14-bookworm
@@ -35,68 +23,7 @@ workflow:
     paths:
       - .uv-cache
 
-check:
-  extends: [.uv-job, .gate-job]
-  script:
-    - uv sync --locked
-    - make check
-  # The coverage summary is read off the TOTAL line and the Cobertura report feeds
-  # the MR diff view; both come from the gate's own run, nothing is re-measured.
-  coverage: '/^TOTAL.*\s+(\d+(?:\.\d+)?)%$/'
-  artifacts:
-    when: always
-    expire_in: 2 weeks
-    paths:
-      - .coverage/coverage.json
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: .coverage/cobertura.xml
-
-# Timing races don't lose the same way twice: a suite that passes once can fail
-# 7 of 8 on another machine (!42). Eight runs is a second net, not proof.
-soak:
-  extends: [.uv-job, .gate-job]
-  script:
-    - uv sync --locked
-    - make soak
-
-# Weekly (schedule: SCHEDULED_JOB=dependency-update). Refreshes uv.lock and opens an MR
-# carrying the upgrade plan; that MR's pipeline runs the gate, audit included, over the
-# new set. Needs LITMUS_BOT_TOKEN (api + write_repository) as a masked CI variable.
-dependency-update:
-  extends: .uv-job
-  interruptible: false
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULED_JOB == "dependency-update"
-  script:
-    - uv sync --locked
-    - uv run python tools/dependency_update.py
-
-# Nightly (schedule: SCHEDULED_JOB=nightly-soak). The full suite SOAK_RUNS times and the
-# rack suite RACK_REPEATS times on the main head (#68). The night is recorded on issue
-# #68 through LITMUS_BOT_TOKEN, and a red night reaches #general through
-# DISCORD_WEBHOOK_URL (masked CI variable). The schedule's own variables override the
-# defaults below. The Phase 6 exit counts fourteen consecutive green nights on the issue.
-nightly-soak:
-  extends: .uv-job
-  interruptible: false
-  timeout: 2h
-  variables:
-    SOAK_RUNS: "8"
-    RACK_REPEATS: "20"
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULED_JOB == "nightly-soak"
-  script:
-    - uv sync --locked
-    - uv run python tools/nightly_soak.py
-  artifacts:
-    when: always
-    expire_in: 2 weeks
-    paths:
-      - .soak/
-
-# Version tags publish the docs site. `make docs` already ran in the gate on
+# Version tags publish the docs site. `make docs` already ran in the bench gate on
 # the MR that produced the tag; this job rebuilds into `public/` for Pages.
 pages:
   extends: .uv-job
