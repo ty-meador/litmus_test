@@ -104,7 +104,7 @@ contents included). Two rules offer a quick-fix:
 
 | Code | Action |
 |---|---|
-| `litmus/gated-pass` | Wrap the `return PASS` in an explicit pass predicate. Preceding `if ...: raise` guards are inverted into that predicate only when they sit flush against the return, load no name bound at the insertion point, and contain no call. Every other shape gets `if False:` plus a `TestFailure` raise — a leftover scaffold cannot return PASS. |
+| `litmus/gated-pass` | Wrap the `return PASS` in an explicit pass predicate. Preceding `if ...: raise` guards are inverted into that predicate only when they sit flush against the return in its own block (a return in a loop's or `try`'s `else:` or in `finally:` never borrows the body's guards), load no name bound at the insertion point, and contain no call. Every other shape gets `if False:` plus a `TestFailure` raise — a leftover scaffold cannot return PASS. |
 | `litmus/method-reference` | Replace a trivial `lambda` (`lambda u: self._claim(u)`) with the method reference. A lambda that carries extra logic is left alone — that logic belongs in a real method. |
 
 Disable the plugin in pylsp config with `plugins.litmus_check.enabled: false`.
