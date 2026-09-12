@@ -508,6 +508,15 @@ of feature parity: the Python Inspector is still separate work.
   including missing verdicts, malformed composition, and finalization timeouts
   (issue #80, [!103](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/103)).
 
+### Fixed
+
+- The `litmus/gated-pass` quick-fix derives its predicate only from guards in the
+  block that holds the `return PASS`. A return in a loop's or `try`'s `else:` or in
+  `finally:` was answered with the body's guards: the pass line was inserted in the
+  sibling block, so a log scan's loop-`else` return became a pass on the first clean
+  line with the rule silent. Those shapes now take the `if False:` fallback unless the
+  return's own block carries flush guards (issue #140).
+
 ### Security
 
 - Optional `env_allow` / `env_deny` filtering of the published environment snapshot;

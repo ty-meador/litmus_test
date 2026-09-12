@@ -226,6 +226,92 @@ class TestGatedPassWrapsTheReturn:
         assert result.count("utils.exec") == 1
         assert "if False:" in result
 
+    def test_loop_else_return_does_not_lift_the_pass_into_the_loop(self) -> None:
+        source, action = _action(
+            """
+            from litmus import PASS, TestFailure
+
+            async def claim(utils):
+                for line in utils.ctx["lines"]:
+                    if "ERROR" in line:
+                        raise TestFailure("error line", "no ERROR", line)
+                else:
+                    return PASS
+            """,
+            "litmus/gated-pass",
+        )
+        result = action.apply(source)
+        leftover = [
+            item
+            for item in LitmusLsp().diagnostics(_SUITE, result)
+            if item.code == "litmus/gated-pass"
+        ]
+
+        # The body's guard is a sibling of the else block, not of the return: inverting
+        # it would pass the suite on the first clean line and never read the rest.
+        assert action.title.startswith("Wrap return PASS")
+        assert "not in line" not in result
+        assert result.index("if False:") > result.index("else:")
+        assert result.count('raise TestFailure("error line"') == 1
+        assert leftover == []
+
+    def test_finally_return_does_not_derive_from_the_try_body(self) -> None:
+        source, action = _action(
+            """
+            from litmus import PASS, TestFailure
+
+            async def claim(utils):
+                try:
+                    if utils.ctx["exit_code"] != 0:
+                        raise TestFailure("non-zero exit", "0", "nonzero")
+                finally:
+                    return PASS
+            """,
+            "litmus/gated-pass",
+        )
+        result = action.apply(source)
+        leftover = [
+            item
+            for item in LitmusLsp().diagnostics(_SUITE, result)
+            if item.code == "litmus/gated-pass"
+        ]
+
+        assert action.title.startswith("Wrap return PASS")
+        assert "== 0: return PASS" not in result
+        assert result.index("if False:") > result.index("finally:")
+        assert result.count('raise TestFailure("non-zero exit"') == 1
+        assert leftover == []
+
+    def test_try_else_return_derives_from_the_guards_in_its_own_block(self) -> None:
+        source, action = _action(
+            """
+            from litmus import PASS, TestFailure
+
+            async def claim(utils):
+                try:
+                    utils.ctx["probe"]()
+                except OSError:
+                    raise TestFailure("probe failed", "reachable", "unreachable")
+                else:
+                    if utils.ctx["exit_code"] != 0:
+                        raise TestFailure("non-zero exit", "0", "nonzero")
+                    return PASS
+            """,
+            "litmus/gated-pass",
+        )
+        result = action.apply(source)
+        leftover = [
+            item
+            for item in LitmusLsp().diagnostics(_SUITE, result)
+            if item.code == "litmus/gated-pass"
+        ]
+
+        assert "Derive pass predicate" in action.title
+        assert result.index("else:") < result.index("if utils.ctx['exit_code'] == 0: return PASS")
+        assert result.count('utils.ctx["probe"]()') == 1
+        assert "unknown failure mode" in result
+        assert leftover == []
+
 
 class TestMethodReferenceLiftsTheLambda:
     def test_rewrites_a_zero_arg_lambda(self) -> None:
