@@ -335,8 +335,11 @@ class TestRerunTab:
             await pilot.pause()
 
             assert session.record(2) is not None
-            assert app.tree_lines[0] == "  rack  Pass"
-            assert app.tree_lines[1] == "  └─ steps  Pass  ←"
+            # The bench re-ran one leaf. Its ancestors configured and rolled their
+            # state up over that one child, so they carry no verdict here; drawing
+            # them Pass would hide the sibling failure the archive still holds.
+            assert app.tree_lines[0] == "  rack  partly re-run"
+            assert app.tree_lines[1] == "  └─ steps  partly re-run  ←"
             assert app.tree_lines[2] == ">    ├─ power  Pass"
             assert app.tree_lines[4] == "     │  ├─ volts  not re-run"
             assert app.log_lines[0] == "log: rack/steps  (rolled up: power has no own log)"
