@@ -404,6 +404,20 @@ of feature parity: the Python Inspector is still separate work.
   URL; `tools/dependency_update.py` carries the same defaults. New targets:
   `make nightly-record` (the soak, recorded on #68), `make deps-plan`, and
   `make deps-update`.
+- Nothing hosts the docs site, a release is a branch, and the nightly is dormant
+  (issue #138, Ty's rulings of 2026-09-11). GitLab renders `docs/` on `main`; a
+  release is cut as `release/MAJOR.MINOR.PATCH` from the validated commit, where
+  `make docs-release` commits the built site under `docs/site/` (`main` never carries
+  it; `use_directory_urls: false` so a clone opens it from disk, `exclude_docs` keeps
+  one build out of the next), the version tag sits on that branch head, and
+  `make build` plus `uv publish` are bench steps of the release checklist. The
+  tag-only `pages` job is gone with the Pages URL: README, `pyproject.toml`, and
+  `mkdocs.yml` point at the tree, and the station label carries the rendered
+  `docs/floor-technician.md`. `.gitlab-ci.yml` keeps one job, `nightly-soak`, the
+  bench driver behind a pipeline schedule that stays switched off (no pipeline
+  minutes to spend); until a schedule runs again the Phase 6 exit is one recorded
+  bench soak green on the release candidate head, posted to #68, in place of
+  fourteen consecutive nights.
 - The parent owns the route (issue #137, Ty's ruling of 2026-09-10, signed
   2026-09-11). A route is owned by the node whose `configure()` declared it with
   `use_shell` and is inherited by every node it composes until a descendant declares
