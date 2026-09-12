@@ -96,7 +96,7 @@ class GatedPassFix(CodeFix):
         return_node: ast.Return,
     ) -> LspCodeAction | None:
         parent = module.parent_of(return_node)
-        statements = _statement_list(parent)
+        statements = _statement_list(parent, return_node)
         if statements is None:
             return None
         guards = _contiguous_guards(statements, return_node)
@@ -216,15 +216,35 @@ class MethodReferenceFix(CodeFix):
         )
 
 
-def _statement_list(parent: ast.AST | None) -> list[ast.stmt] | None:
-    if isinstance(parent, ast.FunctionDef | ast.AsyncFunctionDef | ast.Module):
-        return list(parent.body)
-    if isinstance(parent, ast.For | ast.AsyncFor | ast.While | ast.If | ast.With | ast.AsyncWith):
-        return list(parent.body)
-    if isinstance(parent, ast.ExceptHandler):
-        return list(parent.body)
-    if isinstance(parent, ast.Try):
-        return list(parent.body)
+def _statement_list(parent: ast.AST | None, node: ast.stmt) -> list[ast.stmt] | None:
+    """The block of ``parent`` that holds ``node``, or ``None`` for a parent not walked.
+
+    A ``return`` in a loop's or ``try``'s ``else:``, or in ``finally:``, is a sibling
+    of that block's statements, not of the body's. Answering the body for every parent
+    derived the predicate from a sibling block's guards and inserted the pass above
+    them: a log scan's loop-``else`` return became a pass on the first clean line. The
+    guards inverted are only ever those flush against the return in its own block.
+    """
+    blocks: list[list[ast.stmt]]
+    if isinstance(
+        parent,
+        ast.FunctionDef
+        | ast.AsyncFunctionDef
+        | ast.Module
+        | ast.With
+        | ast.AsyncWith
+        | ast.ExceptHandler,
+    ):
+        blocks = [parent.body]
+    elif isinstance(parent, ast.For | ast.AsyncFor | ast.While | ast.If):
+        blocks = [parent.body, parent.orelse]
+    elif isinstance(parent, ast.Try):
+        blocks = [parent.body, parent.orelse, parent.finalbody]
+    else:
+        return None
+    for block in blocks:
+        if any(statement is node for statement in block):
+            return list(block)
     return None
 
 

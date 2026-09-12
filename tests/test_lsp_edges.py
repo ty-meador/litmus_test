@@ -110,9 +110,33 @@ class TestGatedPassRefusalAndParents:
         if_node = tree.body[0]
 
         assert isinstance(if_node, ast.If)
-        body = _statement_list(if_node)
+        body = _statement_list(if_node, if_node.body[0])
         assert body is not None
         assert isinstance(body[0], ast.Return)
+
+    def test_statement_list_answers_the_block_that_holds_the_node(self) -> None:
+        tree = ast.parse(
+            dedent(
+                """
+                try:
+                    x = 1
+                except OSError:
+                    pass
+                else:
+                    y = 2
+                finally:
+                    return PASS
+                """
+            )
+        )
+        try_node = tree.body[0]
+
+        assert isinstance(try_node, ast.Try)
+        assert _statement_list(try_node, try_node.orelse[0]) == try_node.orelse
+        assert _statement_list(try_node, try_node.finalbody[0]) == try_node.finalbody
+        assert _statement_list(try_node, try_node.body[0]) == try_node.body
+        # A node from another block entirely is not answered with a guess.
+        assert _statement_list(try_node, ast.Pass()) is None
 
     def test_return_inside_try_and_except(self) -> None:
         text = dedent(
@@ -385,7 +409,7 @@ class TestHelpers:
         assert inner_indent("\t") == "\t\t"
 
     def test_statement_list_rejects_unknown_parents(self) -> None:
-        assert _statement_list(ast.Constant(1)) is None
+        assert _statement_list(ast.Constant(1), ast.Pass()) is None
 
     def test_is_pure_raise_guard_rejects_a_plain_statement(self) -> None:
         assert _is_pure_raise_guard(ast.Pass()) is False
