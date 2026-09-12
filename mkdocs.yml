@@ -1,5 +1,5 @@
 site_name: litmus
-site_url: https://tyler-meador.gitlab.io/litmus_test/
+site_url: https://gitlab.com/Tyler-Meador/litmus_test/-/tree/main/docs/
 site_description: React-for-hardware HIL testing framework
 repo_url: https://gitlab.com/Tyler-Meador/litmus_test
 edit_uri: -/blob/main/docs/
@@ -8,6 +8,13 @@ copyright: Copyright 2026 Tyler Meador
 strict: true
 docs_dir: docs
 site_dir: site
+# Nothing hosts the site (#138). A release branch commits the build under
+# docs/site/, opened from a clone as file://, so links end in .html rather than
+# in a directory the filesystem cannot resolve; and that committed build must not
+# be swept into the next one.
+use_directory_urls: false
+exclude_docs: |
+  site/
 
 validation:
   nav:
