@@ -39,6 +39,12 @@ def _source(session: RerunSession, index: int) -> int | None:
     return None if record is None else record.source
 
 
+def _partial(session: RerunSession, index: int) -> bool | None:
+    """Whether a row's record is a rollup over part of the tree, or None with no record."""
+    record = session.record(index)
+    return None if record is None else record.partial
+
+
 def _refusing() -> LitmusTest:
     raise RuntimeError("no such module: bench")
 
@@ -137,6 +143,11 @@ class TestRunning:
         # The path to the leaf ran its lifecycle; every other leaf was left pending
         # and so has no record, exactly as the sealed run left them.
         assert states == {0: "Pass", 1: "Pass", 2: "Pass", 3: None, 4: None, 5: None, 6: None}
+        # Only the pressed leaf reached a verdict on the bench. The two nodes above it
+        # rolled up over that single child while their other children stayed pending,
+        # so their states are marked partial and must not be read as verdicts (#141).
+        partial = {index: _partial(session, index) for index in range(3)}
+        assert partial == {0: True, 1: True, 2: False}
         assert session.scratch_root is not None
         assert session.scratch_root.name.startswith("litmus-rerun-")
         assert len(list((session.scratch_root / str(POWER)).rglob("result.json"))) == 1
@@ -167,6 +178,24 @@ class TestRunning:
         assert _state(session, LATER) is None
         assert _state(session, CHECKS) == "Aborted"
         assert _source(session, CHECKS) == CHECKS
+        # A composite re-run reaches every claim it owns, so its own state is a
+        # verdict; only the nodes above it are partial.
+        assert _partial(session, CHECKS) is False
+        assert _partial(session, VOLTS) is False
+        assert _partial(session, SLOW) is False
+        assert (_partial(session, 0), _partial(session, 1)) == (True, True)
+
+    async def test_re_running_the_whole_suite_leaves_no_partial_rollup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session = await _mixed_session(tmp_path, monkeypatch)
+
+        await session.run(0)
+
+        # Nothing sits above the root, so every state the bench recorded covers the
+        # whole of its node: the honest picture the floor expects from a full re-run.
+        assert all(_partial(session, index) in (None, False) for index in range(len(MIXED_ROWS)))
+        assert _partial(session, 0) is False
 
     async def test_re_running_a_node_replaces_its_previous_evidence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

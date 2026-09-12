@@ -508,6 +508,15 @@ of feature parity: the Python Inspector is still separate work.
   including missing verdicts, malformed composition, and finalization timeouts
   (issue #80, [!103](https://gitlab.com/Tyler-Meador/litmus_test/-/merge_requests/103)).
 
+### Fixed
+
+- The Inspector's Re-Run tab no longer shows a verdict on a node above the one that
+  was pressed. Re-running a single leaf runs its ancestors' lifecycle and rolls their
+  state up over that one child, so a group whose other child failed in production came
+  back Pass and carried the pass to the root, hiding the failure the archive still
+  held. Those nodes now read **partly re-run**; their fresh chronology stays readable,
+  and the production verdict stays on the Inspect tab (issue #141).
+
 ### Security
 
 - Optional `env_allow` / `env_deny` filtering of the published environment snapshot;
