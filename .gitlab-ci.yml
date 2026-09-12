@@ -1,14 +1,19 @@
 # There is no CI gate (Ty's ruling of 2026-09-10, recorded on #104): `make check`
 # at the bench before every merge is the gate, permanently; the reviewer runs it
 # again before merging, and nothing arms auto-merge on a pipeline. The gate jobs
-# and the nightly-soak and dependency-update schedules that once lived here are
-# gone (#138). What remains is the one job that has no bench equivalent: a version
-# tag rebuilding the docs site into `public/` for Pages. Whether that job stays
-# or the site moves to a host with a bench publish step is ruled on #138.
+# are gone (#138), and so is the Pages job: nothing hosts the docs site. GitLab
+# renders `docs/` on `main`, and a release branch carries the built site under
+# `docs/site/` (`make docs-release`), so no tag pipeline has anything to do.
+#
+# One job remains, and it is dormant. `nightly-soak` runs the bench driver from a
+# pipeline schedule so the soak can move off a person's bench the day pipeline
+# minutes allow it; the schedule is created switched off and stays off (Ty,
+# 2026-09-11 on #138: leave the toggle off, no nightly for now). Nothing in this
+# file runs on a push, a merge request, or a tag.
 
 workflow:
   rules:
-    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "schedule"
 
 .uv-job:
   image: ghcr.io/astral-sh/uv:python3.14-bookworm
@@ -23,18 +28,27 @@ workflow:
     paths:
       - .uv-cache
 
-# Version tags publish the docs site. `make docs` already ran in the bench gate on
-# the MR that produced the tag; this job rebuilds into `public/` for Pages.
-pages:
+# The same driver as `make nightly-record`, told where it is: the API root and
+# project id come from the runner, the head sha from the checkout, and the night's
+# record names the runner's host and `.soak/` (kept as an artifact). Needs
+# LITMUS_BOT_TOKEN (api scope) as a masked CI variable, DISCORD_WEBHOOK_URL for a
+# red night. The schedule's own variables override the counts.
+nightly-soak:
   extends: .uv-job
-  stage: deploy
   interruptible: false
+  timeout: 2h
+  variables:
+    SOAK_RUNS: "8"
+    RACK_REPEATS: "20"
+    GITLAB_API_V4_URL: $CI_API_V4_URL
+    GITLAB_PROJECT_ID: $CI_PROJECT_ID
   rules:
-    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULED_JOB == "nightly-soak"
   script:
     - uv sync --locked
-    - make docs
-    - mv site public
+    - uv run python tools/nightly_soak.py
   artifacts:
+    when: always
+    expire_in: 2 weeks
     paths:
-      - public
+      - .soak/

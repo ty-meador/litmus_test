@@ -60,6 +60,12 @@ check:  ## The gate (there is no CI) — verify only, no auto-fix. Green before 
 docs:  ## Documentation site; strict: a broken cross-reference is red
 	uv run mkdocs build --strict
 
+# mkdocs refuses a site_dir inside docs_dir, so the build lands in site/ and moves.
+docs-release:  ## The same build moved to docs/site/, committed on a release branch only; main never carries it (#138)
+	uv run mkdocs build --strict
+	rm -rf docs/site
+	mv site docs/site
+
 SOAK_RUNS ?= 8
 RACK_REPEATS ?= 20
 

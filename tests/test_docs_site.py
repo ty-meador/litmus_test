@@ -1,8 +1,10 @@
 """The docs site is the published form of ``docs/`` plus the public API reference.
 
 Issue #82: mkdocs + mkdocstrings, ``make docs`` is the local build, the gate
-fails on a broken cross-reference, GitLab Pages publishes on a version tag,
-and the README records the URL that belongs on a station label.
+fails on a broken cross-reference. Issue #138 (Ty, 2026-09-11): nothing hosts the
+site. GitLab renders ``docs/`` on ``main``, ``make docs-release`` commits the build
+under ``docs/site/`` on a release branch, and the README records the rendered
+station page as the URL that belongs on a station label.
 """
 
 from __future__ import annotations
@@ -24,8 +26,9 @@ README = ROOT / "README.md"
 MAKEFILE = ROOT / "Makefile"
 CI = ROOT / ".gitlab-ci.yml"
 
-PAGES_URL = "https://tyler-meador.gitlab.io/litmus_test/"
-STATION_URL = f"{PAGES_URL}floor-technician/"
+REPO_URL = "https://gitlab.com/Tyler-Meador/litmus_test"
+DOCS_URL = f"{REPO_URL}/-/tree/main/docs"
+STATION_URL = f"{REPO_URL}/-/blob/main/docs/floor-technician.md"
 
 _IDENT = re.compile(r"^::: litmus\.([A-Za-z_][A-Za-z0-9_]*)$", re.MULTILINE)
 _NAV_ENTRY = re.compile(r":\s*([A-Za-z0-9_./-]+\.md)\s*$", re.MULTILINE)
@@ -68,14 +71,24 @@ class TestDocsSiteConfig:
         text = MKDOCS.read_text(encoding="utf-8")
         assert "strict: true" in text
         assert "mkdocstrings:" in text
-        assert f"site_url: {PAGES_URL}" in text
+        assert f"site_url: {DOCS_URL}/" in text
+        # A release branch commits the build under docs/site/ and a station opens it
+        # from a clone: links must end in .html, and the committed build must not be
+        # swept into the next one.
+        assert "use_directory_urls: false" in text
+        assert "site/" in text.split("exclude_docs:", 1)[1]
 
     def test_every_markdown_page_is_in_the_nav(self) -> None:
         # Recursive: docs/hil/ groups the HIL interface design notes under one
         # directory rather than flattening every note into docs/*.md (issue #91).
         nav_pages = set(_NAV_ENTRY.findall(MKDOCS.read_text(encoding="utf-8")))
         docs_dir = ROOT / "docs"
-        on_disk = {path.relative_to(docs_dir).as_posix() for path in docs_dir.rglob("*.md")}
+        # docs/site/ is a committed build on a release branch, never a source page.
+        on_disk = {
+            path.relative_to(docs_dir).as_posix()
+            for path in docs_dir.rglob("*.md")
+            if path.relative_to(docs_dir).parts[0] != "site"
+        }
         assert on_disk, "docs/ grew no markdown pages"
         missing = on_disk - nav_pages
         extra = nav_pages - on_disk
@@ -105,21 +118,25 @@ class TestDocsSiteConfig:
 
 
 class TestReadmeRecordsThePublishedUrl:
-    def test_package_urls_point_at_the_site_and_the_repo(self) -> None:
+    def test_package_urls_point_at_the_tree_and_the_repo(self) -> None:
         # The PyPI page is the first place a developer finds the docs and the tracker
-        # (issue #103); a URL that drifts from mkdocs.yml sends them to a dead site.
+        # (issue #103); a URL that drifts from mkdocs.yml sends them to a dead site,
+        # and the only live site is the tree itself (#138).
         data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         urls = data["project"]["urls"]
         mkdocs = MKDOCS.read_text(encoding="utf-8")
-        assert urls["Documentation"] == PAGES_URL
+        assert urls["Source"] == REPO_URL
+        assert urls["Homepage"] == REPO_URL
+        assert urls["Documentation"] == DOCS_URL
         assert f"repo_url: {urls['Source']}" in mkdocs
         assert urls["Issues"] == f"{urls['Source']}/-/issues"
         assert "Typing :: Typed" in data["project"]["classifiers"]
         assert (ROOT / "src" / "litmus" / "py.typed").is_file()
 
-    def test_readme_names_the_pages_url(self) -> None:
+    def test_readme_names_the_docs_tree(self) -> None:
         readme = README.read_text(encoding="utf-8")
-        assert PAGES_URL in readme
+        assert DOCS_URL in readme
+        assert "make docs-release" in readme
 
     def test_readme_names_the_station_url(self) -> None:
         readme = README.read_text(encoding="utf-8")
@@ -144,26 +161,37 @@ class TestGateBuildsTheSite:
         assert "cd .smoke && venv/bin/litmus-check --list-rules" in smoke
         assert "cd .smoke && venv/bin/litmus run ../examples/hello_world.py" in smoke
 
-    def test_pages_job_runs_on_tags(self) -> None:
-        ci = CI.read_text(encoding="utf-8")
-        assert re.search(r"^pages:", ci, re.MULTILINE)
-        assert "if: $CI_COMMIT_TAG" in ci
-        pages = ci.split("pages:", 1)[1]
-        assert "make docs" in pages
-        assert "public" in pages
+    def test_makefile_docs_release_builds_into_the_tree(self) -> None:
+        # The release build lands where a release branch commits it and stays out of
+        # the gate, so main never grows a docs/site/ by accident.
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        release = _recipe("docs-release", makefile)
+        assert "mkdocs build --strict" in release
+        assert "mv site docs/site" in release
+        assert "docs-release" not in _recipe("check", makefile)
 
-    def test_workflow_allows_tag_pipelines(self) -> None:
+    def test_ci_has_no_pages_job_and_runs_nothing_on_push_or_tag(self) -> None:
+        # Ty, 2026-09-11 on #138: the site is not hosted, so the tag pipeline that fed
+        # Pages is gone. The one job left is the dormant scheduled soak, and the
+        # workflow lets nothing but a schedule start a pipeline.
         ci = CI.read_text(encoding="utf-8")
-        assert "$CI_COMMIT_TAG" in ci.split("pages:", 1)[0]
+        assert not re.search(r"^pages:", ci, re.MULTILINE)
+        assert "$CI_COMMIT_TAG" not in ci
+        assert re.search(r"^nightly-soak:", ci, re.MULTILINE)
+        workflow = ci.split("nightly-soak:", 1)[0]
+        assert '- if: $CI_PIPELINE_SOURCE == "schedule"' in workflow
+        assert 'SCHEDULED_JOB == "nightly-soak"' in ci
 
 
 class TestBuiltSite:
     def test_homepage_and_station_page_exist(self, site: Path) -> None:
         assert (site / "index.html").is_file()
-        assert (site / "floor-technician" / "index.html").is_file()
+        assert (site / "floor-technician.html").is_file()
+        # Opened as file:// from a clone, only a link that names the file resolves.
+        assert "floor-technician.html" in (site / "index.html").read_text(encoding="utf-8")
 
     def test_every_public_name_appears_in_the_api_reference(self, site: Path) -> None:
-        html = (site / "api" / "index.html").read_text(encoding="utf-8")
+        html = (site / "api.html").read_text(encoding="utf-8")
         missing = [name for name in litmus.__all__ if name not in html]
         assert missing == []
 
