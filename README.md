@@ -11,6 +11,7 @@ make install   # uv sync + git hooks
 make fix       # auto-format + auto-fix lint
 make check     # the gate (there is no CI; the bench run is it): format check, lint, pyright strict, import cycles, pytest under the coverage floors, litmus-check, wheel smoke install, docs, pip-audit
 make docs      # documentation site (strict: a broken cross-reference is red)
+make docs-release  # the same build into docs/site/, committed on a release branch only
 ```
 
 `litmus run` is the runner (`docs/litmus-run.md`): it loads a suite file or module,
@@ -76,10 +77,14 @@ to that surface. For a release MR, select the
 [Release template](.gitlab/merge_request_templates/Release.md): it records the
 candidate's checks, changelog cut, and the handoff to Zavala for review.
 
-The Floor Technician guide is `docs/floor-technician.md` in the checkout and
-https://tyler-meador.gitlab.io/litmus_test/floor-technician/ on the docs site
-(https://tyler-meador.gitlab.io/litmus_test/). That published URL is the one
-that belongs on a station label.
+Nothing hosts the docs site. The tree is the documentation: GitLab renders every
+page under https://gitlab.com/Tyler-Meador/litmus_test/-/tree/main/docs, and each
+release branch (`release/MAJOR.MINOR.PATCH`) also carries the built site under
+`docs/site/` (`make docs-release`; open `docs/site/index.html` from a clone, no
+network needed). The Floor Technician guide is `docs/floor-technician.md`; its
+rendered page,
+https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/docs/floor-technician.md,
+is the URL that belongs on a station label.
 
 ## Deployment requirement
 
