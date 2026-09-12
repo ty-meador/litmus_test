@@ -30,7 +30,10 @@ source of truth and this doc is the explanation.
   must start. A wheel that cannot build, or that imports from `src/` instead of itself,
   is red before it is tagged, so the developer's `pip install` never delivers a package
   that cannot import on the floor. Publishing waits on the name decision (#9) and is a
-  bench step of the release checklist, not a pipeline (#138).
+  bench step of the release checklist, not a pipeline (#138). The docs site is not
+  hosted either: `make docs` in the gate proves it builds, GitLab renders `docs/` on
+  `main`, and `make docs-release` commits the build under `docs/site/` on the release
+  branch, never on `main` (#138).
 - The pre-commit hook (installed by `make install`) auto-formats and auto-fixes staged
   files. Don't bypass it with `--no-verify`.
 
@@ -156,7 +159,11 @@ that reader is soon a stranger.
   full suite and the rack suite many times over on `main`
   (`tools/nightly_soak.py`: `make nightly` runs and prints, `make nightly-record`
   also records the night on issue #68 with `LITMUS_BOT_TOKEN` exported); a red night
-  names the failing case and run in #general before an MR meets it.
+  names the failing case and run in #general before an MR meets it. The `nightly-soak`
+  job in `.gitlab-ci.yml` is the same driver behind a pipeline schedule that stays
+  switched off (Ty, 2026-09-11: no pipeline minutes to spend on it); a night counts
+  only once it is posted, whichever machine ran it. Until a schedule runs again, the
+  Phase 6 exit is one recorded bench soak green on the release candidate head.
 - **Generated coverage must remain replayable.** `make check` and `make soak` retain
   the fixed Hypothesis seed in `pyproject.toml`. The nightly driver (`make nightly`)
   draws a fresh seed for every pytest invocation and writes the exact replay command

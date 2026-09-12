@@ -15,4 +15,6 @@ a developer writes the suite that makes that possible.
   terminal workflow to build. The Python Inspector is not shipped yet.
 
 Build this site locally with `make docs`. A broken cross-reference fails the
-gate. A version tag publishes it to GitLab Pages.
+gate. Nothing hosts it: GitLab renders every page from `docs/` on `main`, and a
+release branch carries the built site under `docs/site/` (`make docs-release`) so a
+station can open it from a clone without a network (#138).

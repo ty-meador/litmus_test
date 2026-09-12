@@ -39,8 +39,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://tyler-meador.gitlab.io/litmus_test/"
-Documentation = "https://tyler-meador.gitlab.io/litmus_test/"
+Homepage = "https://gitlab.com/Tyler-Meador/litmus_test"
+Documentation = "https://gitlab.com/Tyler-Meador/litmus_test/-/tree/main/docs"
 Source = "https://gitlab.com/Tyler-Meador/litmus_test"
 Issues = "https://gitlab.com/Tyler-Meador/litmus_test/-/issues"
 Changelog = "https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/CHANGELOG.md"
