@@ -1,6 +1,9 @@
 """Nightly soak: the full suite and the rack suite many times over, verdict posted. Not shipped.
 
-Runs at the bench on the ``main`` head (``make nightly-record``); there is no CI (#138).
+Runs at the bench on the ``main`` head (``make nightly-record``); there is no CI gate
+(#138). The dormant ``nightly-soak`` job in ``.gitlab-ci.yml`` runs this same driver
+from a pipeline schedule that stays switched off until minutes allow it (Ty,
+2026-09-11); the record on #68 is the same either way.
 ``make soak`` exists because one green run proves nothing about timing, and nobody runs
 it unprompted; this is the run nobody has to remember. It executes the full suite
 ``SOAK_RUNS`` times (default 8, as ``make soak``) and ``tests/test_rack_scale.py``
