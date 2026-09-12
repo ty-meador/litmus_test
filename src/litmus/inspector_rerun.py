@@ -58,10 +58,18 @@ class RerunRecord:
     again, every record it produced is dropped together with its evidence. ``row`` is
     the node's row in that re-run's own tree, which has the same indices as the saved
     tree because the two were matched before the run.
+
+    ``partial`` marks a node above the pressed one. Its lifecycle ran, so it has a
+    chronology worth reading, but its state was rolled up over only the one child the
+    bench was pointed at; the siblings were left pending and contributed nothing. Such
+    a state is not a verdict on the node and must never be shown as one: a group whose
+    other child failed in production would otherwise read Pass because the branch the
+    technician re-ran came back clean (issue #141).
     """
 
     source: int
     row: TreeRow
+    partial: bool
 
 
 class RerunSession:
@@ -236,10 +244,13 @@ class RerunSession:
                 f"{len(saved_rows)}; the suite changed shape while the Inspector was open"
             )
             return
+        executed = subtree_indices(saved_rows, source)
         self._selections[source] = InspectorSelection(rerun.tree, rerun.run_root)
         for row in rerun.tree.rows:
             if row.state is not None:
-                self._records[row.index] = RerunRecord(source, row)
+                self._records[row.index] = RerunRecord(
+                    source, row, partial=row.index not in executed
+                )
 
 
 def subtree_of(rows: Sequence[TreeRow], index: int) -> tuple[int, ...]:

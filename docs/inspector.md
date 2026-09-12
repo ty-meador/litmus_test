@@ -333,11 +333,20 @@ harness, leaves the tab unavailable with that reason until `--suite` is given.
 scratch directory, in a subdirectory per pressed node. Re-running the same node
 empties that subdirectory first, so the ninth re-run leaves nothing of the eighth. The
 whole scratch directory is removed when the Inspector closes. After a re-run the
-pressed node, its descendants that ran, and the ancestors that configured show their
-fresh states; rows the re-run never reached keep whatever an earlier re-run left, or
-**not re-run**. The log pane shows the highlighted node's re-run chronology, read by
-the same reader as the archive, with the same owner arrow; a node no re-run reached
-says so instead of borrowing the archive's log.
+pressed node and its descendants that ran show their fresh states; rows the re-run
+never reached keep whatever an earlier re-run left, or **not re-run**. The log pane
+shows the highlighted node's re-run chronology, read by the same reader as the archive,
+with the same owner arrow; a node no re-run reached says so instead of borrowing the
+archive's log.
+
+**A node above the pressed one reads partly re-run, never a verdict.** Its lifecycle
+ran and its chronology is worth reading, but the state it rolled up covers only the
+child the bench was pointed at: every sibling was left pending and contributed nothing
+to it. Drawn as a verdict, that rollup turns a group whose other child failed in
+production into a Pass and carries the Pass to the root, which is the one reading the
+floor must never be given (issue #141). The bench answers for the branch it ran; the
+verdict on the whole node belongs to the archive on the Inspect tab, or to a re-run of
+that node, which runs every claim beneath it and so reads as a verdict again.
 
 The run's recorded environment seeds the re-run, so the station's variables travel with
 the record; the live environment overrides it, so a technician can change one
@@ -505,7 +514,9 @@ terminal and driven by a recorded 70-DUT rack:
   evidence or neighboring source, and refuses a suite whose declared tree differs from
   the saved one. Execution is `LitmusTest.run(subtree=...)`: ancestors' own lifecycle,
   the pressed subtree, every other leaf pending. Ancestor-configure replay stays
-  prohibited. Scratch evidence is replaced per node and removed on close. A live
+  prohibited. A node above the pressed one shows **partly re-run**, never the state it
+  rolled up over the one child the bench ran. Scratch evidence is replaced per node and
+  removed on close. A live
   re-run holds Tab, and quitting it goes through the operator-interrupt path to
   Aborted with bounded cleanup before the Inspector exits.
 

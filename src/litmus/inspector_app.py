@@ -53,6 +53,13 @@ _STATE_STYLES: dict[str | None, tuple[str, str]] = {
     None: ("Pending", "dim"),
 }
 _NOT_RERUN = ("not re-run", "dim")
+_PARTLY_RERUN = ("partly re-run", "dim")
+"""A node above the pressed one: its lifecycle ran, its other branches did not.
+
+Its recorded state covers only the branch the bench was pointed at, so it is not a
+verdict on the node and is never drawn as one. The archive on the Inspect tab keeps
+the verdict the production run reached (issue #141).
+"""
 _RUNNING_STYLE = "bold cyan"
 _RUNNING_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -443,14 +450,18 @@ class InspectorApp(App[None]):
         for index in _window(len(rows), position, height):
             row = rows[index]
             evidence: TreeRow | None = row
+            partial = False
             if self.tab == "rerun":
                 record = self.session.record(row.index)
                 evidence = None if record is None else record.row
+                partial = record is not None and record.partial
             if row.index in running:
                 frame = _RUNNING_FRAMES[self._spin % len(_RUNNING_FRAMES)]
                 label, style = f"{frame} Running", _RUNNING_STYLE
             elif evidence is None:
                 label, style = _NOT_RERUN
+            elif partial:
+                label, style = _PARTLY_RERUN
             else:
                 label, style = _STATE_STYLES[evidence.state]
             lines.append(

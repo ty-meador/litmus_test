@@ -510,12 +510,12 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Fixed
 
-- The `litmus/gated-pass` quick-fix derives its predicate only from guards in the
-  block that holds the `return PASS`. A return in a loop's or `try`'s `else:` or in
-  `finally:` was answered with the body's guards: the pass line was inserted in the
-  sibling block, so a log scan's loop-`else` return became a pass on the first clean
-  line with the rule silent. Those shapes now take the `if False:` fallback unless the
-  return's own block carries flush guards (issue #140).
+- The Inspector's Re-Run tab no longer shows a verdict on a node above the one that
+  was pressed. Re-running a single leaf runs its ancestors' lifecycle and rolls their
+  state up over that one child, so a group whose other child failed in production came
+  back Pass and carried the pass to the root, hiding the failure the archive still
+  held. Those nodes now read **partly re-run**; their fresh chronology stays readable,
+  and the production verdict stays on the Inspect tab (issue #141).
 
 ### Security
 
