@@ -120,6 +120,33 @@ The only `via` in the framework is the tunnel argument to `use_shell` / `get_she
 (see SSH Tunnel below). That is the parent's tool for reaching through a jump host
 inside its own `configure()`; it is never a child's burden.
 
+### The Node Names What It Needs; the Framework Decides Where It Comes From
+
+Ruled on issue #142 (2026-09-12). A constructor argument is identity, fixed at
+composition time: a name, a MAC, the SKU-specific pass criteria. Runtime state comes
+from `utils` in `configure()`, as one call with no fallback: the IP, the shell, the
+tunnel, the resolver, the device API. When a parent and a child both could provide the
+same thing, that thing belongs in `TestUtils`, where the framework inherits it down the
+tree and records which way it went; it never travels through ctx or the constructor. A
+fallback in `configure()` is the smell that says a utility is missing.
+
+```python
+# Not allowed: two sources of truth for one ctx key, a branch the suite engineer
+# wrote, and a record that cannot say which path produced the value.
+ip = self._ip or await utils.get_arp_resolver(mac=self._mac).resolve()
+```
+
+The framework already does this twice. The route flows down through `use_shell` and is
+inherited by every composed child; the ARP resolver is scoped to the node's current
+route and its cache is keyed by the routing label, so devices behind one gateway share
+ARP state without the suite engineer writing anything to arrange it.
+
+Identity reaches a root node through `utils.env` when no parent composed it: the
+`DUT_MAC` a bench-run device reads is the same MAC a rack parent passes to the
+constructor, and the run's environment is published on the record either way (see
+Environment Variables below). That is the run's declared input, not discovery, and it
+is what keeps the bench-run device and the composed one the same bytes.
+
 ## run_data — Automatic Structured Evidence
 The default `run_data` returns a detached snapshot of all serializable values from
 `utils.ctx`: the ctx view. JSON primitives (with finite numbers), plain dicts with string
