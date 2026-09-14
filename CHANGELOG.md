@@ -19,6 +19,15 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- Doctrine: the node names what it needs, the framework decides where it comes from
+  (issue #142, Ty's ruling of 2026-09-12; recorded under issue #143). A constructor
+  argument is identity fixed at composition time; runtime state comes from `utils` in
+  `configure()` as one call with no fallback; anything a parent and a child could both
+  supply belongs in `TestUtils`, which inherits it down the tree and records the
+  provenance. The paragraph sits under "The Parent Owns the Route" in `docs/idioms.md`.
+  The `examples/` audit the ruling asked for found no constructor-or-discovery
+  fallback; the identity-or-`utils.env` read a root node needs is the run's declared
+  input and stays.
 - The Inspector's Re-Run tab (issue #89, Ty's ruling of 2026-09-10). Inspect stays the
   archive of the production run and executes nothing; Re-Run shows the same tree
   unhydrated, and Enter on any node executes that subtree with the code that ran in
