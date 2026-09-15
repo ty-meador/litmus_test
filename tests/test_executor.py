@@ -70,6 +70,19 @@ class _Child:
         return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
     @staticmethod
+    def sigterm_ignoring_sleep_command(pid_path: Path, seconds: int = 60) -> str:
+        """A child that shrugs off SIGTERM: only the SIGKILL escalation can end it."""
+        script = (
+            "import os, signal, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"open({str(pid_path)!r}, 'w').write(str(os.getpid())); "
+            f"time.sleep({seconds})"
+        )
+        # `exec` makes the ignoring process the direct child. Left behind a shell that
+        # dies on SIGTERM, the executor would see its child exit and never escalate.
+        return f"exec {shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    @staticmethod
     def is_alive(pid: int) -> bool:
         """True if `pid` is a running process. Zombies are not running."""
         try:
@@ -223,6 +236,52 @@ class TestSigtermAndReap:
         await _Child.wait_until_gone(right_pid)
 
 
+class TestSigkillEscalation:
+    """A child that ignores SIGTERM still dies: the grace is honoured, then SIGKILL.
+
+    In-flight termination cancels the resource, not the coroutine (contracts.md,
+    In-Flight Termination). A host process that shrugs off SIGTERM is exactly the
+    resource that contract exists for; escalation is the difference between an
+    abort and a leaked process still touching the bench.
+    """
+
+    async def test_a_child_that_ignores_sigterm_is_sigkilled_after_the_grace(
+        self, tmp_path: Path
+    ) -> None:
+        host = LocalExec()
+        pid_path = tmp_path / "pid"
+        task = asyncio.create_task(host.run(_Child.sigterm_ignoring_sleep_command(pid_path)))
+        pid = await _Child.wait_for_pidfile(pid_path)
+        started = time.monotonic()
+        await host.cancel_in_flight()
+        elapsed = time.monotonic() - started
+        result = await task
+        assert result.exit_code == -1
+        # SIGTERM first, SIGKILL only once the two-second grace has run out: an
+        # immediate kill would deny a well-behaved child its own cleanup.
+        assert elapsed >= 1.9
+        await _Child.wait_until_gone(pid)
+
+    async def test_a_second_cancel_during_the_grace_still_kills_and_reaps(
+        self, tmp_path: Path
+    ) -> None:
+        # The first cancel puts run() into _terminate, waiting out the grace on a
+        # child that will not leave. A second cancel lands inside that wait; the
+        # child is killed and reaped under a shield, then the cancellation goes on.
+        host = LocalExec()
+        pid_path = tmp_path / "pid"
+        task = asyncio.create_task(host.run(_Child.sigterm_ignoring_sleep_command(pid_path)))
+        pid = await _Child.wait_for_pidfile(pid_path)
+        task.cancel()
+        await asyncio.sleep(0.3)
+        assert not task.done(), "the grace wait should still be in progress"
+        assert _Child.is_alive(pid)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await _Child.wait_until_gone(pid)
+
+
 class TestRunBlocking:
     async def test_a_blocking_call_does_not_stall_the_loop(self) -> None:
         host = LocalExec()
@@ -304,6 +363,15 @@ class TestBoundedCapture:
         assert capture.truncated is True
         assert capture.captured_bytes == 4
         assert bytes(capture.stdout) == b"abcd"
+
+    def test_a_truncated_capture_refuses_every_later_chunk(self) -> None:
+        capture = BoundedCapture(4)
+        assert capture.accept(b"abcd", into=capture.stdout) is True
+        assert capture.accept(b"x", into=capture.stdout) is False
+        # Already truncated: a further non-empty chunk is refused without a byte kept.
+        assert capture.accept(b"yz", into=capture.stderr) is False
+        assert capture.captured_bytes == 4
+        assert bytes(capture.stderr) == b""
 
     def test_a_zero_room_chunk_marks_truncated(self) -> None:
         capture = BoundedCapture(2)

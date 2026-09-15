@@ -400,6 +400,13 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- The executor's SIGKILL escalation is under test (issue #145). A host child that
+  ignores SIGTERM is killed once the two-second grace runs out, and a second cancel
+  landing inside that grace still kills and reaps it before the cancellation goes on;
+  neither branch of `LocalExec._terminate` had executed under the gate before. The
+  `src/litmus/executor.py` floor rises from 92.8 to 98.9. The probe behind these tests
+  also found that a SIGTERM-ignoring grandchild behind a compound shell command
+  outlives the abort; that is #146, a framework fix, not a test.
 - The gate is the bench run, and the tree now says so (issue #138, Ty's ruling of
   2026-09-10 on #104: no CI, permanently). `STANDARDS.md` §1 and §6, the README, and
   the Makefile no longer name a pipeline: `make check` on the MR head is the gate, the
