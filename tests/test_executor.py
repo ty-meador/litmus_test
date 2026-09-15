@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import signal
 import sys
 import threading
 import time
@@ -18,7 +19,13 @@ import pytest
 
 # Internal machinery on purpose: the choke point is the subject under test, and the
 # self-test suite is the one consumer allowed to reach past the public surface.
-from litmus.executor import DEFAULT_EXEC_OUTPUT_BUDGET, BoundedCapture, ExecResult, LocalExec
+from litmus.executor import (
+    DEFAULT_EXEC_OUTPUT_BUDGET,
+    BoundedCapture,
+    ExecResult,
+    LocalExec,
+    _reap_group,  # pyright: ignore[reportPrivateUsage]
+)
 from litmus.ssh import SshInterface
 
 
@@ -70,17 +77,26 @@ class _Child:
         return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
     @staticmethod
-    def sigterm_ignoring_sleep_command(pid_path: Path, seconds: int = 60) -> str:
-        """A child that shrugs off SIGTERM: only the SIGKILL escalation can end it."""
+    def sigterm_ignoring_sleep_command(
+        pid_path: Path, seconds: int = 60, *, behind_shell: bool = False
+    ) -> str:
+        """A child that shrugs off SIGTERM: only the SIGKILL escalation can end it.
+
+        With `exec` the ignoring process is the direct child. `behind_shell` keeps the
+        shell as the direct child instead (a compound command, the shape of
+        `cd /fw && ./flash`): the shell dies on SIGTERM and the ignoring process is an
+        orphaned grandchild in the same group (#146).
+        """
         script = (
             "import os, signal, time; "
             "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
             f"open({str(pid_path)!r}, 'w').write(str(os.getpid())); "
             f"time.sleep({seconds})"
         )
-        # `exec` makes the ignoring process the direct child. Left behind a shell that
-        # dies on SIGTERM, the executor would see its child exit and never escalate.
-        return f"exec {shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+        if behind_shell:
+            return f"{command}; true"
+        return f"exec {command}"
 
     @staticmethod
     def is_alive(pid: int) -> bool:
@@ -279,6 +295,64 @@ class TestSigkillEscalation:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        await _Child.wait_until_gone(pid)
+
+    async def test_a_grandchild_behind_a_dead_shell_is_killed_within_the_grace(
+        self, tmp_path: Path
+    ) -> None:
+        # The contract's own example: `cd /fw && ./flash` keeps the shell as the
+        # direct child. It dies on SIGTERM at once; the flasher that ignores the
+        # signal must not outlive the abort, and run() must not wait out its life.
+        host = LocalExec()
+        pid_path = tmp_path / "pid"
+        command = _Child.sigterm_ignoring_sleep_command(pid_path, behind_shell=True)
+        task = asyncio.create_task(host.run(command))
+        pid = await _Child.wait_for_pidfile(pid_path)
+        started = time.monotonic()
+        await host.cancel_in_flight()
+        result = await asyncio.wait_for(task, timeout=5)
+        elapsed = time.monotonic() - started
+        assert result.exit_code == -1
+        assert 1.9 <= elapsed < 5
+        await _Child.wait_until_gone(pid)
+
+    async def test_task_cancellation_kills_a_grandchild_behind_a_dead_shell(
+        self, tmp_path: Path
+    ) -> None:
+        host = LocalExec()
+        pid_path = tmp_path / "pid"
+        command = _Child.sigterm_ignoring_sleep_command(pid_path, behind_shell=True)
+        task = asyncio.create_task(host.run(command))
+        pid = await _Child.wait_for_pidfile(pid_path)
+        task.cancel()
+        started = time.monotonic()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # Without the group-level escalation this waits out the orphan's whole sleep.
+        assert time.monotonic() - started < 5
+        await _Child.wait_until_gone(pid)
+
+    async def test_the_post_kill_settle_is_bounded(self, tmp_path: Path) -> None:
+        # A survivor the kill cannot reach (a process stuck in the kernel, an orphan
+        # zombie nobody reaps) must not hold a run open forever: the settle gives up.
+        # Modelled by reaping the shell alone and leaving its grandchild in the group.
+        pid_path = tmp_path / "pid"
+        command = _Child.sigterm_ignoring_sleep_command(pid_path, behind_shell=True)
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        pid = await _Child.wait_for_pidfile(pid_path)
+        os.kill(proc.pid, signal.SIGTERM)
+        started = time.monotonic()
+        await _reap_group(proc, proc.pid, settle=0.2)
+        elapsed = time.monotonic() - started
+        assert 0.2 <= elapsed < 1.5
+        assert _Child.is_alive(pid)
+        os.killpg(proc.pid, signal.SIGKILL)
         await _Child.wait_until_gone(pid)
 
 
