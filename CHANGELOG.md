@@ -405,8 +405,7 @@ of feature parity: the Python Inspector is still separate work.
   landing inside that grace still kills and reaps it before the cancellation goes on;
   neither branch of `LocalExec._terminate` had executed under the gate before. The
   `src/litmus/executor.py` floor rises from 92.8 to 98.9. The probe behind these tests
-  also found that a SIGTERM-ignoring grandchild behind a compound shell command
-  outlives the abort; that is #146, a framework fix, not a test.
+  found the grandchild gap fixed under #146.
 - The gate is the bench run, and the tree now says so (issue #138, Ty's ruling of
   2026-09-10 on #104: no CI, permanently). `STANDARDS.md` §1 and §6, the README, and
   the Makefile no longer name a pipeline: `make check` on the MR head is the gate, the
@@ -526,6 +525,16 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Fixed
 
+- Abort now reaches a grandchild that ignores SIGTERM (issue #146). `LocalExec`
+  measured its two-second grace against the direct child alone; under dash a compound
+  command (`a; b`, `a && b`, a pipe) keeps the shell as that child, the shell dies on
+  SIGTERM at once, and a grandchild that ignores the signal kept the pipes open, so the
+  abort never escalated and `run()` waited out the orphan's whole lifetime (30.01 s in
+  the probe). The grace is now measured against the process group: SIGTERM at once,
+  SIGKILL to every survivor when the grace expires, and the group is waited for after
+  the kill for a bounded settle so an orphan zombie under a reaper that never collects
+  it cannot hold a run open. Local exec only; the contract text and the
+  `cancel_in_flight()` surface are unchanged.
 - The Inspector's Re-Run tab no longer shows a verdict on a node above the one that
   was pressed. Re-running a single leaf runs its ancestors' lifecycle and rolls their
   state up over that one child, so a group whose other child failed in production came
