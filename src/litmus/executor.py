@@ -22,6 +22,44 @@ from typing import Protocol, final
 # and SshInterface. 4 MiB keeps a kernel log; 70 DUTs at the cap stay under ~280 MiB.
 DEFAULT_EXEC_OUTPUT_BUDGET = 4 * 1024 * 1024
 _READ_CHUNK = 65536
+# SIGTERM first; the whole process group gets SIGKILL once this grace runs out.
+_TERMINATE_GRACE = 2.0
+# After SIGKILL nothing but a process stuck in the kernel can stay; wait this long
+# for the group to leave the table before giving up on it, so an unreaped orphan
+# zombie under a reaper that never collects it cannot hold a run open forever.
+_KILL_SETTLE = 1.0
+_GROUP_POLL = 0.05
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    with suppress(ProcessLookupError):
+        os.killpg(pgid, sig)
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+async def _reap_group(
+    proc: asyncio.subprocess.Process, pgid: int, *, settle: float | None = None
+) -> None:
+    """Reap the direct child, then wait for every process still in its group.
+
+    The direct child leads the group (`start_new_session=True`), so its own exit
+    proves nothing about descendants it left behind: a shell dies on SIGTERM while a
+    grandchild that ignores it keeps the pipes open. With `settle` the group wait is
+    bounded; without it the caller bounds this coroutine itself.
+    """
+    await proc.wait()
+    deadline = None if settle is None else asyncio.get_running_loop().time() + settle
+    while _group_alive(pgid):
+        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+            return
+        await asyncio.sleep(_GROUP_POLL)
 
 
 class _ChunkReader(Protocol):
@@ -193,6 +231,9 @@ class LocalExec:
         `ExecResult` with that status.
       - A direct child killed by a signal, or aborted via `cancel_in_flight`,
         yields `exit_code == -1`.
+      - Abort reaches the whole process group: SIGTERM at once, then SIGKILL to
+        every survivor once the grace runs out, whether that is the direct child
+        ignoring the signal or a grandchild the shell left behind.
       - Stdout and stderr together are bounded by `output_budget`. Exceeding it
         SIGTERMs the process group the same way abort does and settles with
         `truncated=True` plus the bytes actually kept. Truncation is not an
@@ -292,20 +333,17 @@ class LocalExec:
     async def _terminate(self, proc: asyncio.subprocess.Process) -> None:
         # Always signal the group first. A cancelled stream read can reap the
         # shell without touching its descendants; returning early would leak them.
-        pid = proc.pid
-        with suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGTERM)
-        if proc.returncode is not None:
-            return
+        # The grace is measured against the group, not the direct child: a shell
+        # that dies on SIGTERM must not spare a grandchild that ignores it (#146).
+        pgid = proc.pid
+        _signal_group(pgid, signal.SIGTERM)
         try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
+            await asyncio.wait_for(_reap_group(proc, pgid), timeout=_TERMINATE_GRACE)
         except TimeoutError:
-            with suppress(ProcessLookupError):
-                os.killpg(pid, signal.SIGKILL)
+            _signal_group(pgid, signal.SIGKILL)
             # shielded: a second cancel here would orphan the child as a zombie
-            await asyncio.shield(proc.wait())
+            await asyncio.shield(_reap_group(proc, pgid, settle=_KILL_SETTLE))
         except asyncio.CancelledError:
-            with suppress(ProcessLookupError):
-                os.killpg(pid, signal.SIGKILL)
-            await asyncio.shield(proc.wait())
+            _signal_group(pgid, signal.SIGKILL)
+            await asyncio.shield(_reap_group(proc, pgid, settle=_KILL_SETTLE))
             raise
