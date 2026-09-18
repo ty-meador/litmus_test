@@ -70,3 +70,25 @@ class SeededBlade(LitmusTest):
 
 async def before_each(_context: object) -> None:
     measure("hook_ms", 1.0)  # seed: litmus/measurement-in-node
+
+
+class SeededGateway(LitmusTest):
+    """The one seed that needs a constructor argument beside a discovery call."""
+
+    def __init__(self, *, name: str, mac: str, ip: str | None = None) -> None:
+        super().__init__(name=name)
+        self._mac = mac
+        self._ip = ip
+
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+        resolved = await utils.get_arp_resolver(mac=self._mac).resolve()
+        ip = self._ip or resolved["ip"]  # seed: litmus/no-input-fallback
+        return {"ip": ip}
+
+    def build_suite(self) -> LitmusTest:
+        return self.test("reachable", self._reachable)
+
+    async def _reachable(self, utils: TestUtils) -> Verdict:
+        if utils.ctx["ip"]:
+            return PASS
+        raise TestFailure("no address", "an IP", "none")
