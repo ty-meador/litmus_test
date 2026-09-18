@@ -19,6 +19,16 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `litmus/no-input-fallback`, the tier-3 rule the #142 ruling named and Ty ruled into
+  1.0.0 on issue #144 (issue #147). Inside `configure()` of a `LitmusTest`, a `self`
+  attribute and a discovery utility (`get_arp_resolver`, `use_shell`, `get_shell`,
+  `get_http`, `get_coap`) may not stand as alternatives for one value: an `or` chain, a
+  conditional expression, or a local name bound from each by a different assignment
+  (`if`/`else`, `try`/`except`, a re-assignment after a `None` check) is reported with
+  the attribute and the utility named. Identity fed into discovery and identity read
+  from `utils.env` are the blessed shapes and stay quiet, as are the same shapes outside
+  `configure()`. The rule guards a style, not a verdict; its row in
+  `docs/litmus-check.md` says so rather than inventing a runtime counterpart.
 - Doctrine: the node names what it needs, the framework decides where it comes from
   (issue #142, Ty's ruling of 2026-09-12; recorded under issue #143). A constructor
   argument is identity fixed at composition time; runtime state comes from `utils` in
