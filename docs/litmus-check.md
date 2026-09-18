@@ -10,13 +10,13 @@ files as Python ASTs and reports departures from the declarative idiom.
 |---|---|---|---|
 | 1 | Runtime IoC wrapping | Verdict contract, failure taxonomy, lifecycle order, immutable-self freeze | Never |
 | 2 | `__init_subclass__` at import | Structural contract: sealed internals, lifecycle signatures, hook shape | Never |
-| 3 | `litmus-check` | Declarative syntax: pure `build_suite`, gated `PASS`, immutable-self idiom, constructor-only hooks, live composition names, ctx provenance, fulfilled evidence, routes declared in `configure`, measurements named once and recorded where a node runs | **Yes** |
+| 3 | `litmus-check` | Declarative syntax: pure `build_suite`, gated `PASS`, immutable-self idiom, constructor-only hooks, live composition names, ctx provenance, fulfilled evidence, routes declared in `configure`, measurements named once and recorded where a node runs, one source per `configure()` value | **Yes** |
 
 **Nothing that protects hardware or verdict integrity lives only here.** Every rule
-below has a tier-1 or tier-2 counterpart that holds whether or not the linter ever
-runs. A suite that skips `litmus-check` loses early, readable feedback at edit time;
-it does not lose a guard. That is the whole reason this tier may be skipped and the
-other two may not.
+below either has a tier-1 or tier-2 counterpart that holds whether or not the linter
+ever runs, or guards a style alone and says so in its row. A suite that skips
+`litmus-check` loses early, readable feedback at edit time; it does not lose a guard.
+That is the whole reason this tier may be skipped and the other two may not.
 
 ## Usage
 
@@ -63,6 +63,7 @@ scaffolding suite authors copy from, so the examples always demonstrate the idio
 | `litmus/evidence-fulfilled` | Every `return PASS({...})` in a method decorated `@evidence(...)` carries every declared key, and such a method never returns bare `PASS` (issue #118). | Tier 1: the child boundary holds every `PASS` to the declaration; a missing key is a `ContractViolation` naming the leaf and the key, a developer-bug Fail. |
 | `litmus/measurement-name-unique` | Two `measure(...)` calls, either spelling, with the same literal name inside one `configure` or test method; a measurement's series is keyed on its name, so the second call would overwrite or fork it (issue #132). | Tier 1: the duplicate-name guard in `TestUtils.measure` and `litmus.measure` raises `ContractViolation` naming the node and the measurement. |
 | `litmus/measurement-in-node` | A `measure(...)` call, either spelling, inside `cleanup`, a method registered with `use_survey`/`use_audit`, a `before_each`/`after_each` hook (by name, or passed under either keyword), or outside any function; a reading belongs to the node whose `configure()` or test method is running (issue #133). | Tier 1: the outside-a-node guard raises `ContractViolation` naming the node and the measurement for `litmus.measure` with nothing bound and for either spelling from `cleanup`, a survey, an audit, a hook, or after the node settled. |
+| `litmus/no-input-fallback` | Inside `configure()`, a value is identity from the constructor or discovered through `utils`, never one with the other as fallback: no `self._ip or await utils.get_arp_resolver(...).resolve()`, no conditional expression choosing between them, no local name bound from a `self` attribute by one assignment and from `get_arp_resolver` / `use_shell` / `get_shell` / `get_http` / `get_coap` by another. Identity fed into discovery and identity read from `utils.env` stay (issues #142, #144, #147). | None, by design: a fallback is a style the ruling forbids, not a guard on hardware or a verdict. The runtime records which utility provided a value either way; the rule moves the ruling to the editor. |
 
 Run `litmus-check --list-rules` for the catalogue shipped in the installed version.
 Each rule's module docstring under `tools/litmus_check/rules/` states exactly what it
