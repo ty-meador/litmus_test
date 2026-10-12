@@ -29,6 +29,7 @@ validation:
 
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
   - Floor Technician: floor-technician.md
   - Overview: overview.md
   - Idioms: idioms.md
