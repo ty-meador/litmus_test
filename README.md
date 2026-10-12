@@ -1,107 +1,169 @@
 # litmus
 
-React-for-hardware HIL testing framework — Python port. Rack-scale (~70 DUT) mass
-production testing on asyncio structured concurrency, with the verdict contract enforced
-at runtime.
+**Hardware-in-the-loop tests that can't quietly lie, and failures a technician can
+triage at 2am without calling you.**
 
-## Getting started
+Litmus is an opinionated HIL test framework for Python, built on asyncio structured
+concurrency and sized for production lines: one bench DUT or a rack of 132 running
+concurrently. You write what you claim about the hardware. Litmus enforces the verdict,
+collects the evidence, and gives the floor a terminal Inspector for reading it.
 
-```sh
-make install   # uv sync + git hooks
-make fix       # auto-format + auto-fix lint
-make check     # the gate (there is no CI; the bench run is it): format check, lint, pyright strict, import cycles, pytest under the coverage floors, litmus-check, wheel smoke install, docs, pip-audit
-make docs      # documentation site (strict: a broken cross-reference is red)
-make docs-release  # the same build into docs/site/, committed on a release branch only
+> *The act of executing the test is the act of producing irrefutable evidence*
+
+## Why
+
+Happy-path test scripts work 99% of the time and still cause 100% of the line
+stoppages, because when they fail, nobody can tell what kind of failure it was. Was it
+the unit, the test, or the shop-floor database? The technician on shift guesses or
+escalates, and the line waits for a software engineer.
+
+Litmus sets one bar and builds everything around it:
+
+> A Floor Technician can correctly categorize a failure and start the right recovery
+> protocol **within 60 seconds** of opening the Inspector, without messaging the
+> engineer who wrote the test.
+
+## What you get
+
+**No pass by default.** "Reached the end without throwing" proves only that none of
+the failures you thought of happened. In Litmus a test method passes only by returning
+the `PASS` sentinel, which can't be forged from a string, a truthy value, or parsed
+config. Fall off the end and the node is **Aborted**, not green. Declare the readings
+a pass must carry with `@evidence(...)`, and a pass without them doesn't count.
+
+**Three outcomes, three recovery paths.** Every node ends in exactly one of three
+states, and the framework never merges them:
+
+| State | What happened | What the floor does |
+|---|---|---|
+| **Pass** | An explicit verdict, with its declared evidence | Ship it |
+| **Fail** | The DUT failed a modeled check, or the test hit a bug it didn't model (flagged loudly as a BUG) | Check the hardware, or escalate the defect |
+| **Aborted** | No verdict exists: the harness broke, the operator stopped the rack, or a test returned nothing | Fix the harness. Don't condemn the unit |
+
+**Evidence is a side effect of running.** Each run writes a timestamped directory with
+a versioned `result.json`, a human `timeline.log` and machine `timeline.jsonl` per
+node, and point-in-time artifacts stitched onto that timeline. All of it is flushed
+entry by entry, so an interrupted run keeps the chronology up to the point it stopped.
+With NTP-synced stations, that timeline will hold up in a customer dispute ("did the
+failures start before your 2pm firmware push?").
+
+**One building block, from a single check to a rack.** `LitmusTest` is the only unit.
+A leaf check, an ordered `sequence()`, a concurrent `parallel()`, a whole device, and a
+70-DUT rack are all the same type, composed. No level knows what sits above it, so the
+test tree mirrors the hardware tree.
+
+**Guardrails your team can't bypass.** The rules are enforced in three tiers:
+
+1. **Runtime.** Every call into your code passes one child boundary that owns the
+   verdict, the failure taxonomy, and lifecycle order (`configure` → `build_suite` →
+   `cleanup`, and cleanup always runs).
+2. **Import time.** A structurally broken suite refuses to import, so it never
+   reaches a fixture.
+3. **Static analysis.** `litmus-check` flags an ungated `PASS` and impure composition.
+
+Nothing that protects the hardware or the verdict relies on the linter alone.
+
+**Safe aborts.** If the integration layer fails mid-run or the operator hits Ctrl-C,
+Litmus closes every in-flight transport across the tree right away: SSH sessions
+destroyed, subprocesses killed. A 30-minute firmware flash doesn't keep writing to a
+board after the run has been called off. Start and finish hooks stay paired, so your
+MES never gets orphan rows.
+
+**Less plumbing.** Call `utils.use_shell()` in `configure()` and every descendant's
+`utils.exec` runs over that SSH hop, including through jump hosts. `wait_for()`
+requires a `looking_for=` description, which becomes the timeout message the
+technician reads. Time budgets (`fail_after=` / `abort_after=`) attach to any node,
+and a child can only tighten its parent's budget, never loosen it.
+
+## What a test looks like
+
+```python
+from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict
+
+
+class HelloWorld(LitmusTest):
+    def __init__(self, *, name: str, greeting: str = "hello world") -> None:
+        super().__init__(name=name)
+        self._greeting = greeting
+
+    def build_suite(self) -> LitmusTest:
+        return self.test("say hello", self._say_hello)
+
+    async def _say_hello(self, utils: TestUtils) -> Verdict:
+        if self._greeting:                      # the claim, stated as a condition
+            utils.logger.info(self._greeting)   # lands in this node's timeline
+            return PASS                         # the only way to pass
+        raise TestFailure("nothing to say", "a greeting", "(empty)")
 ```
 
-`litmus run` is the runner (`docs/litmus-run.md`): it loads a suite file or module,
-runs the one `LitmusTest` subclass it defines (or the one named after `::`), and exits
-0 for Pass, 1 for Fail, 2 for Aborted, 3 when the suite could not be run at all.
-`litmus new WidgetSuite` writes a gated-PASS suite and a matching self-test so a new
-author starts from that shape instead of copying an example (`docs/litmus-new.md`).
-`litmus inspect [PATH]` opens a saved run in the Inspector, the Floor Technician's
-surface (`docs/inspector.md`); without PATH it opens the latest run under `artifacts/`.
-The locally executable examples progress from one explicit claim, through composition, to
-polling, lifecycle hooks, and the evidence surface:
+## The Inspector
+
+`litmus inspect` opens any saved run in a terminal UI built for the person at the
+station. It replays saved evidence only: no DUT, no SSH, no suite source, no risk of
+running anything.
+
+```text
+  [ Inspect ]   Re-Run
+  ---------------------------------------------------------
+    rack  Aborted
+    └─ servers  Aborted  ←
+       ├─ server-01  Pass
+       ├─ server-02  Fail
+  >    │  └─ thermal check  Fail  not taken: fan_rpm
+       ├─ server-03  Aborted
+       └─ firmware check  Pending
+  ---------------------------------------------------------
+  log: rack/servers  (rolled up: thermal check has no own log)
+  page 4/7  errors only: off  captures: 1  (1-9 opens a capture)
+      14:02:11Z info     starting thermal ramp
+  [1] 14:02:45Z info     survey captured
+      14:03:02Z error    temperature 87 C exceeds 75 C
+  q Quit  Tab Inspect / Re-Run  ← → failures  h Hide passes  n p page  f Errors only
+```
+
+- **← / →** jump between failures, skipping everything that passed. **h** folds
+  the passing branches out of a large rack.
+- The highlighted node's timeline updates as the cursor moves. **1–9** open the
+  captured artifacts, such as survey data showing whether the device's reported
+  health matched what actually happened.
+- Missing readings are shown as **not taken** by name, so an absent value is never
+  mistaken for zero.
+- **Re-Run** is the bench: after reseating a cable, press Enter on one node to
+  re-run just that subtree with the exact production code. Nothing it produces
+  overwrites the production record.
+
+The same run record is available as versioned JSON (`--json`, with published JSON
+Schemas) and as JUnit XML (`--junit`) for CI and dashboards.
+
+## Try it
+
+Requires Python 3.14 and [uv](https://docs.astral.sh/uv/).
 
 ```sh
+make install
 uv run litmus run examples/hello_world.py
-uv run litmus run examples/test_composition.py::SequencedDevice
-uv run litmus run examples/test_composition.py::ParallelDevice   # exits 1 by design
-uv run litmus run examples/wait_for_patterns.py::ConfigureGatedDevice
-uv run litmus run examples/wait_for_patterns.py::MainAssertionDevice
-uv run litmus run examples/hardware_device_lifecycle.py
-uv run litmus run examples/run_data_evidence.py
+uv run litmus inspect
 ```
 
-`--artifact-root DIR` points the run's evidence somewhere specific, `--json` prints the
-`format_version` 1 result record to stdout, and `--junit PATH` writes the JUnit XML
-projection beside it.
+The **[Getting started guide](docs/getting-started.md)** continues from there: writing
+your first suite, the examples in teaching order, running against real devices over
+SSH, deploying to a station, and contributing.
 
-The SSH-backed examples take their target from `utils.env` in `configure()`. A missing
-variable Fails the suite (exit 1): the device did not reach a testable state, and the
-message names the variable to set. Optional password and
-port variables (`SSH_PASSWORD` / `SSH_PORT`, `JUMP_*` / `TARGET_*`, `GATEWAY_*`) default
-the port to 22 when unset. `networked_device.py` defines `Gateway` and `DutDevice`; pick
-the station suite with `::DutDevice`. `GATEWAY_HOST` and `GATEWAY_USER` (both required
-together) resolve ARP through a hop instead of the test host's table:
+## Documentation
 
-```sh
-SSH_HOST=dut.lab SSH_USER=root uv run litmus run examples/remote_device_ssh.py
-JUMP_HOST=jump.lab JUMP_USER=ops TARGET_HOST=dut.lab TARGET_USER=root uv run litmus run examples/ssh_tunneling.py
-DUT_MAC=aa:bb:cc:dd:ee:ff uv run litmus run examples/networked_device.py::DutDevice
-TARGET_ADDRESS=pihole.lab TARGET_USER=root uv run litmus run examples/pi_hole_server.py
-```
+- [Getting started](docs/getting-started.md): install, first run, examples, deployment
+- [Overview](docs/overview.md): the philosophy, the failure taxonomy, and the pit of success
+- [Contracts](docs/contracts.md): what the framework guarantees and what it asks of you
+- [Idioms](docs/idioms.md): authoring patterns
+- [Inspector](docs/inspector.md) and [Floor Technician guide](docs/floor-technician.md):
+  the station side
+- [API stability](docs/api-stability.md): the public surface and versioning policy
 
-`wait_for_patterns.py` demonstrates both readiness polling in `configure()` and verdict
-polling in a test method. `hardware_device_lifecycle.py` registers survey and audit
-hooks around a rail that comes up, is watched, and is dropped in cleanup.
-`run_data_evidence.py` shows limits flowing in through ctx and readings travelling out
-with the verdict. Every example carries comments that explain the reasoning behind
-its pattern, not only what the code does; read them as the authoring guide.
+## Status
 
-Read `STANDARDS.md` before committing. `docs/` carries the framework documentation —
-`overview.md` (purpose, terminal states, pit of success), `idioms.md` (authoring
-patterns), `contracts.md` (the non-negotiable developer↔framework invariants),
-`inspector-json.md` (the versioned downstream result contract, with its JSON Schemas
-under `docs/schema/`), `junit-xml.md` (the
-JUnit projection of that result for CI), translated from the legacy docs and updated
-to the port's semantics, `litmus-run.md` (the runner and its exit status contract),
-`litmus-new.md` (the gated-PASS suite generator),
-`litmus-check.md` (the skippable tier-3 linter over authored suites),
-`floor-technician.md` (the station page: how to read a result without reading
-source), and
-`api-stability.md` (the public surface, semantic versioning from 1.0.0, and the
-deprecation procedure). `CHANGELOG.md` at the root records every change
-to that surface. For a release MR, select the
-[Release template](.gitlab/merge_request_templates/Release.md): it records the
-candidate's checks, changelog cut, and the handoff to Zavala for review.
-
-Nothing hosts the docs site. The tree is the documentation: GitLab renders every
-page under https://gitlab.com/Tyler-Meador/litmus_test/-/tree/main/docs, and each
-release branch (`release/MAJOR.MINOR.PATCH`) also carries the built site under
-`docs/site/` (`make docs-release`; open `docs/site/index.html` from a clone, no
-network needed). The Floor Technician guide is `docs/floor-technician.md`; its
-rendered page,
-https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/docs/floor-technician.md,
-is the URL that belongs on a station label.
-
-## Deployment requirement
-
-Every test VM must synchronize its system clock with NTP before Litmus runs. The scoped
-log is the authoritative chronology for a run, including structured pointers to captured
-artifacts, and may be used to establish event order in customer disputes. A station with
-an unsynchronized clock cannot produce trustworthy evidence and must not execute tests.
-
-Set `LITMUS_ARTIFACT_ROOT` to the run-specific evidence directory. Point-in-time evidence
-is an immutable `Artifact` value and has no public file-writing method; persist it only
-with `await utils.capture_artifact(artifact)`, which writes the file and then appends its
-pointer to the scoped log timeline.
-
-The port design lives in the workspace plan
-(`../PLAN.md`); the TypeScript original is the `../litmus-test-legacy/` design reference,
-and its language server is `../litmus-language-server-legacy/`. Both are read-only —
-parity with them is explicitly not a goal. `PLAN.md` section 0 maps the workspace.
+Litmus is at 0.0.x. The public API follows semantic versioning from 1.0.0. Until then,
+[API stability](docs/api-stability.md) describes what may change, and `CHANGELOG.md`
+records every change.
 
 ## License
 
