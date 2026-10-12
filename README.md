@@ -1,3 +1,4 @@
+![litmus test hero image](hero.png)
 # litmus
 
 **Hardware-in-the-loop tests that can't quietly lie, and failures a technician can
