@@ -13,10 +13,10 @@ collects the evidence, and gives the floor a terminal Inspector for reading it.
 
 ## Why
 
-Happy-path test scripts work 99% of the time and still cause 100% of the line
-stoppages, because when they fail, nobody can tell what kind of failure it was. Was it
-the unit, the test, or the shop-floor database? The technician on shift guesses or
-escalates, and the line waits for a software engineer.
+Most test scripts have exactly one way to fail: something raises. A bad unit,
+a bug in the test, and a database timeout all raise, and all show up as the
+same red FAIL. Was it the unit, the test, or the database? The technician on
+shift guesses or escalates, and the line waits for an engineer.
 
 Litmus sets one bar and builds everything around it:
 
@@ -26,11 +26,11 @@ Litmus sets one bar and builds everything around it:
 
 ## What you get
 
-**No pass by default.** "Reached the end without throwing" proves only that none of
+**No pass by default. EVER.** "Reached the end without throwing" proves only that none of
 the failures you thought of happened. In Litmus a test method passes only by returning
 the `PASS` sentinel, which can't be forged from a string, a truthy value, or parsed
-config. Fall off the end and the node is **Aborted**, not green. Declare the readings
-a pass must carry with `@evidence(...)`, and a pass without them doesn't count.
+config. Fall off the end and the node is **Aborted** loudly as a contract violation. 
+Optionally, declare the readings a pass must carry with `@evidence(...)`, and a pass without them doesn't count.
 
 **Three outcomes, three recovery paths.** Every node ends in exactly one of three
 states, and the framework never merges them:
@@ -48,7 +48,7 @@ entry by entry, so an interrupted run keeps the chronology up to the point it st
 With NTP-synced stations, that timeline will hold up in a customer dispute ("did the
 failures start before your 2pm firmware push?").
 
-**One building block, from a single check to a rack.** `LitmusTest` is the only unit.
+**One building block, from a single check to a rack.** `LitmusTest` is the only unit - analogous to reacts "Component".
 A leaf check, an ordered `sequence()`, a concurrent `parallel()`, a whole device, and a
 70-DUT rack are all the same type, composed. No level knows what sits above it, so the
 test tree mirrors the hardware tree.
