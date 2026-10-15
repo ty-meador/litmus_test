@@ -1,5 +1,7 @@
 # litmus — development entry points. All tooling config lives in pyproject.toml.
-.PHONY: install format lint fix typecheck test coverage audit build smoke docs check soak nightly mutants hooks clean
+.PHONY: install format lint fix typecheck test coverage audit build smoke docs check soak nightly mutants hooks clean \
+	bench-serial bench-ssh bench-ssh-down bench-pihole bench-pihole-down bench-coap bench-coap-down \
+	bench-root-setup bench-can bench-i2c bench-down
 
 install:  ## Sync venv (incl. dev deps) and install git hooks
 	uv sync
@@ -94,6 +96,40 @@ mutants:  ## Mutation audit over the kernel of trust (verdict/base/lifecycle); n
 
 hooks:  ## Point git at the shared hooks (auto-lint on commit)
 	git config core.hooksPath .githooks
+
+# Bench surrogates (tools/bench/README.md). Virtual devices, one per Stage 0 rung; none of
+# these is reached by `make check`, and every one exits non-zero on a [FAIL] line.
+BENCH_PY = PYTHONPATH=. uv run python -m
+bench-serial:  ## Serial contract over a socat pty pair (no root)
+	$(BENCH_PY) tools.bench.serial_pair
+bench-ssh:  ## SSH contract + the shipped SSH example against a Debian guest under QEMU/KVM
+	$(BENCH_PY) tools.bench.qemu_ssh up
+	$(BENCH_PY) tools.bench.qemu_ssh check
+	SSH_HOST=127.0.0.1 SSH_PORT=$${LITMUS_BENCH_SSH_PORT:-2222} SSH_USER=bench SSH_PASSWORD=bench \
+		PYTHONPATH=. uv run litmus run tools/bench/suites/ssh_lab.py
+bench-ssh-down:  ## Stop the guest
+	$(BENCH_PY) tools.bench.qemu_ssh down
+bench-pihole:  ## SSH + HTTP contracts and the shipped Pi-hole example against the Pi-hole container
+	$(BENCH_PY) tools.bench.pihole up
+	$(BENCH_PY) tools.bench.pihole check
+	TARGET_ADDRESS=127.0.0.1 TARGET_PORT=$${LITMUS_BENCH_PIHOLE_SSH_PORT:-2223} TARGET_USER=root TARGET_PASSWORD=bench \
+		PYTHONPATH=. uv run litmus run tools/bench/suites/pihole_lab.py
+bench-pihole-down:  ## Remove the Pi-hole container
+	$(BENCH_PY) tools.bench.pihole down
+bench-coap:  ## Device API over CoAP against an aiocoap container
+	$(BENCH_PY) tools.bench.coap_server up
+	$(BENCH_PY) tools.bench.coap_server check
+bench-coap-down:  ## Remove the CoAP container
+	$(BENCH_PY) tools.bench.coap_server down
+bench-root-setup:  ## Load vcan/vxcan, i2c-stub, and a gpio-sim chip (the one step that needs root)
+	sudo sh tools/bench/root_setup.sh
+bench-can:  ## SocketCAN round trip over the vxcan pair
+	$(BENCH_PY) tools.bench.can_pair
+bench-i2c:  ## SMBus write/read-back against i2c-stub
+	$(BENCH_PY) tools.bench.i2c_stub
+bench-gpio:  ## Input, output, and edge events against a gpio-sim chip
+	PYTHONPATH=. uv run --group bench python -m tools.bench.gpio_sim
+bench-down: bench-ssh-down bench-pihole-down bench-coap-down  ## Stop every bench device
 
 clean:
 	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak .smoke .mutants dist site
