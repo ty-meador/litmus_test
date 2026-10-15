@@ -3,7 +3,7 @@
 #   CAN   vcan0 (shared bus) and the vxcan0<->vxcan1 pair
 #   I2C   i2c-stub answering at 0x50, its /dev/i2c-N opened to the bench user
 #   GPIO  gpio-sim chip "litmus-bench" (8 lines), its /dev/gpiochipN and pull knobs opened to the bench user
-# Idempotent. Run as: sudo sh tools/bench/root_setup.sh
+# Idempotent. Run as: sudo sh bench/root_setup.sh
 set -eu
 
 modprobe can_raw

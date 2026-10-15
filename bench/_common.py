@@ -23,7 +23,7 @@ def require_tool(name: str) -> str:
     """Resolve a host tool or exit naming it; the README lists the apt packages."""
     path = shutil.which(name)
     if path is None:
-        sys.exit(f"{name} is not installed; see tools/bench/README.md")
+        sys.exit(f"{name} is not installed; see bench/README.md")
     return path
 
 
