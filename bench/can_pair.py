@@ -13,7 +13,7 @@ import socket
 import struct
 import sys
 
-from tools.bench._common import report
+from bench._common import report
 
 _FRAME = struct.Struct("=IB3x8s")
 _PAIR = ("vxcan0", "vxcan1")
