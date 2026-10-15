@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from tools.bench._common import report, require_tool, run
+from bench._common import report, require_tool, run
 
 _CHIP = "0x50"
 _REGISTER = "0x10"

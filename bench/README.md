@@ -1,9 +1,13 @@
-# Bench surrogates
+# Bench
 
-Virtual devices for the bench suites, one per Stage 0 rung of
-`virtual_hardware_options.md`. Nothing here is reached by `make check`; nothing
-here is shipped. Every target prints `[PASS]`/`[FAIL]` lines and exits non-zero
-on any `[FAIL]`.
+The bench is a sibling of `examples/` and models the expected real-world use of
+`litmus`: a developer's rack, composed from the shipped tools, run against devices
+(Ty's ruling of 2026-10-15 on #139). It is not part of the framework. Nothing here
+is reached by `make check`; nothing here is shipped.
+
+The surrogates in this directory are virtual devices, one per Stage 0 rung of
+`virtual_hardware_options.md`. Every target prints `[PASS]`/`[FAIL]` lines and
+exits non-zero on any `[FAIL]`.
 
 | Target | Device | Contract exercised | Needs |
 |---|---|---|---|
@@ -15,7 +19,7 @@ on any `[FAIL]`.
 | `make bench-i2c` | `i2c-stub` at 0x50 | SMBus write then read-back through `/dev/i2c-N` | root setup, `i2c-tools` |
 | `make bench-gpio` | `gpio-sim` chip, 8 lines | GPIO v2 ioctls through `gpiod`: input follows a pull, output reaches the sim, edge events | root setup, `bench` dependency group |
 
-`make bench-root-setup` runs `sudo sh tools/bench/root_setup.sh` once per boot: it
+`make bench-root-setup` runs `sudo sh bench/root_setup.sh` once per boot: it
 loads `vcan`/`vxcan`/`i2c-stub`/`gpio-sim`, creates the links and the gpio-sim chip,
 and opens the stub's `/dev/i2c-N`, the chip's `/dev/gpiochipN` and its sysfs `pull`
 knobs to you. It is the only step that needs root. `make bench-down` stops

@@ -15,8 +15,7 @@ import os
 import sys
 import time
 
-from tools.bench._common import cache_dir, report, require_tool, run
-
+from bench._common import cache_dir, report, require_tool, run
 from litmus.device_api import CoapInterface, DeviceRequest
 
 IMAGE = "litmus-bench/coap"
@@ -129,7 +128,7 @@ def main(argv: list[str]) -> int:
     """Dispatch ``up``/``down``/``status``/``check``."""
     actions = {"up": up, "down": down, "status": status, "check": lambda: asyncio.run(check())}
     if len(argv) != 1 or argv[0] not in actions:
-        sys.exit(f"usage: python -m tools.bench.coap_server {{{'|'.join(actions)}}}")
+        sys.exit(f"usage: python -m bench.coap_server {{{'|'.join(actions)}}}")
     return actions[argv[0]]()
 
 
