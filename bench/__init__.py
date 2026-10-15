@@ -1,4 +1,6 @@
-"""Bench surrogates: virtual devices the bench suites run against. Not shipped.
+"""The bench: a sibling of ``examples/`` that models real-world use of litmus. Not shipped.
+
+Its surrogates are virtual devices the bench suites run against.
 
 Each module here brings up one virtual device from the Stage 0 list in
 ``virtual_hardware_options.md`` (no purchases) and runs the matching transport
