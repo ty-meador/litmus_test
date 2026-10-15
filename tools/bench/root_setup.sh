@@ -2,7 +2,7 @@
 # Loads the kernel-side surrogates. This is the only bench step that needs root:
 #   CAN   vcan0 (shared bus) and the vxcan0<->vxcan1 pair
 #   I2C   i2c-stub answering at 0x50, its /dev/i2c-N opened to the bench user
-#   GPIO  gpio-sim module and configfs mounted (chip creation is the GPIO bench's job)
+#   GPIO  gpio-sim chip "litmus-bench" (8 lines), its /dev/gpiochipN and pull knobs opened to the bench user
 # Idempotent. Run as: sudo sh tools/bench/root_setup.sh
 set -eu
 
@@ -27,4 +27,16 @@ echo "I2C: i2c-stub on /dev/i2c-$bus, chip 0x50"
 
 modprobe gpio-sim
 mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
-echo "GPIO: gpio-sim loaded, configfs at /sys/kernel/config/gpio-sim"
+sim=/sys/kernel/config/gpio-sim/litmus
+[ -d "$sim" ] || mkdir "$sim"
+[ -d "$sim/bank0" ] || mkdir "$sim/bank0"
+if [ "$(cat "$sim/live")" != 1 ]; then
+    echo 8 > "$sim/bank0/num_lines"
+    echo litmus-bench > "$sim/bank0/label"
+    echo 1 > "$sim/live"
+fi
+chip=$(cat "$sim/bank0/chip_name")
+dev=$(cat "$sim/dev_name")
+chmod a+rw "/dev/$chip"
+for pull in "/sys/devices/platform/$dev/$chip"/sim_gpio*/pull; do chmod a+w "$pull"; done
+echo "GPIO: gpio-sim chip /dev/$chip (label litmus-bench, 8 lines), pulls under /sys/devices/platform/$dev/$chip"
