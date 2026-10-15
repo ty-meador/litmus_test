@@ -54,6 +54,9 @@ serial = [
 ]
 
 [dependency-groups]
+bench = [
+    "gpiod>=2.5.0",
+]
 dev = [
     "pytest>=8.4",
     "pytest-asyncio>=1.0",
