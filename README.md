@@ -91,9 +91,9 @@ class HelloWorld(LitmusTest):
         return self.test("say hello", self._say_hello)
 
     async def _say_hello(self, utils: TestUtils) -> Verdict:
-        if self._greeting:                      # the claim, stated as a condition
-            utils.logger.info(self._greeting)   # lands in this node's timeline
-            return PASS                         # the only way to pass
+        if self._greeting:  # the claim, stated as a condition
+            utils.logger.info(self._greeting)  # lands in this node's timeline
+            return PASS  # the only way to pass
         raise TestFailure("nothing to say", "a greeting", "(empty)")
 ```
 
