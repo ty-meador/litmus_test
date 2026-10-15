@@ -121,12 +121,14 @@ bench-coap:  ## Device API over CoAP against an aiocoap container
 	$(BENCH_PY) tools.bench.coap_server check
 bench-coap-down:  ## Remove the CoAP container
 	$(BENCH_PY) tools.bench.coap_server down
-bench-root-setup:  ## Load vcan/vxcan, i2c-stub, gpio-sim (the one step that needs root)
+bench-root-setup:  ## Load vcan/vxcan, i2c-stub, and a gpio-sim chip (the one step that needs root)
 	sudo sh tools/bench/root_setup.sh
 bench-can:  ## SocketCAN round trip over the vxcan pair
 	$(BENCH_PY) tools.bench.can_pair
 bench-i2c:  ## SMBus write/read-back against i2c-stub
 	$(BENCH_PY) tools.bench.i2c_stub
+bench-gpio:  ## Input, output, and edge events against a gpio-sim chip
+	PYTHONPATH=. uv run --group bench python -m tools.bench.gpio_sim
 bench-down: bench-ssh-down bench-pihole-down bench-coap-down  ## Stop every bench device
 
 clean:
