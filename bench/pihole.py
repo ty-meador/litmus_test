@@ -21,8 +21,7 @@ import os
 import sys
 import time
 
-from tools.bench._common import cache_dir, report, require_tool, run, wait_for_port
-
+from bench._common import cache_dir, report, require_tool, run, wait_for_port
 from litmus.device_api import DeviceRequest, HttpInterface
 from litmus.ssh import SshInterface
 
@@ -181,7 +180,7 @@ def main(argv: list[str]) -> int:
     """Dispatch ``up``/``down``/``status``/``check``."""
     actions = {"up": up, "down": down, "status": status, "check": lambda: asyncio.run(check())}
     if len(argv) != 1 or argv[0] not in actions:
-        sys.exit(f"usage: python -m tools.bench.pihole {{{'|'.join(actions)}}}")
+        sys.exit(f"usage: python -m bench.pihole {{{'|'.join(actions)}}}")
     return actions[argv[0]]()
 
 

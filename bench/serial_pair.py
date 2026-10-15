@@ -23,8 +23,8 @@ import time
 from pathlib import Path
 
 from tests.fake_console import FakeConsole
-from tools.bench._common import report, require_tool
 
+from bench._common import report, require_tool
 from litmus.serial import SerialInterface
 
 

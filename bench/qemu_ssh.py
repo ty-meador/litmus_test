@@ -27,8 +27,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from tools.bench._common import cache_dir, pid_from, report, require_tool, run
-
+from bench._common import cache_dir, pid_from, report, require_tool, run
 from litmus.ssh import SshInterface
 
 IMAGE_BASE = "https://cloud.debian.org/images/cloud/trixie/latest/"
@@ -269,7 +268,7 @@ def main(argv: list[str]) -> int:
     """Dispatch ``up``/``down``/``status``/``check``."""
     actions = {"up": up, "down": down, "status": status, "check": lambda: asyncio.run(check())}
     if len(argv) != 1 or argv[0] not in actions:
-        sys.exit(f"usage: python -m tools.bench.qemu_ssh {{{'|'.join(actions)}}}")
+        sys.exit(f"usage: python -m bench.qemu_ssh {{{'|'.join(actions)}}}")
     return actions[argv[0]]()
 
 

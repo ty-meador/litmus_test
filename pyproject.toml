@@ -99,7 +99,7 @@ packages = ["src/litmus", "tools/litmus_check"]
 [tool.ruff]
 target-version = "py314"
 line-length = 100
-src = ["src", "tests", "tools"]
+src = ["src", "tests", "tools", "bench"]
 
 [tool.ruff.lint]
 select = [
@@ -141,7 +141,7 @@ convention = "google"
 "src/litmus/errors.py" = ["N818"]
 
 [tool.pyright]
-include = ["src", "tests", "examples", "tools"]
+include = ["src", "tests", "examples", "tools", "bench"]
 extraPaths = ["tools"]
 typeCheckingMode = "strict"
 pythonVersion = "3.14"
