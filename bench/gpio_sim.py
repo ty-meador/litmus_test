@@ -18,7 +18,8 @@ from pathlib import Path
 
 import gpiod
 from gpiod.line import Direction, Edge, Value
-from tools.bench._common import report
+
+from bench._common import report
 
 _SIM = Path("/sys/kernel/config/gpio-sim/litmus")
 _CONSUMER = "litmus-bench"
