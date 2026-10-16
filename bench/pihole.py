@@ -35,7 +35,7 @@ PASSWORD = "bench"
 
 _DOCKERFILE = """\
 FROM pihole/pihole:latest
-RUN apk add --no-cache openssh-server \\
+RUN apk add --no-cache openssh-server bind-tools \\
  && ssh-keygen -A \\
  && echo 'root:bench' | chpasswd \\
  && sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \\
