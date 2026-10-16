@@ -52,6 +52,29 @@ at the chip by hand but the bench does not use them.
   permissions are root-only, which is why the chip is born in the root setup rather
   than the bench. **PWM** has no rung: nothing on this host can witness a waveform.
 
-The wrappers in `suites/` run the shipped examples with `skip_host_verification`
-because the targets are on loopback ports no `known_hosts` entry covers. That is
-the only difference from running the examples by hand.
+## The suites
+
+`suites/` is the pressure test proper: suites written the way a developer writes
+against a rack, aimed at the surrogates above. `make bench-up` brings every device
+up (idempotent); each target below assumes its device is. The API friction met while
+writing them is logged in `FRICTION.md`, which is the other deliverable of #139.
+
+| Target | Suite | What it models |
+|---|---|---|
+| `make bench-suite-serial` | `serial_console.py` | A console opened by tty path: prompt sync, exit status as data, a 4 KiB reply, cancel of a wedged command. The transport has no route today, so the suite owns the handle. |
+| `make bench-suite-guest` | `guest_acceptance.py` | Board bring-up acceptance over a class-owned SSH hop: `wait_for` systemd to settle, a journal survey at every boundary, a load audit while claims run, one leaf per unit, measurements with limits (disk, memory, entropy, clock skew). |
+| `make bench-suite-pihole` | `pihole_rack.py::PiHole` | The gateway shape: SSH hop on the parent, a child that logs into FTL's REST API, puts a domain on the deny list in `configure()`, watches `dig` behind the hop answer `0.0.0.0`, finds the query in FTL's log, and takes the entry back off in `cleanup()`. |
+| `make bench-suite-coap` | `coap_device.py` | A device API over CoAP: identity, 4.04 as a status, one echo leaf per payload size up to past the block-wise boundary, a latency measurement on each. |
+| `make bench-suite-gpio` | `gpio_lines.py` | A header through `gpiod` inside the claims, because `utils.get_gpio` is not built: input follows drive, output is witnessed, edge events with a latency measurement. |
+| `make bench-rack` | `rack.py` | The four networked/serial devices under one `parallel` owner: one record for the rack. |
+| `make bench-soak` | `rack.py` x `RACK_RUNS` | The rack many times over, every run's record and log under `.soak/bench/`; where a leaked task or session shows up. A settled Fail does not stop the soak; the target is red if any run was not Pass. |
+
+As of 2026-10-16 the guest, Pi-hole, and GPIO suites are green. The serial suite is
+red at `configure()` and the CoAP suite is red on its 1500-byte echo, both on
+findings against the framework (`FRICTION.md` F1 and F15), so the rack and the soak
+are red until those are ruled on. That is the bench doing its job, not a bench bug.
+
+`ssh_lab.py` and `pihole_lab.py` are the earlier wrappers that run the shipped
+examples unchanged except for `skip_host_verification`; `make bench-ssh` and
+`make bench-pihole` still use them, so the examples themselves stay proven against
+a real sshd and a real FTL.
