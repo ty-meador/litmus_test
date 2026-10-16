@@ -1,7 +1,8 @@
 # litmus — development entry points. All tooling config lives in pyproject.toml.
 .PHONY: install format lint fix typecheck test coverage audit build smoke docs check soak nightly mutants hooks clean \
-	bench-serial bench-ssh bench-ssh-down bench-pihole bench-pihole-down bench-coap bench-coap-down \
-	bench-root-setup bench-can bench-i2c bench-gpio bench-down
+	bench-serial bench-serial-up bench-serial-down bench-ssh bench-ssh-down bench-pihole bench-pihole-down \
+	bench-coap bench-coap-down bench-root-setup bench-can bench-i2c bench-gpio bench-up bench-down \
+	bench-suite-serial bench-suite-guest bench-suite-pihole bench-suite-coap bench-suite-gpio bench-rack bench-soak
 
 install:  ## Sync venv (incl. dev deps) and install git hooks
 	uv sync
@@ -101,7 +102,11 @@ hooks:  ## Point git at the shared hooks (auto-lint on commit)
 # these is reached by `make check`, and every one exits non-zero on a [FAIL] line.
 BENCH_PY = PYTHONPATH=. uv run python -m
 bench-serial:  ## Serial contract over a socat pty pair (no root)
-	$(BENCH_PY) bench.serial_pair
+	$(BENCH_PY) bench.serial_pair check
+bench-serial-up:  ## Leave a pty pair up with the console on the far end (SERIAL_DEVICE for the suites)
+	$(BENCH_PY) bench.serial_pair up
+bench-serial-down:  ## Stop the pair
+	$(BENCH_PY) bench.serial_pair down
 bench-ssh:  ## SSH contract + the shipped SSH example against a Debian guest under QEMU/KVM
 	$(BENCH_PY) bench.qemu_ssh up
 	$(BENCH_PY) bench.qemu_ssh check
@@ -129,7 +134,42 @@ bench-i2c:  ## SMBus write/read-back against i2c-stub
 	$(BENCH_PY) bench.i2c_stub
 bench-gpio:  ## Input, output, and edge events against a gpio-sim chip
 	PYTHONPATH=. uv run --group bench python -m bench.gpio_sim
-bench-down: bench-ssh-down bench-pihole-down bench-coap-down  ## Stop every bench device
+bench-up:  ## Bring every bench device up (serial pair, guest, Pi-hole, CoAP); idempotent
+	$(BENCH_PY) bench.serial_pair up
+	$(BENCH_PY) bench.qemu_ssh up
+	$(BENCH_PY) bench.pihole up
+	$(BENCH_PY) bench.coap_server up
+bench-down: bench-ssh-down bench-pihole-down bench-coap-down bench-serial-down  ## Stop every bench device
+
+# The real suites (bench/suites/): written the way a developer writes against a rack,
+# aimed at the surrogates above. Each target assumes its device is up (`make bench-up`).
+BENCH_ENV = SERIAL_DEVICE=$$(cat $${LITMUS_BENCH_CACHE:-$$HOME/.cache/litmus-bench}/serial/device 2>/dev/null) \
+	GUEST_HOST=127.0.0.1 GUEST_PORT=$${LITMUS_BENCH_SSH_PORT:-2222} GUEST_USER=bench GUEST_PASSWORD=bench \
+	PIHOLE_HOST=127.0.0.1 PIHOLE_SSH_PORT=$${LITMUS_BENCH_PIHOLE_SSH_PORT:-2223} PIHOLE_USER=root PIHOLE_PASSWORD=bench \
+	PIHOLE_API_URL=http://127.0.0.1:$${LITMUS_BENCH_PIHOLE_HTTP_PORT:-8080} PIHOLE_API_PASSWORD=bench \
+	COAP_URL=coap://127.0.0.1:$${LITMUS_BENCH_COAP_PORT:-5683}
+BENCH_RUN = $(BENCH_ENV) PYTHONPATH=. uv run litmus run
+bench-suite-serial:  ## Console by tty path: prompt sync, status, large reply, cancel
+	$(BENCH_RUN) bench/suites/serial_console.py
+bench-suite-guest:  ## Guest acceptance over SSH: survey, audit, wait_for, measurements
+	$(BENCH_RUN) bench/suites/guest_acceptance.py
+bench-suite-pihole:  ## Pi-hole as a gateway: hop, REST deny-list round trip, dig behind the hop
+	$(BENCH_RUN) bench/suites/pihole_rack.py::PiHole
+bench-suite-coap:  ## CoAP device: hello, 4.04, echo per payload size
+	$(BENCH_RUN) bench/suites/coap_device.py
+bench-suite-gpio:  ## gpio-sim header through gpiod inside the claims (needs root setup)
+	PYTHONPATH=. uv run --group bench litmus run bench/suites/gpio_lines.py
+bench-rack:  ## Every device under one parallel owner
+	$(BENCH_RUN) bench/suites/rack.py
+RACK_RUNS ?= 10
+bench-soak:  ## The rack RACK_RUNS times, every run recorded under .soak/bench/; red if any run is not Pass
+	@mkdir -p .soak/bench; rm -f .soak/bench/rack-*.json; i=1; red=0; while [ $$i -le $(RACK_RUNS) ]; do \
+		start=$$(date +%s); \
+		$(BENCH_RUN) --json bench/suites/rack.py > .soak/bench/rack-$$i.json 2> .soak/bench/rack-$$i.log; rc=$$?; \
+		echo "rack $$i/$(RACK_RUNS): exit $$rc in $$(( $$(date +%s) - start ))s"; \
+		[ $$rc -eq 0 ] || red=1; \
+		i=$$((i + 1)); \
+	done; exit $$red
 
 clean:
 	rm -rf .venv .pytest_cache .ruff_cache .coverage .audit .soak .smoke .mutants dist site
