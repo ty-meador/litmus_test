@@ -100,6 +100,8 @@ class SshInterface(RemoteInterface):
         options and the provenance line read it — what is logged is what was used.
       - `connect_provenance` names the endpoint, the credential path selected,
         and the full via chain. The credential's *value* is never rendered.
+      - The password path dials with public-key auth off (`client_keys=None`),
+        so no `~/.ssh` default key file is read or validated on connect.
       - `skip_host_verification` is `known_hosts=None` (lab hosts without
         known_hosts entries). Default is to verify. Skipping writes a second
         provenance line naming the host, so an FT can see that verification
@@ -398,7 +400,11 @@ class SshInterface(RemoteInterface):
                 "passphrase": self._passphrase,
             }
         if choice.label == "password" and self._password is not None:
-            return {"password": self._password, "client_keys": [], "agent_path": None}
+            # `client_keys=None`, not `[]`: asyncssh reads an empty list as "scan
+            # `~/.ssh` for default key files", which loads and validates every key
+            # found there on each connect (a 4096-bit RSA key costs ~0.2s) and
+            # widens the credential set beyond what the provenance line names.
+            return {"password": self._password, "client_keys": None, "agent_path": None}
         raise ConnectionError(
             "SshInterface requires password, private_key, private_key_path, or SSH_AUTH_SOCK"
         )

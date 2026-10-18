@@ -48,8 +48,14 @@ class LoopbackSshd:
             connection.close()
 
     async def aclose(self) -> None:
-        """Stop the listener and wait until acceptors are gone."""
+        """Stop the sshd: close the listener, drop live sessions, wait for both.
+
+        `wait_closed` waits for every accepted session to end (Python 3.12+), so a
+        test that fails with clients still parked would otherwise hang here forever
+        instead of reporting its failure. A real sshd going down kills its sessions.
+        """
         self._listener.close()
+        self.abort_connections()
         await self._listener.wait_closed()
 
     @classmethod

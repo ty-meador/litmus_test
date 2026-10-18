@@ -146,6 +146,29 @@ uv run litmus run examples/hello_world.py
 uv run litmus inspect
 ```
 
+The locally executable examples progress from one explicit claim, through composition,
+to polling, lifecycle hooks, and the evidence surface:
+
+```sh
+uv run litmus run examples/hello_world.py
+uv run litmus run examples/test_composition.py::SequencedDevice
+uv run litmus run examples/test_composition.py::ParallelDevice   # exits 1 by design
+uv run litmus run examples/wait_for_patterns.py::ConfigureGatedDevice
+uv run litmus run examples/wait_for_patterns.py::MainAssertionDevice
+uv run litmus run examples/hardware_device_lifecycle.py
+uv run litmus run examples/run_data_evidence.py
+```
+
+The SSH-backed examples take their target from `utils.env` in `configure()`; a missing
+variable Fails the suite (exit 1) with a message that names the variable to set:
+
+```sh
+SSH_HOST=dut.lab SSH_USER=root uv run litmus run examples/remote_device_ssh.py
+JUMP_HOST=jump.lab JUMP_USER=ops TARGET_HOST=dut.lab TARGET_USER=root uv run litmus run examples/ssh_tunneling.py
+DUT_MAC=aa:bb:cc:dd:ee:ff uv run litmus run examples/networked_device.py::DutDevice
+TARGET_ADDRESS=pihole.lab TARGET_USER=root uv run litmus run examples/pi_hole_server.py
+```
+
 The **[Getting started guide](docs/getting-started.md)** continues from there: writing
 your first suite, the examples in teaching order, running against real devices over
 SSH, deploying to a station, and contributing.
@@ -159,6 +182,15 @@ SSH, deploying to a station, and contributing.
 - [Inspector](docs/inspector.md) and [Floor Technician guide](docs/floor-technician.md):
   the station side
 - [API stability](docs/api-stability.md): the public surface and versioning policy
+
+Nothing hosts the docs site. The tree is the documentation: GitLab renders every
+page under https://gitlab.com/Tyler-Meador/litmus_test/-/tree/main/docs, and each
+release branch (`release/MAJOR.MINOR.PATCH`) also carries the built site under
+`docs/site/` (`make docs-release`; open `docs/site/index.html` from a clone, no
+network needed). The Floor Technician guide is `docs/floor-technician.md`; its
+rendered page,
+https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/docs/floor-technician.md,
+is the URL that belongs on a station label.
 
 ## Status
 

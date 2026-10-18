@@ -11,6 +11,7 @@ from pathlib import Path
 
 import asyncssh
 import pytest
+from asyncssh import connection as asyncssh_connection
 from tests.loopback_sshd import LoopbackSshd as _LoopbackSshd
 
 from litmus import PASS, LitmusTest, TestUtils, Verdict
@@ -34,6 +35,61 @@ class TestPublicSurface:
         )
 
         assert isinstance(transport, RemoteInterface)
+
+
+class TestPasswordAuthIsPasswordOnly:
+    """Password auth never scans `~/.ssh`: the default key files are not read.
+
+    asyncssh reads `client_keys=[]` as "load the default key files", which costs a
+    full key validation per connect (~0.2s for a 4096-bit RSA key) and let a 0.2s
+    deadline expire before the socket existed. Only `client_keys=None` opts out.
+    """
+
+    async def test_password_connect_never_loads_the_default_key_files(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scans = 0
+
+        def recording(*args: object, **kwargs: object) -> list[object]:
+            nonlocal scans
+            scans += 1
+            return []
+
+        monkeypatch.setattr(asyncssh_connection, "load_default_keypairs", recording)
+        peer = await _LoopbackSshd.start()
+        transport = SshInterface(
+            host="127.0.0.1",
+            port=peer.port,
+            username=peer.username,
+            password=peer.password,
+            skip_host_verification=True,
+        )
+        try:
+            await transport.connect()
+            assert transport.connected
+        finally:
+            await transport.disconnect()
+            await peer.aclose()
+
+        assert scans == 0
+
+
+class TestLoopbackSshdShutdown:
+    async def test_aclose_drops_sessions_a_test_left_open(self) -> None:
+        peer = await _LoopbackSshd.start()
+        client = await asyncssh.connect(
+            "127.0.0.1",
+            peer.port,
+            username=peer.username,
+            password=peer.password,
+            known_hosts=None,
+            client_keys=None,
+        )
+
+        await asyncio.wait_for(peer.aclose(), 5.0)
+        await asyncio.wait_for(client.wait_closed(), 5.0)
+
+        assert peer.connections == 1
 
 
 class TestAuthResolution:

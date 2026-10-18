@@ -170,17 +170,13 @@ class TestGateBuildsTheSite:
         assert "mv site docs/site" in release
         assert "docs-release" not in _recipe("check", makefile)
 
-    def test_ci_has_no_pages_job_and_runs_nothing_on_push_or_tag(self) -> None:
+    def test_there_is_no_ci_pipeline(self) -> None:
         # Ty, 2026-09-11 on #138: the site is not hosted, so the tag pipeline that fed
-        # Pages is gone. The one job left is the dormant scheduled soak, and the
-        # workflow lets nothing but a schedule start a pipeline.
-        ci = CI.read_text(encoding="utf-8")
-        assert not re.search(r"^pages:", ci, re.MULTILINE)
-        assert "$CI_COMMIT_TAG" not in ci
-        assert re.search(r"^nightly-soak:", ci, re.MULTILINE)
-        workflow = ci.split("nightly-soak:", 1)[0]
-        assert '- if: $CI_PIPELINE_SOURCE == "schedule"' in workflow
-        assert 'SCHEDULED_JOB == "nightly-soak"' in ci
+        # Pages went; one dormant scheduled soak stayed. Ty, 2026-10-11 (0a9a8dc):
+        # the file went too. `make check` is the gate and the soak is `make nightly`
+        # on the bench host. A pipeline coming back is a decision, not a drive-by, so
+        # this stays red until the test is rewritten with it.
+        assert not CI.exists(), "a .gitlab-ci.yml reappeared; Ty removed CI on 2026-10-11"
 
 
 class TestBuiltSite:
