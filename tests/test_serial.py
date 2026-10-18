@@ -210,12 +210,58 @@ class TestLogin:
             finally:
                 await transport.disconnect()
 
-    async def test_a_missing_prompt_at_connect_names_the_last_bytes(self) -> None:
-        async with open_pty_console(emit_prompt=False) as (device, _console):
+    async def test_a_dead_line_at_connect_names_the_last_bytes(self) -> None:
+        async with open_pty_console(mute=True) as (device, _console):
             transport = SerialInterface(device=device, login_timeout=0.2)
-            with pytest.raises(ConnectionError, match="timed out"):
+            with pytest.raises(ConnectionError, match=r"timed out.*last bytes: ''"):
                 await transport.connect()
             assert transport.connected is False
+
+    async def test_a_prompt_printed_before_the_open_is_woken_by_enter(self) -> None:
+        # F1: the console printed its prompt an hour ago (pyserial flushed it) and
+        # only answers input. `emit_prompt=False` is that console: no banner, a
+        # prompt for every line. Connect must poke, not just listen.
+        async with open_pty_console(emit_prompt=False) as (device, _console):
+            transport = SerialInterface(device=device, login_timeout=1.0)
+            try:
+                await transport.connect()
+                result = await transport.exec("uname")
+                assert result == ExecResult(stdout="uname", stderr="", exit_code=0)
+            finally:
+                await transport.disconnect()
+
+    async def test_a_login_prompt_printed_before_the_open_is_woken_by_enter(self) -> None:
+        # A getty re-prompts on an empty login; the poke must land before the
+        # login exchange, not after it.
+        async with open_pty_console(login_prompt="login: ", emit_prompt=False) as (
+            device,
+            _console,
+        ):
+            transport = SerialInterface(
+                device=device,
+                login_prompt=r"login: ",
+                username="root",
+                login_timeout=1.0,
+            )
+            try:
+                await transport.connect()
+                result = await transport.exec("uname")
+                assert result.exit_code == 0
+                assert result.stdout == "uname"
+            finally:
+                await transport.disconnect()
+
+    async def test_the_prompt_the_poke_earns_does_not_shadow_the_first_exec(self) -> None:
+        # The default console is already at its prompt when the poke lands, so
+        # the wire carries two prompts. The first exec must match its own.
+        async with open_pty_console() as (device, _console):
+            transport = SerialInterface(device=device)
+            try:
+                await transport.connect()
+                result = await transport.exec("fail")
+                assert result == ExecResult(stdout="nope", stderr="", exit_code=1)
+            finally:
+                await transport.disconnect()
 
 
 class TestPromptTimeout:
@@ -262,6 +308,24 @@ class TestAbort:
                     await transport.exec("uname")
             finally:
                 await transport.disconnect()
+
+    async def test_cancel_leaves_the_console_answering_the_next_connect(self) -> None:
+        # The bench's detached console outlives a run. A parked command that
+        # was cancelled must not leave it deaf for the next one.
+        async with open_pty_console() as (device, _console):
+            transport = SerialInterface(device=device, login_timeout=1.0, prompt_timeout=1.0)
+            await transport.connect()
+            parked = asyncio.create_task(transport.exec("sleep 30"))
+            await asyncio.sleep(0.2)
+            await transport.cancel_in_flight()
+            assert (await parked).exit_code == -1
+            again = SerialInterface(device=device, login_timeout=1.0, prompt_timeout=1.0)
+            try:
+                await again.connect()
+                result = await again.exec("uname")
+                assert result == ExecResult(stdout="uname", stderr="", exit_code=0)
+            finally:
+                await again.disconnect()
 
     async def test_truncated_exec_keeps_the_port_open(self) -> None:
         async with open_pty_console() as (device, _console):
