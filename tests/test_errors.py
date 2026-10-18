@@ -108,6 +108,20 @@ class TestBugSignal:
     def test_missing_verdict_carries_the_developer_banner(self) -> None:
         assert MissingVerdict("dimm-0", returned="PASS").BANNER == "CONTRACT VIOLATION"
 
+    def test_an_escaped_exception_is_a_developer_bug_that_keeps_its_cause(self) -> None:
+        cause = RuntimeError("socket vanished")
+        violation = ContractViolation.escaped("dimm-0", cause)
+        assert isinstance(violation, ContractViolation)
+        assert violation.is_bug is True
+        assert violation.cause is cause
+        assert violation.__cause__ is cause
+        assert violation.node == "dimm-0"
+        assert "RuntimeError escaped the node: socket vanished" in violation.detail
+        assert violation.to_json()["cause"] == {
+            "name": "RuntimeError",
+            "message": "socket vanished",
+        }
+
 
 class TestJsonSerialization:
     def _round_trip(self, payload: dict[str, Any]) -> dict[str, Any]:

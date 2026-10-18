@@ -24,8 +24,8 @@ organs — a suite author never holds an instance of any of them, so they do not
 in the outward API. The transports (`RemoteInterface`, `SshInterface`,
 `SerialInterface`) and the JUnit reporter stay off the surface for the same
 reason: a suite author never constructs one; `use_shell` and `get_shell` hand
-back a `Shell`, and the runner (#73) will own the reporter. Serial is constructed
-directly until a `use_shell` shape exists for a device path. The framework and
+back a `Shell` for SSH, `use_serial` and `get_serial` do the same for a console
+by device path, and the runner (#73) will own the reporter. The framework and
 its self-tests import all of these from their modules directly.
 """
 

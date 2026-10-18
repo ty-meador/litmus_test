@@ -19,6 +19,21 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `TestUtils.use_serial` and `TestUtils.get_serial`, `use_shell` / `get_shell` for a console
+  reached by its device path (bench finding F2, issue #139). `use_serial(device=...)` in
+  `configure()` opens the console and binds `utils.exec` to it for the node and its
+  descendants; `use_serial()` reads the active route; `get_serial(device=...)` opens an
+  auxiliary console. The port joins the node's opened set, so the post-cleanup sweep and
+  the run-level abort sweep close it. Behind a hop the console borrows the router's live
+  SSH session (`SerialInterface(tunnel=...)`). `litmus/shell-in-configure` and
+  `litmus/no-input-fallback` recognise the new names.
+- `DeviceApi` serialises requests per handle (bench finding F13, issue #139): `parallel`
+  leaves sharing the session `configure()` opened queue in call order instead of dying on
+  `ValueError: one in-flight request per handle`. A queued request's `timeout` bounds only
+  its own transfer; one still waiting when the handle is cancelled or closed is never sent
+  and fails with `DeviceApiOperationFailure`. The `ValueError` remains only for re-entrancy.
+  The `ContractViolation` banner for a non-`TestFailure` exception that escapes a node now
+  names the exception instead of advising `return PASS`.
 - `litmus/no-input-fallback`, the tier-3 rule the #142 ruling named and Ty ruled into
   1.0.0 on issue #144 (issue #147). Inside `configure()` of a `LitmusTest`, a `self`
   attribute and a discovery utility (`get_arp_resolver`, `use_shell`, `get_shell`,
@@ -550,6 +565,16 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Fixed
 
+- `SshInterface` password auth no longer scans `~/.ssh`: the password path passed
+  `client_keys=[]`, which asyncssh reads as "load the default key files", so every
+  connect loaded and validated whatever keys the test host held (about 0.2s for a
+  4096-bit RSA key) and offered credentials the provenance line never named. It now
+  passes `client_keys=None`. Found through the 70-DUT operator-interrupt self-test,
+  which had hung on hosts with a large RSA key since the key appeared: the slow
+  connects outran the rendezvous and the in-process sshd's `aclose()` then waited on
+  sessions nobody would close. The loopback sshd now aborts live sessions on close and
+  the test cancels its rack on a failed rendezvous, so a timeout reports instead of
+  parking.
 - Abort now reaches a grandchild that ignores SIGTERM (issue #146). `LocalExec`
   measured its two-second grace against the direct child alone; under dash a compound
   command (`a; b`, `a && b`, a pipe) keeps the shell as that child, the shell dies on

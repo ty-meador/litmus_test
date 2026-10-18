@@ -16,8 +16,9 @@ Flagged, inside ``configure()`` of a statically known ``LitmusTest``:
   call by another (an ``if``/``else``, a ``try``/``except``, a re-assignment after a
   ``None`` check), reported at the assignment that completes the pair.
 
-A discovery call is ``get_arp_resolver``, ``use_shell``, ``get_shell``, ``get_http``, or
-``get_coap`` on the method's second parameter, awaited or not, including a call,
+A discovery call is ``get_arp_resolver``, ``use_shell``, ``get_shell``, ``use_serial``,
+``get_serial``, ``get_http``, or ``get_coap`` on the method's second parameter, awaited
+or not, including a call,
 attribute, or subscript chained off its result (``.resolve()``, ``["ip"]``). A local name
 bound to either side counts as that side, through any chain of local names.
 
@@ -46,7 +47,17 @@ type FunctionDef = ast.FunctionDef | ast.AsyncFunctionDef
 type Binding = tuple[ast.stmt | ast.expr, ast.expr]
 
 _CONFIGURE = "configure"
-_DISCOVERY = frozenset({"get_arp_resolver", "use_shell", "get_shell", "get_http", "get_coap"})
+_DISCOVERY = frozenset(
+    {
+        "get_arp_resolver",
+        "use_shell",
+        "get_shell",
+        "use_serial",
+        "get_serial",
+        "get_http",
+        "get_coap",
+    }
+)
 _TAIL = (
     "the node names what it needs: take it from the constructor or from utils in "
     "configure(), never one with the other as fallback (issue #142)"

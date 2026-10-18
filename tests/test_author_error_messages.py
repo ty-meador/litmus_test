@@ -397,6 +397,23 @@ class TestContextAndVerdictMessages:
         )
         _assert_names_rule_and_fix(missing.fail_message)
 
+    def test_escaped_exception_names_the_exception_not_the_verdict_advice(self) -> None:
+        cause = ValueError("one in-flight request per handle; wait or cancel")
+        violation = ContractViolation.escaped("echo-64b", cause)
+        assert violation.fail_message == (
+            "CONTRACT VIOLATION IN echo-64b: ValueError escaped the node: "
+            "one in-flight request per handle; wait or cancel; "
+            "a developer bug — catch it and raise TestFailure, or fix the call"
+        )
+        assert violation.cause is cause
+        assert "return PASS" not in violation.fail_message
+        _assert_names_rule_and_fix(violation.detail)
+
+    def test_escaped_exception_without_a_message_still_names_its_type(self) -> None:
+        violation = ContractViolation.escaped("rail", KeyError())
+        assert violation.detail.startswith("KeyError escaped the node: no message; ")
+        _assert_names_rule_and_fix(violation.detail)
+
 
 class TestHookMessages:
     def test_survey_must_be_async(self) -> None:
@@ -673,10 +690,13 @@ class TestRoutingAndTransportTypeErrors:
         request = ShellOpenRequest(host="10.0.0.2", username="root", via=hop)
         with pytest.raises(TypeError) as raised:
             await SshConnector().open(request)
-        assert str(raised.value) == (
-            "SshConnector via must be an SshInterface; pass an SshInterface hop"
-        )
-        _assert_names_rule_and_fix(str(raised.value))
+        message = str(raised.value)
+        # The hop may have been inherited rather than passed, so the message names
+        # what arrived and both escapes: an SSH via, or inherit=False.
+        assert message.startswith("use_shell / get_shell via must be an SSH hop; got ")
+        assert "(_AddressedStub), which cannot carry a tunnel" in message
+        assert message.endswith("or inherit=False to open this endpoint directly")
+        _assert_names_rule_and_fix(message)
 
     async def test_ssh_connector_rejects_a_dead_via_hop(self) -> None:
         hop = SshInterface(

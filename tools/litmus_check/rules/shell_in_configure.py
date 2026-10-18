@@ -5,21 +5,25 @@
 ``exec routing:`` line when ``configure()`` returns. A declaration from a test method,
 ``cleanup``, a survey, or an audit would move the route after that line was written,
 so the Floor Technician would read a route the later commands never used.
+``use_serial`` with arguments is the same declaration for a console by device path.
 
-Flagged: ``<receiver>.use_shell(...)`` called with at least one argument inside a
-statically known ``LitmusTest`` subclass when the enclosing method is not
-``configure`` itself. A closure defined in ``configure`` and called later is not
-``configure`` either. The receiver is not checked by name: ``utils`` is the
-convention, not the rule, and a helper may take the service object under any name.
+Flagged: ``<receiver>.use_shell(...)`` or ``<receiver>.use_serial(...)`` called with at
+least one argument inside a statically known ``LitmusTest`` subclass when the
+enclosing method is not ``configure`` itself. A closure defined in ``configure`` and
+called later is not ``configure`` either. The receiver is not checked by name:
+``utils`` is the convention, not the rule, and a helper may take the service object
+under any name.
 
-Not flagged: the bare ``use_shell()`` read, which may run anywhere, and ``get_shell``,
-which opens an auxiliary endpoint without touching the route.
+Not flagged: the bare ``use_shell()`` / ``use_serial()`` read, which may run anywhere,
+and ``get_shell`` / ``get_serial``, which open an auxiliary endpoint without touching
+the route.
 
 Tier-1 counterpart: ``TestUtils.use_shell`` raises ``ContractViolation`` for a
 declaring call (``host``, ``via``, ``inherit=False``, ``propagate=False``) from any slot
-but ``configure``. This rule moves that error from the first run to the editor. It
-reads "any argument" where the runtime reads "any route-shaping argument" because a
-credential passed without a host is a mistake in either reading.
+but ``configure``, and ``TestUtils.use_serial`` does the same for ``device``. This rule
+moves that error from the first run to the editor. It reads "any argument" where the
+runtime reads "any route-shaping argument" because a credential passed without a host
+is a mistake in either reading.
 """
 
 from __future__ import annotations
@@ -30,26 +34,30 @@ from collections.abc import Iterable
 from litmus_check.model import Rule, SuiteModule, Violation
 
 _CONFIGURE = "configure"
-_DECLARER = "use_shell"
+_DECLARERS = frozenset({"use_shell", "use_serial"})
 
 
 class ShellInConfigureRule(Rule):
-    """Flag ``use_shell(...)`` with arguments outside ``configure``."""
+    """Flag ``use_shell(...)`` / ``use_serial(...)`` with arguments outside ``configure``."""
 
     code = "litmus/shell-in-configure"
-    summary = "use_shell declares the exec route only inside configure()"
+    summary = "use_shell and use_serial declare the exec route only inside configure()"
 
     def check(self, module: SuiteModule) -> Iterable[Violation]:
-        """Report a declaring ``use_shell(...)`` that sits outside ``configure``.
+        """Report a declaring ``use_shell(...)`` or ``use_serial(...)`` outside ``configure``.
 
         See the ``litmus/shell-in-configure`` row in ``docs/litmus-check.md``.
         """
         for klass in module.litmus_classes():
             for node in ast.walk(klass):
-                if isinstance(node, ast.Call) and _declares_route(node):
-                    yield from self._check_call(module, node)
+                if isinstance(node, ast.Call):
+                    declarer = _declaring_call(node)
+                    if declarer is not None:
+                        yield from self._check_call(module, node, declarer)
 
-    def _check_call(self, module: SuiteModule, call: ast.Call) -> Iterable[Violation]:
+    def _check_call(
+        self, module: SuiteModule, call: ast.Call, declarer: str
+    ) -> Iterable[Violation]:
         method = module.enclosing_method(call)
         if method is None:
             return
@@ -58,15 +66,17 @@ class ShellInConfigureRule(Rule):
         yield module.violation(
             call,
             self.code,
-            "use_shell declared a route outside configure(): the exec route is fixed when "
+            f"{declarer} declared a route outside configure(): the exec route is fixed when "
             "configure() returns so the 'exec routing:' line stays true for the whole "
-            "node; declare it there, or call use_shell() with no arguments to read it",
+            f"node; declare it there, or call {declarer}() with no arguments to read it",
         )
 
 
-def _declares_route(call: ast.Call) -> bool:
-    """A ``use_shell`` call with any argument; the bare call only reads the route."""
+def _declaring_call(call: ast.Call) -> str | None:
+    """The declarer's name when the call carries any argument; the bare call only reads."""
     func = call.func
-    if not (isinstance(func, ast.Attribute) and func.attr == _DECLARER):
-        return False
-    return bool(call.args or call.keywords)
+    if not (isinstance(func, ast.Attribute) and func.attr in _DECLARERS):
+        return None
+    if not (call.args or call.keywords):
+        return None
+    return func.attr

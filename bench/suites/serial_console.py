@@ -5,12 +5,12 @@ the prompt syncs, that a failing command's status is data, that a large reply ar
 whole, and that a wedged command can be cut." Four claims, in that order, because each
 assumes the previous one.
 
-What the framework gives for it today: a `SerialInterface` transport and no route. There
-is no ``utils.use_serial`` beside ``use_shell``, so the suite imports the transport from
-``litmus.serial`` (off the promised surface), opens it in ``configure()``, carries the
-handle in ctx (stripped from the record as non-JSON), and closes it in ``cleanup()``.
-The framework's abort sweep does not know about it. Both are recorded in
-``bench/FRICTION.md``; the suite is written the way a developer would write it today.
+What the framework gives for it: ``utils.use_serial(device=...)`` in ``configure()``,
+beside ``use_shell``. The route is declared once, every claim reads the console through
+``utils.exec``, and the port is the framework's to close: after the post-cleanup survey
+on a normal run, and from the run-level abort sweep when an operator Ctrl-C lands. No
+transport import, no handle in ctx, no ``cleanup()`` override (``bench/FRICTION.md``,
+F2, closed by this shape).
 
 The console on the far end is the self-test ``FakeConsole`` served by the surrogate
 (``python -m bench.serial_pair up``): ``uname`` echoes, ``fail`` exits 1, ``dump N``
@@ -27,7 +27,6 @@ import time
 from typing import Any
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict, evidence
-from litmus.serial import SerialInterface
 
 
 class SerialConsole(LitmusTest):
@@ -58,35 +57,24 @@ class SerialConsole(LitmusTest):
         self._exec_latency_limit_ms = exec_latency_limit_ms
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        """Open the tty named by ``SERIAL_DEVICE``; a port that will not open is a Fail."""
+        """Route ``utils.exec`` to the tty ``SERIAL_DEVICE`` names; a dead port is a Fail."""
         device = utils.env.require("SERIAL_DEVICE")
-        console = SerialInterface(
-            device=device,
-            baud=self._baud,
-            login_timeout=self._prompt_timeout_s,
-            prompt_timeout=self._prompt_timeout_s,
-        )
         try:
-            await console.connect()
-        except Exception as error:
-            # Any of several types means the same thing to the run: no console to test.
+            await utils.use_serial(
+                device=device,
+                baud=self._baud,
+                login_timeout=self._prompt_timeout_s,
+                prompt_timeout=self._prompt_timeout_s,
+            )
+        except (ConnectionError, OSError, ModuleNotFoundError) as error:
+            # Any of these means the same thing to the run: no console to test.
             raise TestFailure(f"console did not open: {error}") from error
-        utils.logger.info("%s", console.connect_provenance)
         return {
-            "console": console,
             "device": device,
             "baud": self._baud,
             "dump_bytes": self._dump_bytes,
             "exec_latency_limit_ms": self._exec_latency_limit_ms,
         }
-
-    async def cleanup(self, utils: TestUtils) -> None:
-        """Close the port the suite opened. After a cancel it is already closed."""
-        # `get`, not `[]`: cleanup also runs when `configure()` failed before it could
-        # provide the handle, and a `[]` read there is a contract violation, not a no-op.
-        console: SerialInterface | None = utils.ctx.get("console")
-        if console is not None and console.connected:
-            await console.disconnect()
 
     def build_suite(self) -> LitmusTest:
         """Prompt sync first; every later claim assumes the console answers."""
@@ -103,9 +91,8 @@ class SerialConsole(LitmusTest):
     @evidence("stdout", "exit_code", "exec_latency_ms")
     async def _prompt_sync(self, utils: TestUtils) -> Verdict:
         """One short command comes back with its status, inside the latency limit."""
-        console: SerialInterface = utils.ctx["console"]
         started = time.monotonic()
-        result = await console.exec("uname")
+        result = await utils.exec("uname")
         latency_ms = (time.monotonic() - started) * 1000.0
         reading = utils.measure(
             "exec_latency_ms",
@@ -127,8 +114,7 @@ class SerialConsole(LitmusTest):
     @evidence("stdout", "exit_code")
     async def _exit_status(self, utils: TestUtils) -> Verdict:
         """A non-zero status is a reading, not an exception."""
-        console: SerialInterface = utils.ctx["console"]
-        result = await console.exec("fail")
+        result = await utils.exec("fail")
         stdout = result.stdout.strip()
         if result.exit_code == 1 and stdout == "nope":
             return PASS({"stdout": stdout, "exit_code": result.exit_code})
@@ -141,9 +127,8 @@ class SerialConsole(LitmusTest):
     @evidence("received_bytes", "truncated")
     async def _large_reply(self, utils: TestUtils) -> Verdict:
         """A reply larger than one pty write arrives whole and untruncated."""
-        console: SerialInterface = utils.ctx["console"]
         wanted: int = utils.ctx["dump_bytes"]
-        result = await console.exec(f"dump {wanted}")
+        result = await utils.exec(f"dump {wanted}")
         received = len(result.stdout.strip())
         utils.measure("reply_bytes", received, unit="B", limits=(wanted, wanted))
         if result.exit_code == 0 and received == wanted and not result.truncated:
@@ -156,9 +141,16 @@ class SerialConsole(LitmusTest):
 
     @evidence("exit_code", "stderr", "port_closed")
     async def _cancel_in_flight(self, utils: TestUtils) -> Verdict:
-        """A parked command is cut and the port is closed; the parked exec settles -1."""
-        console: SerialInterface = utils.ctx["console"]
-        parked = asyncio.create_task(console.exec("sleep 30"))
+        """A parked command is cut and the port is closed; the parked exec settles -1.
+
+        The halt is the one the abort sweep runs; the suite reaches it through the
+        active route (``use_serial()`` with no arguments is the read form), on the
+        transport the framework opened, never one of its own.
+        """
+        console = (await utils.use_serial()).ssh
+        if console is None:
+            raise TestFailure("the exec route is not the console", "via the tty", "local")
+        parked = asyncio.create_task(utils.exec("sleep 30"))
         await asyncio.sleep(0.5)
         await console.cancel_in_flight()
         result = await parked
