@@ -10,7 +10,7 @@ Entries are numbered in the order they were met, not by severity (F12 was known
 before the first run, so it sits last). A `fixed` line
 means the bench worked around it in the suite; it does not mean the gap is closed.
 
-## F1. `SerialInterface.connect()` never pokes the line (bug, high)
+## F1. `SerialInterface.connect()` never pokes the line (bug, high) — closed 2026-10-17
 
 **Wanted:** open `/dev/ttyUSB0` on a board that booted an hour ago and get a prompt.
 
@@ -28,6 +28,20 @@ empty wire": the test double was shaped to the gap. The bench's detached console
 terminal program does; a self-test with a console that emitted its prompt *before*
 the open. Until then the serial suite is red at configure and the rack carries it.
 The suite's claims themselves were proven green with a just-in-time console.
+
+**Closed:** `_resolve_login` writes `\r` once the wire is open, before the first
+`_expect` (so a getty that printed `login:` an hour ago re-prompts too), and after
+the shell prompt resolves it drains the wire until it has been quiet for 0.2 s
+(bounded at 2 s) so the second prompt a console that was already at its prompt
+answers with is not the first exec's match. A poke the wire refuses is left for
+`_expect` to name as closed. Self-tests: a console that only answers input, a
+getty that only answers input, and the two-prompt case. `make bench-suite-serial`
+is green against the detached pair, twice over: the first green run exposed that
+the detached console went deaf after the cancel claim. `FakeConsole` read Ctrl-C in
+the same coroutine that was parked on `sleep`, so the interrupt could never land and
+the park lasted until SIGTERM; in-process tests tore the console down right after
+the cancel and never saw it. Bytes are now pumped by their own task, and a self-test
+reconnects after a cancel.
 
 ## F2. No `use_serial` / `get_serial`: the console cannot be a route (gap, high)
 
@@ -156,7 +170,7 @@ the evidence keys.
 **Close it:** a tier-3 rule (`litmus/evidence-shadows-ctx`), and a line in the idioms
 page next to `@evidence`.
 
-## F15. `CoapInterface` has no block-wise transfer: a large echo is 2.04 and short (bug, high)
+## F15. `CoapInterface` has no block-wise transfer: a large echo is 2.04 and short (bug, high) — closed 2026-10-17
 
 **Wanted:** `PUT /echo` with 1500 bytes comes back as 1500 bytes.
 
@@ -169,6 +183,18 @@ will see success codes over partial bodies.
 **Close it:** RFC 7959 Block1/Block2 in `CoapInterface`, or at least a
 `DeviceApiOperationFailure` when a Block2 option arrives on a response, so the suite
 sees a failure rather than a short body.
+
+**Closed:** RFC 7959 in `CoapInterface`. A body past 1024 bytes goes out as Block1
+blocks; a 2.31 that names a smaller SZX shrinks the rest of the transfer, and any
+other answer mid-transfer is returned as the response. A response that arrives with
+Block2 is fetched to the end with Block2-only continuations (no payload, no Block1:
+how aiocoap keys the transfer, on code and path) and handed over whole; a block out
+of sequence is a `DeviceApiOperationFailure`. The 768 bytes were a second bug under
+the first: the option decoder never consumed a delta extension byte, so any option
+numbered 13 or above put the payload marker in the wrong place. The decoder now
+handles 13- and 14-nibble deltas and lengths. Self-tests run against a loopback
+server with its own codec; `make bench-suite-coap` is green against aiocoap at every
+size including 1500.
 
 ## F12. No GPIO backend, so the suite holds blocking `gpiod` calls (known, by ruling)
 
