@@ -97,6 +97,19 @@ class TestShellInConfigureFires:
         """
         assert _lines(source) == [4]
 
+    def test_use_serial_is_the_same_declaration(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def _claim(self, utils: TestUtils) -> Verdict:
+                    await utils.use_serial(device="/dev/ttyUSB0")
+                    return PASS
+        """
+        violations = _check(source)
+
+        assert [(v.line, v.column, v.code) for v in violations] == [(4, 15, CODE)]
+        assert violations[0].message.startswith("use_serial declared a route outside configure()")
+        assert "call use_serial() with no arguments" in violations[0].message
+
     def test_transitive_subclasses_are_covered(self) -> None:
         source = """
             class Base(LitmusTest): ...
@@ -141,6 +154,21 @@ class TestShellInConfigureStaysQuiet:
                     if extra:
                         return PASS
                     raise TestFailure("no aux")
+        """
+        assert _lines(source) == []
+
+    def test_use_serial_in_configure_and_its_read_and_aux_forms_anywhere(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                    await utils.use_serial(device="/dev/ttyUSB0", baud=9600)
+                    return {}
+                async def _claim(self, utils: TestUtils) -> Verdict:
+                    console = await utils.use_serial()
+                    aux = await utils.get_serial(device="/dev/ttyUSB1")
+                    if console and aux:
+                        return PASS
+                    raise TestFailure("no console")
         """
         assert _lines(source) == []
 

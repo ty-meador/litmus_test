@@ -72,12 +72,13 @@ Private, with no promise attached:
 - Directory and file names beneath the artifact root. `LitmusTest.log_path` and the
   `result` pointer in the timeline are the API; the layout that produces them is not.
 - The transports, `RemoteInterface`, `SshInterface`, and `SerialInterface`. A suite
-  author never constructs an SSH transport: `TestUtils.use_shell` and
-  `TestUtils.get_shell` open the connection and hand back a `Shell`. Serial is
-  constructed directly until a `use_shell` shape exists for a device path. Transport
-  authors and the self-tests import `litmus.remote`, `litmus.ssh`, and `litmus.serial`
-  directly; a transport contract for third parties is a design note of its own
-  (issues #91, #93–#97).
+  author never constructs a transport: `TestUtils.use_shell` and `TestUtils.get_shell`
+  open an SSH connection and hand back a `Shell`; `TestUtils.use_serial` and
+  `TestUtils.get_serial` do the same for a console by device path, and their
+  documented parameters are the promise the serial transport is reached through.
+  Transport authors and the self-tests import `litmus.remote`, `litmus.ssh`, and
+  `litmus.serial` directly; a transport contract for third parties is a design note
+  of its own (issues #91, #93–#97).
 - The Device API backends, `DeviceApiInterface`, `HttpInterface`, `CoapInterface`,
   and `MockDeviceApi`. A suite author never constructs one: `TestUtils.get_http`
   and `TestUtils.get_coap` open the session and hand back a `DeviceApi`. Self-tests
@@ -209,12 +210,12 @@ is checked against the object by the self-tests.
 | `RunResult` | class | Self-contained evidence for one settled node: `state`, `failure`, `timeout`, `ancestor_names`, `bread_crumbs`, `summary_tree`, `env`, `run_data`, `to_json`. | `docs/idioms.md` (RunResult Navigation), `docs/inspector-json.md`, `docs/contracts.md` (Evidence Contract) |
 | `RunSignal` | class | Read-only view of the halt signals affecting a node: `fired`, `reason`. `TestUtils.signal`. | `docs/idioms.md` (TestUtils Injection) |
 | `ScopedLogger` | class | The per-node logger on `TestUtils.logger` and the hook contexts; a `logging.LoggerAdapter` with `scope` and `bread_crumbs`. | `docs/idioms.md` (Logging), `docs/contracts.md` (Evidence Contract) |
-| `Shell` | class | The scoped exec handle returned by `TestUtils.use_shell` and `TestUtils.get_shell`; the `via` argument to both. | `docs/idioms.md` (SSH Device, SSH Tunneling), `docs/contracts.md` (Exec Routing Contract) |
+| `Shell` | class | The scoped exec handle returned by `TestUtils.use_shell`, `TestUtils.get_shell`, `TestUtils.use_serial`, and `TestUtils.get_serial`; the `via` argument to all four. | `docs/idioms.md` (SSH Device, SSH Tunneling), `docs/utilities.md` (Serial console), `docs/contracts.md` (Exec Routing Contract) |
 | `Slot` | class | `StrEnum` of the lifecycle positions the framework calls suite code from; `RunResult.slot`. | `docs/inspector-json.md` (Version 1 result), `docs/contracts.md` (Lifecycle Contract) |
 | `State` | class | `StrEnum` of the three terminal states, `PASS`, `FAIL`, `ABORTED`; `RunResult.state`. There is no fourth. | `docs/overview.md` (The Three Terminal States), `docs/contracts.md` (Terminal State Contract) |
 | `SummaryTreeNode` | class | Plain recursive snapshot of the run tree on `RunResult.summary_tree`; `evidence`, `evidence_declared`, `to_json`. | `docs/inspector-json.md` (Summary tree) |
 | `TestFailure` | class | A verdict of Fail: the hardware did not meet the spec. The exception a test method raises; `evidence=` carries the readings taken before it failed. | `docs/overview.md` (Failure Taxonomy), `docs/contracts.md` (Failure Taxonomy Contract) |
-| `TestUtils` | class | The scoped service object handed to every lifecycle method: `logger`, `ctx`, `env`, `signal`, `artifact_root`, `exec_route`, `exec`, `wait_for`, `capture_artifact`, `get_arp_resolver`, `use_shell`, `get_shell`, `get_http`, `get_coap`, `measure`. Optionally parameterized as `TestUtils[CtxT]` so `ctx` returns the suite's declared shape. | `docs/idioms.md` (TestUtils Injection), `docs/contracts.md` (Utils Contract) |
+| `TestUtils` | class | The scoped service object handed to every lifecycle method: `logger`, `ctx`, `env`, `signal`, `artifact_root`, `exec_route`, `exec`, `wait_for`, `capture_artifact`, `get_arp_resolver`, `use_shell`, `get_shell`, `use_serial`, `get_serial`, `get_http`, `get_coap`, `measure`. Optionally parameterized as `TestUtils[CtxT]` so `ctx` returns the suite's declared shape. | `docs/idioms.md` (TestUtils Injection), `docs/utilities.md` (Serial console), `docs/contracts.md` (Utils Contract) |
 | `TimeoutEvidence` | class | Structured evidence when a time budget cut a subtree: `reason`, `declared`, `budget_seconds`, `elapsed_seconds`, `clock`; `RunResult.timeout`. | `docs/idioms.md` (Time Budgets), `docs/contracts.md` (Time Budget Contract) |
 | `Verdict` | class | The return type of a test method: `PASS` or `PASS(evidence)`; `evidence`. Generic in the evidence shape, so `-> Verdict[MyEvidence]` lets pyright check the payload. | `docs/overview.md` (Why Litmus Rejects "Pass by Default"), `docs/idioms.md` (Evidence Travels With the Verdict), `docs/litmus-check.md` (`litmus/unannotated-interface`) |
 | `evidence` | function | Decorator naming the keys a test method's `PASS` must carry: `@evidence("k", ...)` or `@evidence(MyTypedDict)`. Static at class definition. | `docs/idioms.md` (Evidence Travels With the Verdict), `docs/litmus-check.md` (`litmus/evidence-fulfilled`) |

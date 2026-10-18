@@ -398,6 +398,24 @@ class TestBugGuardLayers:
         assert outcome.failure.BANNER == "CONTRACT VIOLATION"
         assert outcome.failure.cause is not None
         assert isinstance(outcome.failure.cause, ValueError)
+        # The banner names the stray exception, not the "return PASS" advice: the
+        # author did not reach a verdict at all, a ValueError got out (F13).
+        assert outcome.failure.detail == (
+            "ValueError escaped the node: kaboom; "
+            "a developer bug — catch it and raise TestFailure, or fix the call"
+        )
+        assert "return PASS" not in outcome.failure.fail_message
+
+    async def test_the_developer_layer_keeps_the_verdict_advice_for_a_missing_verdict(
+        self,
+    ) -> None:
+        async def returns_none() -> object:
+            return None
+
+        boundary = ChildBoundary(NODE)
+        outcome = await boundary.run(Slot.TEST_METHOD, returns_none())
+        assert isinstance(outcome.failure, MissingVerdict)
+        assert "return PASS or raise TestFailure" in outcome.failure.fail_message
 
     async def test_the_framework_layer_fires_on_a_cancellation_nobody_asked_for(self) -> None:
         boundary = ChildBoundary(NODE)

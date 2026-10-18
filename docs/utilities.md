@@ -68,6 +68,20 @@ target = await utils.get_shell(host=target_host, username=target_user, via=jump)
 
 See `examples/ssh_tunneling.py`.
 
+## Serial console: `use_serial` and `get_serial`
+
+`use_serial(device=...)` is `use_shell(host=...)` for a console reached by its device path: it opens the port, binds `utils.exec` to it for this node and its descendants, and the framework closes the port after the post-cleanup survey and from the abort sweep. `get_serial(device=...)` hands you an additional console without touching the routing. Both return a `Shell`; `use_serial()` with no arguments reads the active route from any slot, and the declaring form is admitted only in `configure()`, under the same `ContractViolation` as `use_shell`. No `cleanup()` override is needed and no transport is imported.
+
+```python
+async def configure(self, utils: TestUtils) -> dict[str, Any]:
+    await utils.use_serial(device=utils.env.require("SERIAL_DEVICE"), baud=115200)
+    return {}
+```
+
+The line settings are the transport's: `prompt` (a regex; `None` is a bare POSIX prompt), `login_prompt` / `password_prompt` with `username` / `password` for a console that logs in, `login_timeout` for connect, `prompt_timeout` for how long one `exec` waits for the prompt before settling `exit_code == -1` with the text so far as evidence. A console's `stderr` is transport-generated only (`"prompt timeout"`, `"transport closed"`); everything the DUT writes lands in `stdout`. The contract is `docs/hil/serial.md`.
+
+A console behind a hop (a console server, a Pi with a USB-UART) is the same call: pass an SSH `Shell` as `via`, or declare `use_shell(host=...)` on the parent and let the console inherit the route. The device path then names a node on the hop box and the bytes bridge through it (`bridge_command` overrides the default `stty` + `cat` bridge). A serial console accepts no other kind of hop; passing one is a `TypeError` naming the call. The policy-only shapes (`inherit=False`, `propagate=False`) belong to `use_shell`. `pyserial-asyncio` is the `litmus[serial]` extra; a local open without it raises `ModuleNotFoundError` naming the install.
+
 ## Device API: CoAP and HTTP
 
 A device API is not `exec` with a URL. Open a session from `configure()` with `utils.get_http` or `utils.get_coap`, then `request` a typed `DeviceRequest`. The response's `status` is data; HTTP 4xx/5xx is not an exception. Catch `DeviceApiOperationFailure` when the transfer itself did not complete (timeout, refused connection) and model it as a `TestFailure`.
