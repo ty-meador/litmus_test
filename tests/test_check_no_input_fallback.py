@@ -61,7 +61,16 @@ class TestNoInputFallbackFiresOnChoices:
         assert violations[2].message.startswith("self._client falls back to utils.get_http()")
 
     @pytest.mark.parametrize(
-        "utility", ["get_arp_resolver", "use_shell", "get_shell", "get_http", "get_coap"]
+        "utility",
+        [
+            "get_arp_resolver",
+            "use_shell",
+            "get_shell",
+            "use_serial",
+            "get_serial",
+            "get_http",
+            "get_coap",
+        ],
     )
     def test_every_discovery_utility_is_known(self, utility: str) -> None:
         source = f"""
@@ -273,5 +282,5 @@ class TestNoInputFallbackAtTheCommandLine:
 
         assert status == EXIT_VIOLATIONS
         lines = out.getvalue().splitlines()
-        assert lines[0].startswith(f"{fixtures / 'seeded_suite.py'}:85:14: {CODE} ")
+        assert lines[0].startswith(f"{fixtures / 'seeded_suite.py'}:85:18: {CODE} ")
         assert lines[-1] == "Found 1 violation."

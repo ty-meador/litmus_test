@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, Protocol
 
@@ -18,6 +18,7 @@ from litmus import (
     DeviceRequest,
     DeviceResponse,
     LitmusTest,
+    SummaryTreeNode,
     TestFailure,
     TestUtils,
     Verdict,
@@ -395,6 +396,19 @@ class TestSharedContract:
         with pytest.raises(ConnectionError, match="not connected"):
             await api.request(DeviceRequest(method="GET", path="/whoami"))
 
+    async def test_concurrent_requests_on_one_handle_all_complete(
+        self, api: DeviceApiInterface
+    ) -> None:
+        """Mock, HTTP, and CoAP alike: five callers at once, one at a time on the wire."""
+        baseline = await api.request(DeviceRequest(method="GET", path="/whoami"))
+        before = len(api.attempts)
+        responses = await asyncio.gather(
+            *(api.request(DeviceRequest(method="GET", path="/whoami")) for _ in range(5))
+        )
+        assert [(r.status, r.body) for r in responses] == [(baseline.status, baseline.body)] * 5
+        assert api.attempts[before:] == ("0:GET /whoami",) * 5
+        assert api.queued == 0
+
 
 class TestMockHalt:
     async def test_cancel_fails_a_parked_request_and_is_idempotent(self) -> None:
@@ -441,6 +455,162 @@ class TestMockHalt:
 
         assert response.body == b"ok"
         assert backend.attempts == ("0:GET /flaky", "1:GET /flaky")
+
+
+def _walk(node: SummaryTreeNode) -> Iterator[SummaryTreeNode]:
+    yield node
+    for child in node.children:
+        yield from _walk(child)
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    deadline = asyncio.get_running_loop().time() + 2
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline
+        await asyncio.sleep(0)
+
+
+class TestOneTurnAtATime:
+    """Concurrent requests on one handle run one at a time, in call order (F13)."""
+
+    @staticmethod
+    def _gate_exchange(backend: MockDeviceApi, gates: dict[str, asyncio.Event]) -> None:
+        async def gated(
+            method: str, path: str, payload: bytes | None, headers: object
+        ) -> DeviceResponse:
+            del method, payload, headers
+            await gates.setdefault(path, asyncio.Event()).wait()
+            return DeviceResponse(status=200, body=path.encode())
+
+        backend._exchange = gated  # type: ignore[method-assign]
+
+    async def test_concurrent_requests_queue_and_complete_in_call_order(self) -> None:
+        backend = MockDeviceApi()
+        gates: dict[str, asyncio.Event] = {}
+        self._gate_exchange(backend, gates)
+        await backend.connect()
+        try:
+            tasks = [
+                asyncio.create_task(backend.request(DeviceRequest(method="GET", path=f"/{i}")))
+                for i in range(5)
+            ]
+            await _until(lambda: backend.queued == 4)
+            # Only the first is on the wire; the rest wait their turn, unsent.
+            assert backend.attempts == ("0:GET /0",)
+            for i in range(5):
+                gates.setdefault(f"/{i}", asyncio.Event()).set()
+            responses = await asyncio.gather(*tasks)
+        finally:
+            await backend.disconnect()
+
+        assert [response.body for response in responses] == [f"/{i}".encode() for i in range(5)]
+        assert backend.attempts == tuple(f"0:GET /{i}" for i in range(5))
+        assert backend.queued == 0
+
+    async def test_cancel_fails_the_queued_waiters_without_sending_them(self) -> None:
+        backend = MockDeviceApi()
+        backend.park("GET", "/slow")
+        await backend.connect()
+        running = asyncio.create_task(backend.request(DeviceRequest(method="GET", path="/slow")))
+        waiters = [
+            asyncio.create_task(backend.request(DeviceRequest(method="GET", path=f"/queued-{i}")))
+            for i in range(2)
+        ]
+        await _until(lambda: backend.has_in_flight and backend.queued == 2)
+
+        await backend.cancel_in_flight()
+
+        with pytest.raises(DeviceApiOperationFailure, match="closed"):
+            await running
+        for waiter in waiters:
+            with pytest.raises(
+                DeviceApiOperationFailure, match=r"cancelled or closed.*queued"
+            ) as raised:
+                await waiter
+            assert raised.value.operation == "request"
+            assert raised.value.method == "GET"
+        # The waiters never reached the wire: the record shows one attempt, not three.
+        assert backend.attempts == ("0:GET /slow",)
+        assert backend.queued == 0
+        assert backend.connected is False
+
+    async def test_disconnect_fails_the_queued_waiters_the_same_way(self) -> None:
+        backend = MockDeviceApi()
+        backend.park("GET", "/slow")
+        await backend.connect()
+        running = asyncio.create_task(backend.request(DeviceRequest(method="GET", path="/slow")))
+        waiter = asyncio.create_task(backend.request(DeviceRequest(method="GET", path="/queued")))
+        await _until(lambda: backend.has_in_flight and backend.queued == 1)
+
+        await backend.disconnect()
+
+        with pytest.raises(DeviceApiOperationFailure, match="closed"):
+            await running
+        with pytest.raises(DeviceApiOperationFailure, match="queued"):
+            await waiter
+        assert backend.attempts == ("0:GET /slow",)
+
+    async def test_a_queued_request_ceiling_covers_its_transfer_not_the_wait(self) -> None:
+        backend = MockDeviceApi()
+        gates: dict[str, asyncio.Event] = {}
+        self._gate_exchange(backend, gates)
+        await backend.connect()
+        try:
+            first = asyncio.create_task(backend.request(DeviceRequest(method="GET", path="/first")))
+            second = asyncio.create_task(
+                backend.request(DeviceRequest(method="GET", path="/second", timeout=0.05))
+            )
+            await _until(lambda: backend.queued == 1)
+            # Four ceilings spent waiting behind a sibling: not the DUT being slow.
+            await asyncio.sleep(0.2)
+            assert not second.done()
+            gates.setdefault("/first", asyncio.Event()).set()
+            assert (await first).body == b"/first"
+            # Its own transfer, never released, is what the ceiling bounds.
+            with pytest.raises(DeviceApiOperationFailure, match=r"exceeded 0\.05s ceiling"):
+                await second
+        finally:
+            await backend.disconnect()
+
+    async def test_retries_hold_the_turn_as_one_request(self) -> None:
+        backend = MockDeviceApi()
+        gates: dict[str, asyncio.Event] = {}
+        self._gate_exchange(backend, gates)
+        flaky_calls = 0
+        gated = backend._exchange  # pyright: ignore[reportPrivateUsage]
+
+        async def flaky_then_gated(
+            method: str, path: str, payload: bytes | None, headers: Mapping[str, str]
+        ) -> DeviceResponse:
+            nonlocal flaky_calls
+            if path == "/flaky" and flaky_calls == 0:
+                flaky_calls += 1
+                raise DeviceApiOperationFailure(
+                    "flaky",
+                    handle=backend.handle_label,
+                    operation="request",
+                    method=method,
+                    path=path,
+                )
+            return await gated(method, path, payload, headers)
+
+        backend._exchange = flaky_then_gated  # type: ignore[method-assign]
+        await backend.connect()
+        try:
+            flaky = asyncio.create_task(
+                backend.request(
+                    DeviceRequest(method="GET", path="/flaky", retries=1, retry_delay=0.05)
+                )
+            )
+            other = asyncio.create_task(backend.request(DeviceRequest(method="GET", path="/other")))
+            await _until(lambda: backend.queued == 1)
+            gates.setdefault("/flaky", asyncio.Event()).set()
+            gates.setdefault("/other", asyncio.Event()).set()
+            await asyncio.gather(flaky, other)
+        finally:
+            await backend.disconnect()
+        # The retry ran before the sibling's request: one logical request, one turn.
+        assert backend.attempts == ("0:GET /flaky", "1:GET /flaky", "0:GET /other")
 
 
 class TestHttpSpecific:
@@ -655,6 +825,56 @@ class TestGetHttpLifecycle:
         with pytest.raises(ConnectionError, match="not connected"):
             await holder["api"].request(DeviceRequest(method="GET", path="/whoami"))
 
+    async def test_parallel_leaves_share_one_handle_from_configure(self) -> None:
+        """The F13 shape: one session in configure(), five independent echo leaves."""
+        servers: list[asyncio.Server] = []
+        sizes = (1, 64, 512, 1024, 1500)
+
+        class Echoes(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "exchange",
+                    [self.test(f"echo-{size}b", self._echo, size=size) for size in sizes],
+                )
+
+            async def configure(self, utils: TestUtils) -> dict[str, DeviceApi]:
+                server = await asyncio.start_server(
+                    lambda reader, writer: _http_client(reader, writer, _echo_router),
+                    "127.0.0.1",
+                    0,
+                )
+                servers.append(server)
+                port = server.sockets[0].getsockname()[1]
+                return {"api": await utils.get_http(base_url=f"http://127.0.0.1:{port}")}
+
+            async def _echo(self, utils: TestUtils, *, size: int) -> Verdict:
+                api: DeviceApi = utils.ctx["api"]
+                payload = bytes(i & 0xFF for i in range(size))
+                try:
+                    response = await api.request(
+                        DeviceRequest(method="PUT", path="/echo", payload=payload)
+                    )
+                except DeviceApiOperationFailure as error:
+                    raise TestFailure(f"echo failed: {error}") from error
+                if response.body != payload:
+                    raise TestFailure("echo not intact", size, len(response.body))
+                return PASS({"size": size})
+
+        try:
+            result = await Echoes(name="dut").run()
+        finally:
+            for server in servers:
+                server.close()
+                await server.wait_closed()
+
+        assert result.state is State.PASS, result.failure
+        leaves = {
+            node.name: node.state
+            for node in _walk(result.summary_tree)
+            if node.name.startswith("echo-")
+        }
+        assert leaves == {f"echo-{size}b": State.PASS for size in sizes}
+
 
 class TestSchemeIdentity:
     def test_http_rejects_coap_scheme(self) -> None:
@@ -694,20 +914,30 @@ class TestValidationAndHalt:
         await backend.cancel_in_flight()
         assert backend.connected is False
 
-    async def test_second_request_while_parked_is_refused(self) -> None:
+    async def test_request_re_entered_from_its_own_exchange_is_refused(self) -> None:
+        """The one refusal left on a busy handle: re-entrancy, which would deadlock."""
         backend = MockDeviceApi()
-        backend.park("GET", "/slow")
+        original = backend._exchange  # pyright: ignore[reportPrivateUsage]
+
+        async def re_enter(
+            method: str, path: str, payload: bytes | None, headers: object
+        ) -> DeviceResponse:
+            del method, path, payload, headers
+            return await backend.request(DeviceRequest(method="GET", path="/inner"))
+
+        backend._exchange = re_enter  # type: ignore[method-assign]
         await backend.connect()
-        first = asyncio.create_task(backend.request(DeviceRequest(method="GET", path="/slow")))
-        deadline = asyncio.get_running_loop().time() + 2
-        while not backend.has_in_flight:
-            assert asyncio.get_running_loop().time() < deadline
-            await asyncio.sleep(0)
-        with pytest.raises(ValueError, match="one in-flight"):
-            await backend.request(DeviceRequest(method="GET", path="/whoami"))
-        await backend.cancel_in_flight()
-        with contextlib.suppress(DeviceApiOperationFailure, ConnectionError):
-            await first
+        try:
+            with pytest.raises(ValueError, match=r"one in-flight request per handle: .*re-entered"):
+                await backend.request(DeviceRequest(method="GET", path="/outer"))
+            # The refusal released the turn: the handle is still open and usable.
+            backend._exchange = original  # type: ignore[method-assign]
+            assert backend.connected is True
+            assert backend.queued == 0
+            response = await backend.request(DeviceRequest(method="GET", path="/after"))
+            assert response.status == 200
+        finally:
+            await backend.disconnect()
 
     async def test_negative_retries_and_bad_method_are_refused(self) -> None:
         backend = MockDeviceApi()

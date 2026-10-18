@@ -5,7 +5,10 @@ returns what PUT sent. The suite opens the session in ``configure()``, keeps the
 handle in ctx, and makes three kinds of claim: the device identifies itself, a missing
 resource is 4.04 (a status is data, not an exception), and payloads of several sizes
 survive the round trip whole, one leaf per size so each size is its own verdict and
-its own latency measurement, in sequence because one session carries one request.
+its own latency measurement. The echo leaves are independent claims and run as a
+``parallel`` on the one session: the handle serialises their requests in call order,
+so each measured latency includes the wait behind its siblings. The latency limit is
+set with that in mind; a claim about the device alone would take one handle per leaf.
 Sizes past 1024 bytes need block-wise transfer, which is exactly the kind of edge the
 pressure test exists to find (and did: bench/FRICTION.md, F15).
 
@@ -70,18 +73,18 @@ class CoapDevice(LitmusTest):
         return {"api": api, "latency_limit_ms": self._latency_limit_ms}
 
     def build_suite(self) -> LitmusTest:
-        """Identity first, then the exchanges one at a time.
+        """Identity first, then the independent exchanges together.
 
-        The exchanges are independent claims and were first composed as a `parallel`;
-        a `DeviceApi` handle allows one in-flight request, so siblings sharing the
-        session opened in `configure()` collide (bench/FRICTION.md, F13). A sequence
-        is the honest shape for one session.
+        The exchanges are independent claims, so they are a `parallel`. They share the
+        session `configure()` opened; the handle queues their requests in call order
+        rather than colliding (bench/FRICTION.md, F13 — the first composition of this
+        suite died with one request per handle and was flattened to a sequence).
         """
         return self.sequence(
             self.name,
             [
                 self.test("hello", self._hello, fail_after=10.0),
-                self.sequence(
+                self.parallel(
                     "exchange",
                     [
                         self.test("missing-resource", self._missing_resource, fail_after=10.0),
@@ -140,7 +143,11 @@ class CoapDevice(LitmusTest):
         )
 
     async def _timed(self, utils: TestUtils, request: DeviceRequest) -> tuple[Any, float]:
-        """One request on the shared session with its round trip in milliseconds."""
+        """One request on the shared session with its round trip in milliseconds.
+
+        The clock starts before ``request`` takes its turn on the handle, so under the
+        ``parallel`` this is the leaf's wait plus the device's answer.
+        """
         api: DeviceApi = utils.ctx["api"]
         started = time.monotonic()
         try:

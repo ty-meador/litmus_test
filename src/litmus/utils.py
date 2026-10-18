@@ -44,6 +44,7 @@ from litmus.routing import (
     ExecRouting,
     Shell,
     require_connection_pair,
+    require_console_form,
 )
 from litmus.timeline import RunTimeline, TimelinePaths
 
@@ -1215,6 +1216,130 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             passphrase=passphrase,
             agent=agent,
             skip_host_verification=skip_host_verification,
+            via=via,
+            inherit=inherit,
+            propagate=propagate,
+        )
+
+    async def use_serial(
+        self,
+        *,
+        device: str | None = None,
+        baud: int = 115200,
+        prompt: str | None = None,
+        login_prompt: str | None = None,
+        password_prompt: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        login_timeout: float = 10.0,
+        prompt_timeout: float = 30.0,
+        bridge_command: str | None = None,
+        output_budget: int | None = None,
+        via: Shell | None = None,
+        inherit: bool = True,
+        propagate: bool = True,
+    ) -> Shell:
+        """Declare this node's exec route through a console from ``configure()``, or read it.
+
+        ``use_serial(device=...)`` is ``use_shell(host=...)`` for a console reached by
+        its device path (``/dev/ttyUSB0``): the port is opened, ``utils.exec`` is bound
+        to it for this node and its descendants, and the framework closes it after the
+        post-cleanup survey and on abort. With no arguments this returns the active
+        ``Shell`` and may be called from any slot. The declaring form is admitted only
+        while this node's ``configure()`` is running, for the reason ``use_shell``
+        gives: the ``exec routing:`` line is written when configure returns and the FT
+        reads it as true for the whole node (Exec Routing Contract). From any other slot
+        the declaring call raises ``ContractViolation`` before the router is touched.
+
+        Args:
+            device: The device node, on the test host or, with ``via`` or an inherited
+                SSH route, on the hop box.
+            baud: Line rate requested at open.
+            prompt: Regex matched against the tail of decoded output; ``None`` is a
+                bare POSIX prompt. Supply it for anything else — a prompt guessed at
+                runtime is how a stuck read gets misread as a fast command.
+            login_prompt: Regex answered with ``username`` during connect, if the
+                console logs in.
+            password_prompt: Regex answered with ``password`` during connect.
+            username: Login name; required when ``login_prompt`` is given.
+            password: Login secret. Never rendered in evidence.
+            login_timeout: Seconds to resolve login and the first prompt at connect.
+            prompt_timeout: Seconds one ``exec`` waits for the prompt before settling
+                ``exit_code == -1`` with the text so far as evidence.
+            bridge_command: Remote command whose stdin/stdout is the UART, for a
+                console behind a hop. Defaults to a ``stty`` + ``cat`` bridge.
+            output_budget: Per-exec output ceiling for this console; ``None`` is the
+                run's shared ceiling.
+            via: An SSH ``Shell`` to bridge through. A serial console accepts no other
+                kind of hop.
+            inherit: Bridge through an inherited SSH route when ``via`` is omitted.
+            propagate: ``False`` keeps this route from flowing to children.
+        """
+        require_console_form(device, via=via, inherit=inherit, propagate=propagate)
+        if device is not None and not self._runtime.in_configure:
+            scope = self._runtime.scope
+            node = scope[-1] if scope else "<unknown>"
+            raise ContractViolation(
+                node,
+                detail=(
+                    "use_serial declared a route outside configure(); the exec route is "
+                    "fixed when configure() returns so the 'exec routing:' line stays "
+                    "true for the whole node; declare it there, or call use_serial() "
+                    "with no arguments to read the active route"
+                ),
+            )
+        return await self._runtime.routing.use_serial(
+            device=device,
+            baud=baud,
+            prompt=prompt,
+            login_prompt=login_prompt,
+            password_prompt=password_prompt,
+            username=username,
+            password=password,
+            login_timeout=login_timeout,
+            prompt_timeout=prompt_timeout,
+            bridge_command=bridge_command,
+            output_budget=output_budget,
+            via=via,
+            inherit=inherit,
+            propagate=propagate,
+        )
+
+    async def get_serial(
+        self,
+        *,
+        device: str,
+        baud: int = 115200,
+        prompt: str | None = None,
+        login_prompt: str | None = None,
+        password_prompt: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        login_timeout: float = 10.0,
+        prompt_timeout: float = 30.0,
+        bridge_command: str | None = None,
+        output_budget: int | None = None,
+        via: Shell | None = None,
+        inherit: bool = True,
+        propagate: bool = True,
+    ) -> Shell:
+        """Open a console as an auxiliary endpoint without changing this node's exec route.
+
+        The arguments are those of ``use_serial``. The port is framework-managed the
+        same way: closed after the post-cleanup survey and on abort.
+        """
+        return await self._runtime.routing.get_serial(
+            device=device,
+            baud=baud,
+            prompt=prompt,
+            login_prompt=login_prompt,
+            password_prompt=password_prompt,
+            username=username,
+            password=password,
+            login_timeout=login_timeout,
+            prompt_timeout=prompt_timeout,
+            bridge_command=bridge_command,
+            output_budget=output_budget,
             via=via,
             inherit=inherit,
             propagate=propagate,

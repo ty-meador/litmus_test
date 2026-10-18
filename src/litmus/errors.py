@@ -276,6 +276,23 @@ class ContractViolation(TestFailure):
         if cause is not None:
             self.__cause__ = cause
 
+    @classmethod
+    def escaped(cls, node: str, error: BaseException) -> ContractViolation:
+        """Banner an exception that is not a verdict and escaped suite code.
+
+        The author neither returned PASS nor raised `TestFailure`, so the default
+        "return PASS or raise TestFailure" advice would misdescribe what happened.
+        The detail names the exception type and message — the thing the reader
+        has to fix — and the original stays on `cause` for the artifact.
+        """
+        message = str(error) or "no message"
+        return cls(
+            node,
+            f"{type(error).__name__} escaped the node: {message}; "
+            "a developer bug — catch it and raise TestFailure, or fix the call",
+            cause=error,
+        )
+
     @property
     def is_bug(self) -> bool:
         """A contract violation is always a developer bug, never a device fault."""

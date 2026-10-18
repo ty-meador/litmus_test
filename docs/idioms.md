@@ -657,6 +657,8 @@ Use when later tests depend on earlier ones. The Floor Technician sees exactly w
 **`self.parallel()`** — concurrent via `asyncio.TaskGroup`, collects all failures.
 Use when tests are fully independent. The Floor Technician sees everything broken at once. One child's Fail never cancels its siblings — Fail is returned, not raised, at the child boundary; only a harness-level abort cancels the parallel node, and then cancelling everything is exactly what Aborted means.
 
+Independent claims can still share one resource. A single `DeviceApi` handle opened in `configure()` and read from ctx by every leaf serialises their requests: the leaves run concurrently, their requests go out one at a time in call order, and a latency measured around `request` includes the wait for siblings. That is correct when the claim is about the bytes; when the claim is about the DUT's own latency, give each leaf its own handle.
+
 ---
 
 ## ArpResolver — MAC to IP
@@ -712,6 +714,8 @@ Returning `{"ssh": ...}` from `configure()` also makes the device eligible as a 
 
 `use_shell` vs `get_shell`: `use_shell` answers "where does `utils.exec` go" — it rebinds the routing for this test and its descendants. `get_shell` hands you an additional interface without touching the routing.
 
+A console by device path is the same idiom: `await utils.use_serial(device="/dev/ttyUSB0")` in `configure()` declares it as the node's exec route and `get_serial` opens one as an auxiliary endpoint; both hand back a `Shell`, the framework closes the port after the post-cleanup survey and from the abort sweep, and no transport is imported or carried in ctx. Behind a hop, pass an SSH `Shell` as `via` or let the console inherit the parent's `use_shell` route. The policy-only shapes (`inherit=False`, `propagate=False`) stay with `use_shell`.
+
 See `examples/remote_device_ssh.py`. The pi-hole dogfood suite
 (`examples/pi_hole_server.py`) is the same class-owned hop plus phase-boundary
 surveys that tail service logs for the Floor Technician.
@@ -743,6 +747,13 @@ Retries default to zero. Each declared attempt is logged. POST refuses retry
 unless `retry_non_idempotent=True`. Attempt logs keep header names and withhold
 every value unless the author lists that name in `evidence_headers`. Abort
 closes the session; it does not invent a shutdown PUT.
+
+One handle carries one request at a time. Leaves under a `parallel` that share
+the handle `configure()` opened queue on it in call order — nothing collides and
+nothing is refused — so a round trip timed in the leaf includes the queue. A
+request still waiting when the handle is cancelled or closed is never sent; it
+fails with `DeviceApiOperationFailure`, the same class as any other transfer
+that did not complete. Measure the DUT alone with one handle per leaf.
 
 ```python
 api = await utils.get_http(base_url="https://dut.local")

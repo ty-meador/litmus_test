@@ -180,7 +180,14 @@ class DeviceApiInterface(ABC):
 
     ``connect`` / ``disconnect`` own the connected flag. Subclasses implement
     ``_connect``, ``_disconnect``, and ``_exchange``. ``request`` owns retries,
-    in-flight admission, and the closed-session cut.
+    the one-at-a-time queue, and the closed-session cut.
+
+    The queue lives here, not on ``DeviceApi``, because every route to the wire
+    passes through this ``request``: the author's wrapper, a self-test holding
+    the backend, and the termination sweep all see the same lock. Concurrent
+    ``request`` calls — five ``parallel`` leaves on the handle ``configure()``
+    opened — wait their turn in call order instead of colliding. One logical
+    request, retries included, holds the turn from first attempt to last.
     """
 
     def __init__(
@@ -205,6 +212,13 @@ class DeviceApiInterface(ABC):
         self._in_flight = False
         self._close_confirmed = False
         self._attempts: list[str] = []
+        # One turn at a time. ``_turn_holder`` is the task whose request owns the
+        # turn, so a re-entrant ``request`` from inside ``_exchange`` is refused
+        # instead of deadlocking on its own lock. ``_queued`` counts the requests
+        # waiting behind the holder; the mock and the log line read it.
+        self._turn = asyncio.Lock()
+        self._turn_holder: asyncio.Task[object] | None = None
+        self._queued = 0
 
     @property
     def scheme(self) -> str:
@@ -235,6 +249,11 @@ class DeviceApiInterface(ABC):
     def close_confirmed(self) -> bool:
         """True if the last close/cancel observed a dead session."""
         return self._close_confirmed
+
+    @property
+    def queued(self) -> int:
+        """How many ``request`` calls are waiting their turn behind the current one."""
+        return self._queued
 
     @final
     async def connect(self) -> None:
@@ -278,6 +297,14 @@ class DeviceApiInterface(ABC):
 
         A well-formed response of any status is data and ends the loop. An
         operational failure retries only when ``req.retries`` allows it.
+
+        Requests on one handle run one at a time, in call order. A call that
+        arrives while another is on the wire waits its turn; the wait is not
+        under ``req.timeout``, which bounds only this request's own transfer
+        (a sibling ahead in the queue is not the DUT being slow — the node
+        clock bounds the whole wait). A handle cancelled or closed while this
+        request was waiting never puts it on the wire: it fails with
+        ``DeviceApiOperationFailure`` naming the queue, not a response.
         """
         if not self._connected:
             raise ConnectionError("device API session is not connected")
@@ -292,16 +319,73 @@ class DeviceApiInterface(ABC):
             else _require_finite_seconds("timeout", req.timeout)
         )
         if retries and method in _NON_IDEMPOTENT and not req.retry_non_idempotent:
-            # Author-contract, same class as the in-flight refusal below: the
+            # Author-contract, same class as the re-entrancy refusal below: the
             # types are fine, the usage is not. ValueError for both, not TypeError.
             raise ValueError(f"{method} refuses application retry unless retry_non_idempotent=True")
+        if self._turn_holder is not None and self._turn_holder is asyncio.current_task():
+            # The only way to hit the one-at-a-time rule now: a backend's
+            # ``_exchange`` (or a hook running inside one) calling ``request``
+            # on the handle that is mid-attempt. Waiting would deadlock on its
+            # own turn, so refuse instead. Sibling tasks never reach here.
+            raise ValueError(
+                "one in-flight request per handle: request() re-entered from inside "
+                "its own in-flight request; finish or cancel it first"
+            )
         delay = 0.0 if retries == 0 else _require_finite_seconds("retry_delay", req.retry_delay)
         reveal = _evidence_header_names(req.evidence_headers)
+        if self._turn.locked():
+            self._logger.info(
+                "device-api queued %s %s behind %s request(s) on this handle",
+                method,
+                path,
+                self._queued + 1,
+            )
+        self._queued += 1
+        try:
+            # A node deadline that cancels this task mid-wait leaves the lock
+            # alone and the count honest; only a taken turn needs releasing.
+            await self._turn.acquire()
+        finally:
+            self._queued -= 1
+        self._turn_holder = asyncio.current_task()
+        try:
+            return await self._attempts_in_turn(
+                method, path, payload, headers, retries, delay, timeout, reveal
+            )
+        finally:
+            self._turn_holder = None
+            self._turn.release()
+
+    async def _attempts_in_turn(
+        self,
+        method: str,
+        path: str,
+        payload: bytes | None,
+        headers: Mapping[str, str],
+        retries: int,
+        delay: float,
+        ceiling: float,
+        reveal: frozenset[str],
+    ) -> DeviceResponse:
+        """The retry loop, run while this request holds the handle's turn."""
+        timeout = ceiling
+        if not self._connected:
+            # Cancelled or closed while this request waited behind another. It
+            # never reached the wire, so the record must not say it did.
+            raise DeviceApiOperationFailure(
+                f"device-api {method} {path} not sent: the handle was "
+                "cancelled or closed while this request was queued behind another",
+                handle=self.handle_label,
+                operation="request",
+                method=method,
+                path=path,
+                ceiling=timeout,
+            )
         last_error: DeviceApiOperationFailure | None = None
         for attempt in range(retries + 1):
             if not self._connected:  # pragma: no cover - cancel races the retry loop
                 break
-            if self._in_flight:
+            if self._in_flight:  # pragma: no cover - the turn lock makes this unreachable
                 raise ValueError("one in-flight request per handle; wait or cancel")
             if attempt > 0:
                 self._logger.warning(
@@ -401,7 +485,9 @@ class DeviceApi:
 
     Suite authors do not construct this. ``request`` returns a typed response;
     HTTP 4xx is data, not an exception. The framework owns connect, retry, and
-    the closed-session halt.
+    the closed-session halt. One handle carries one request at a time:
+    ``parallel`` leaves sharing it queue in call order, so a latency measured
+    around ``request`` on a shared handle includes the wait for siblings.
     """
 
     __slots__ = ("_backend",)
@@ -431,7 +517,8 @@ class MockDeviceApi(DeviceApiInterface):
 
     ``script`` registers a response for ``METHOD path``. Unscripted paths
     return status 200 and an empty body. ``park`` holds that path until
-    ``cancel_in_flight``.
+    ``cancel_in_flight``; requests queued behind a parked one are visible
+    through ``queued`` on the base class.
     """
 
     def __init__(
