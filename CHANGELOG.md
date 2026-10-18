@@ -34,6 +34,10 @@ of feature parity: the Python Inspector is still separate work.
   and fails with `DeviceApiOperationFailure`. The `ValueError` remains only for re-entrancy.
   The `ContractViolation` banner for a non-`TestFailure` exception that escapes a node now
   names the exception instead of advising `return PASS`.
+- `.githooks/commit-msg` and `tools/attribution_check.py` (issue #149): a commit message
+  that credits an assistant is refused at commit time, and `make check` scans
+  `origin/main..HEAD` for one that got past the hook. STANDARDS.md section 7 records the
+  tenet. The trailers that reached `main` before this were stripped from the record.
 - `litmus/no-input-fallback`, the tier-3 rule the #142 ruling named and Ty ruled into
   1.0.0 on issue #144 (issue #147). Inside `configure()` of a `LitmusTest`, a `self`
   attribute and a discovery utility (`get_arp_resolver`, `use_shell`, `get_shell`,
