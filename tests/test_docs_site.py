@@ -3,8 +3,9 @@
 Issue #82: mkdocs + mkdocstrings, ``make docs`` is the local build, the gate
 fails on a broken cross-reference. Issue #138 (Ty, 2026-09-11): nothing hosts the
 site. GitLab renders ``docs/`` on ``main``, ``make docs-release`` commits the build
-under ``docs/site/`` on a release branch, and the README records the rendered
-station page as the URL that belongs on a station label.
+under ``docs/site/`` on a release branch, and the getting-started guide (where the
+README overhaul of 2026-10-11 moved it) records the rendered station page as the URL
+that belongs on a station label.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MKDOCS = ROOT / "mkdocs.yml"
 API_PAGE = ROOT / "docs" / "api.md"
 README = ROOT / "README.md"
+GUIDE = ROOT / "docs" / "getting-started.md"
 MAKEFILE = ROOT / "Makefile"
 CI = ROOT / ".gitlab-ci.yml"
 
@@ -133,15 +135,19 @@ class TestReadmeRecordsThePublishedUrl:
         assert "Typing :: Typed" in data["project"]["classifiers"]
         assert (ROOT / "src" / "litmus" / "py.typed").is_file()
 
-    def test_readme_names_the_docs_tree(self) -> None:
+    def test_readme_leads_to_the_getting_started_guide(self) -> None:
         readme = README.read_text(encoding="utf-8")
-        assert DOCS_URL in readme
-        assert "make docs-release" in readme
-
-    def test_readme_names_the_station_url(self) -> None:
-        readme = README.read_text(encoding="utf-8")
-        assert STATION_URL in readme
+        assert "(docs/getting-started.md)" in readme
         assert "docs/floor-technician.md" in readme
+
+    def test_getting_started_names_the_docs_tree(self) -> None:
+        guide = GUIDE.read_text(encoding="utf-8")
+        assert DOCS_URL in guide
+        assert "make docs-release" in guide
+
+    def test_getting_started_names_the_station_url(self) -> None:
+        guide = GUIDE.read_text(encoding="utf-8")
+        assert STATION_URL in guide
 
 
 class TestGateBuildsTheSite:
@@ -170,17 +176,12 @@ class TestGateBuildsTheSite:
         assert "mv site docs/site" in release
         assert "docs-release" not in _recipe("check", makefile)
 
-    def test_ci_has_no_pages_job_and_runs_nothing_on_push_or_tag(self) -> None:
-        # Ty, 2026-09-11 on #138: the site is not hosted, so the tag pipeline that fed
-        # Pages is gone. The one job left is the dormant scheduled soak, and the
-        # workflow lets nothing but a schedule start a pipeline.
-        ci = CI.read_text(encoding="utf-8")
-        assert not re.search(r"^pages:", ci, re.MULTILINE)
-        assert "$CI_COMMIT_TAG" not in ci
-        assert re.search(r"^nightly-soak:", ci, re.MULTILINE)
-        workflow = ci.split("nightly-soak:", 1)[0]
-        assert '- if: $CI_PIPELINE_SOURCE == "schedule"' in workflow
-        assert 'SCHEDULED_JOB == "nightly-soak"' in ci
+    def test_there_is_no_pipeline_definition(self) -> None:
+        # Ty, 2026-09-10 on #104: no CI, permanently. The 2026-09-11 rulings on #138
+        # left one dormant scheduled soak; Ty removed the file outright on 2026-10-11
+        # (0a9a8dc), so nothing on the server can start a pipeline and the bench is
+        # the only machine that runs the gate or the soak.
+        assert not CI.exists()
 
 
 class TestBuiltSite:

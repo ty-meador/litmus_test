@@ -12,7 +12,9 @@ from litmus_check.registry import RuleRegistry
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "litmus_check"
-SEEDED = FIXTURES / "seeded_suite.py"
+# The seeds are split across two files so each file's pinned line numbers stay put
+# (seeded_seams.py says why); the catalogue is covered by the pair, not by either one.
+SEEDED = (FIXTURES / "seeded_suite.py", FIXTURES / "seeded_seams.py")
 CLEAN = FIXTURES / "clean_suite.py"
 
 
@@ -20,12 +22,18 @@ def _listed_codes() -> tuple[str, ...]:
     return RuleRegistry.discover().codes()
 
 
+def _seeded_codes() -> set[str]:
+    lsp = LitmusLsp()
+    return {
+        item.code
+        for path in SEEDED
+        for item in lsp.diagnostics(path, path.read_text(encoding="utf-8"))
+    }
+
+
 class TestDiagnosticsCoverTheCatalogue:
     def test_every_listed_rule_fires_on_the_seeded_fixture(self) -> None:
-        diagnostics = LitmusLsp().diagnostics(SEEDED, SEEDED.read_text(encoding="utf-8"))
-        found = {item.code for item in diagnostics}
-
-        assert found == set(_listed_codes())
+        assert _seeded_codes() == set(_listed_codes())
 
     def test_list_rules_cli_matches_the_registry_the_adapter_uses(self) -> None:
         out = io.StringIO()
@@ -33,8 +41,7 @@ class TestDiagnosticsCoverTheCatalogue:
         listed = tuple(line.split("\t", 1)[0] for line in out.getvalue().splitlines() if line)
 
         assert listed == _listed_codes()
-        diagnostics = LitmusLsp().diagnostics(SEEDED, SEEDED.read_text(encoding="utf-8"))
-        assert {item.code for item in diagnostics} == set(listed)
+        assert _seeded_codes() == set(listed)
 
     def test_clean_fixture_is_silent(self) -> None:
         diagnostics = LitmusLsp().diagnostics(CLEAN, CLEAN.read_text(encoding="utf-8"))

@@ -81,8 +81,8 @@ class SeededGateway(LitmusTest):
         self._ip = ip
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        resolved = await utils.get_arp_resolver(mac=self._mac).resolve()
-        ip = self._ip or resolved["ip"]  # seed: litmus/no-input-fallback
+        resolution = utils.get_arp_resolver(mac=self._mac).resolve()
+        ip = self._ip or (await resolution)["ip"]  # seed: litmus/no-input-fallback
         return {"ip": ip}
 
     def build_suite(self) -> LitmusTest:

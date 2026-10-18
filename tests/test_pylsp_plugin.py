@@ -15,7 +15,9 @@ from litmus_check.pylsp_plugin import (
 )
 from litmus_check.registry import RuleRegistry
 
-SEEDED = Path(__file__).parent / "fixtures" / "litmus_check" / "seeded_suite.py"
+_FIXTURES = Path(__file__).parent / "fixtures" / "litmus_check"
+# Two seed files between them carry one seed per rule (seeded_seams.py says why).
+SEEDED = (_FIXTURES / "seeded_suite.py", _FIXTURES / "seeded_seams.py")
 
 
 class _Config:
@@ -37,8 +39,13 @@ class TestPylspHooks:
         assert plugin["enabled"] is True
 
     def test_lint_publishes_every_catalogue_rule_on_the_seeded_fixture(self) -> None:
-        document = _document(SEEDED.read_text(encoding="utf-8"), str(SEEDED))
-        diagnostics = pylsp_lint(_Config(), None, document, False)
+        diagnostics = [
+            item
+            for path in SEEDED
+            for item in pylsp_lint(
+                _Config(), None, _document(path.read_text(encoding="utf-8"), str(path)), False
+            )
+        ]
         found = {item["code"] for item in diagnostics}
 
         assert found == set(RuleRegistry.discover().codes())
