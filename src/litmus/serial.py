@@ -41,6 +41,14 @@ _BREAK_SECONDS: Final[float] = 0.25
 # still dripping output (a slow boot, a paging `dmesg`) is never called wedged,
 # and short enough that a genuine hang after the echo still earns the name.
 _FROZEN_SHARE_OF_WAIT: Final[float] = 0.5
+# Enter, sent once the wire is open. A console that printed its prompt before the
+# port opened never prints another, and pyserial flushed what was there; a getty
+# re-prompts on an empty line. After the prompt resolves, the wire is drained
+# until it has been quiet this long so a second prompt (the one the poke earned
+# from a console that was already at its prompt) is not the first exec's match.
+_POKE: Final[bytes] = b"\r"
+_SETTLE_QUIET_SECONDS: Final[float] = 0.2
+_SETTLE_LIMIT_SECONDS: Final[float] = 2.0
 _MISSING_SERIAL_EXTRA: Final[str] = (
     "SerialInterface local placement requires the 'serial' extra; "
     "install it with: pip install 'litmus[serial]'"
@@ -403,6 +411,10 @@ class SerialInterface(RemoteInterface):
         self._writer = process.stdin
 
     async def _resolve_login(self) -> None:
+        # A wire that refuses the poke is a wire the first `_expect` will name
+        # as closed; the verdict stays with the reader.
+        with contextlib.suppress(OSError, SshError):
+            await self._write_raw(_POKE)
         if self._login_prompt is not None:
             await self._expect(self._login_prompt, seconds=self._login_timeout, what="login prompt")
             await self._write_enter(self._username or "")
@@ -412,6 +424,27 @@ class SerialInterface(RemoteInterface):
             )
             await self._write_enter(self._password or "")
         await self._expect(self._prompt, seconds=self._login_timeout, what="shell prompt")
+        await self._settle()
+
+    async def _settle(self) -> None:
+        """Drain what trails the prompt until the wire has been quiet for a moment.
+
+        Bounded by `_SETTLE_LIMIT_SECONDS` so a console that never stops talking
+        (a kernel logging to the console) still hands over; its chatter is then
+        the first exec's problem, as it was before the poke.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _SETTLE_LIMIT_SECONDS
+        while True:
+            remaining = min(_SETTLE_QUIET_SECONDS, deadline - loop.time())
+            if remaining <= 0:
+                return
+            try:
+                chunk = await asyncio.wait_for(self._read_wire(), timeout=remaining)
+            except TimeoutError:
+                return
+            if not chunk:
+                return
 
     async def _expect(self, pattern: re.Pattern[str], *, seconds: float, what: str) -> None:
         outcome = await self._read_until(pattern, seconds=seconds)

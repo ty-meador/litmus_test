@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator
-from typing import Protocol
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, Protocol
 
 import pytest
 
@@ -120,44 +121,143 @@ async def http_api() -> AsyncIterator[HttpInterface]:
         await server.wait_closed()
 
 
+_COAP_URI_PATH = 11
+_COAP_BLOCK2 = 23
+_COAP_BLOCK1 = 27
+_COAP_CONTENT = 69  # 2.05
+_COAP_CHANGED = 68  # 2.04
+_COAP_CONTINUE = 95  # 2.31
+_COAP_NOT_FOUND = 132  # 4.04
+_COAP_INCOMPLETE = 136  # 4.08
+_COAP_TOO_LARGE = 141  # 4.13
+_BIG_BODY = bytes(range(256)) * 12  # 3072 bytes: three 1024-byte blocks
+type _BlockTuple = tuple[int, bool, int]
+type _Seen = tuple[str, _BlockTuple | None, _BlockTuple | None, int]
+
+
 class _CoapServer(asyncio.DatagramProtocol):
-    def __init__(self) -> None:
+    """Loopback CoAP with RFC 7959 block-wise, written apart from the client codec.
+
+    ``/missing`` is 4.04, ``/echo`` is 2.04 with the request body, ``/big`` is
+    2.05 with ``_BIG_BODY``, anything else is 2.05 with the path. Bodies past
+    ``szx`` go out as Block2; Block1 requests are spooled and, when ``refuse``
+    is set, answered 4.13 at the first block. ``misnumber`` answers Block2
+    continuations with the wrong block, the way a confused server would.
+    """
+
+    def __init__(self, *, szx: int = 6, refuse: bool = False, misnumber: bool = False) -> None:
         self.transport: asyncio.DatagramTransport | None = None
+        self.szx = szx
+        self.refuse = refuse
+        self.misnumber = misnumber
+        # (path, block1, block2, payload length) per datagram, in arrival order.
+        self.seen: list[_Seen] = []
+        self._spool: dict[tuple[object, int, str], bytearray] = {}
+        self._cache: dict[tuple[object, int, str], tuple[int, bytes]] = {}
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         assert isinstance(transport, asyncio.DatagramTransport)
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        if self.transport is None:
+        if self.transport is None or len(data) < 4:
             return
-        if len(data) < 4:
+        code, token, options, payload = _coap_parse(data)
+        path = "/" + "/".join(v.decode() for n, v in options if n == _COAP_URI_PATH)
+        block1 = _block(options, _COAP_BLOCK1)
+        block2 = _block(options, _COAP_BLOCK2)
+        self.seen.append((path, block1, block2, len(payload)))
+        key = (addr, code, path)
+        if block1 is not None:
+            num, more, szx = block1
+            if self.refuse:
+                self._reply(data, token, addr, _COAP_TOO_LARGE, b"")
+                return
+            if num == 0:
+                self._spool[key] = bytearray()
+            spool = self._spool.get(key)
+            if spool is None or num * (1 << (szx + 4)) != len(spool):
+                self._reply(data, token, addr, _COAP_INCOMPLETE, b"")
+                return
+            spool += payload
+            if more:
+                ack = _block_value(num, True, min(szx, self.szx))
+                self._reply(data, token, addr, _COAP_CONTINUE, b"", (_COAP_BLOCK1, ack))
+                return
+            payload = bytes(self._spool.pop(key))
+        if block2 is not None and block2[0] > 0:
+            cached = self._cache.get(key)
+            if cached is None:
+                self._reply(data, token, addr, _COAP_INCOMPLETE, b"")
+                return
+            status, full = cached
+        else:
+            status, full = self._render(path, payload)
+            self._cache[key] = (status, full)
+        szx = self.szx if block2 is None else min(self.szx, block2[2])
+        size = 1 << (szx + 4)
+        if len(full) <= size:
+            self._reply(data, token, addr, status, full)
             return
-        tkl = data[0] & 0x0F
-        token = data[4 : 4 + tkl]
-        path = _coap_path(data)
-        status = 132 if path == "/missing" else 69
-        body = b"" if path == "/missing" else path.encode()
-        tkl_nibble = tkl
-        header = bytes(
-            [
-                (1 << 6) | (2 << 4) | tkl_nibble,
-                status,
-                data[2],
-                data[3],
-            ]
-        )
-        reply = header + token
+        num = 0 if block2 is None else block2[0]
+        if self.misnumber and num > 0:
+            num += 1
+        chunk = full[num * size : (num + 1) * size]
+        more = (num + 1) * size < len(full)
+        self._reply(data, token, addr, status, chunk, (_COAP_BLOCK2, _block_value(num, more, szx)))
+
+    @staticmethod
+    def _render(path: str, payload: bytes) -> tuple[int, bytes]:
+        if path == "/missing":
+            return _COAP_NOT_FOUND, b""
+        if path == "/echo":
+            return _COAP_CHANGED, payload
+        if path == "/big":
+            return _COAP_CONTENT, _BIG_BODY
+        return _COAP_CONTENT, path.encode()
+
+    def _reply(
+        self,
+        request: bytes,
+        token: bytes,
+        addr: tuple[str, int],
+        status: int,
+        body: bytes,
+        option: tuple[int, bytes] | None = None,
+    ) -> None:
+        assert self.transport is not None
+        header = bytes([(1 << 6) | (2 << 4) | len(token), status, request[2], request[3]])
+        reply = bytearray(header + token)
+        if option is not None:
+            number, value = option
+            reply.append((13 << 4) | len(value))
+            reply.append(number - 13)
+            reply += value
         if body:
             reply += b"\xff" + body
-        self.transport.sendto(reply, addr)
+        self.transport.sendto(bytes(reply), addr)
 
 
-def _coap_path(datagram: bytes) -> str:
-    """Best-effort Uri-Path join for the loopback server."""
+def _block_value(num: int, more: bool, szx: int) -> bytes:
+    value = (num << 4) | (int(more) << 3) | szx
+    return value.to_bytes(max(1, (value.bit_length() + 7) // 8), "big")
+
+
+def _block(options: list[tuple[int, bytes]], number: int) -> tuple[int, bool, int] | None:
+    for option, raw in options:
+        if option == number:
+            value = int.from_bytes(raw, "big")
+            return value >> 4, bool(value & 8), value & 7
+    return None
+
+
+def _coap_parse(datagram: bytes) -> tuple[int, bytes, list[tuple[int, bytes]], bytes]:
+    """Code, token, options, payload, parsed the long way for the loopback server."""
     tkl = datagram[0] & 0x0F
+    code = datagram[1]
+    token = datagram[4 : 4 + tkl]
     rest = datagram[4 + tkl :]
-    segments: list[str] = []
+    options: list[tuple[int, bytes]] = []
     last = 0
     while rest and rest[0] != 0xFF:
         delta = (rest[0] >> 4) & 0x0F
@@ -166,16 +266,36 @@ def _coap_path(datagram: bytes) -> str:
         if delta == 13:
             delta = 13 + rest[0]
             rest = rest[1:]
+        elif delta == 14:
+            delta = 269 + int.from_bytes(rest[:2], "big")
+            rest = rest[2:]
         if length == 13:
             length = 13 + rest[0]
             rest = rest[1:]
-        option = last + delta
-        last = option
-        value = rest[:length]
+        elif length == 14:
+            length = 269 + int.from_bytes(rest[:2], "big")
+            rest = rest[2:]
+        last += delta
+        options.append((last, rest[:length]))
         rest = rest[length:]
-        if option == 11:
-            segments.append(value.decode("utf-8"))
-    return "/" + "/".join(segments) if segments else "/"
+    payload = rest[1:] if rest else b""
+    return code, token, options, payload
+
+
+@asynccontextmanager
+async def _coap_loopback(**kwargs: Any) -> AsyncGenerator[tuple[CoapInterface, _CoapServer]]:
+    loop = asyncio.get_running_loop()
+    transport, server = await loop.create_datagram_endpoint(
+        lambda: _CoapServer(**kwargs), local_addr=("127.0.0.1", 0)
+    )
+    port = transport.get_extra_info("sockname")[1]
+    backend = CoapInterface(base_url=f"coap://127.0.0.1:{port}", request_timeout=5.0)
+    await backend.connect()
+    try:
+        yield backend, server
+    finally:
+        await backend.disconnect()
+        transport.close()
 
 
 @pytest.fixture
@@ -674,3 +794,61 @@ class TestValidationAndHalt:
         finally:
             await node_runtime(utils).cancel_opened()
             transport.close()
+
+
+class TestCoapBlockwise:
+    """RFC 7959: a body past one block is still one request, one response."""
+
+    async def test_a_large_put_round_trips_whole(self) -> None:
+        payload = bytes(range(256)) * 10  # 2560 bytes: three Block1 blocks at 1024
+        async with _coap_loopback() as (api, server):
+            response = await api.request(DeviceRequest(method="PUT", path="/echo", payload=payload))
+            assert response.status == _COAP_CHANGED
+            assert response.body == payload
+            block1s = [b1 for _p, b1, _b2, _n in server.seen if b1 is not None]
+            assert block1s == [(0, True, 6), (1, True, 6), (2, False, 6)]
+            block2s = [b2 for _p, _b1, b2, _n in server.seen if b2 is not None]
+            assert block2s == [(1, False, 6), (2, False, 6)]
+            # Continuations carry no body and no Block1: that is how the
+            # reference stack keys the transfer.
+            assert [n for _p, _b1, b2, n in server.seen if b2 is not None] == [0, 0]
+
+    async def test_a_large_get_is_assembled_from_block2(self) -> None:
+        async with _coap_loopback() as (api, server):
+            response = await api.request(DeviceRequest(method="GET", path="/big"))
+            assert response.status == _COAP_CONTENT
+            assert response.body == _BIG_BODY
+            assert len(server.seen) == 3
+
+    async def test_the_server_can_shrink_the_block_size(self) -> None:
+        payload = b"x" * 1500
+        async with _coap_loopback(szx=5) as (api, server):
+            response = await api.request(DeviceRequest(method="PUT", path="/echo", payload=payload))
+            assert response.status == _COAP_CHANGED
+            assert response.body == payload
+            block1s = [b1 for _p, b1, _b2, _n in server.seen if b1 is not None]
+            # 1024 at SZX 6, then the server's 512: block 2 of 512 is byte 1024.
+            assert block1s == [(0, True, 6), (2, False, 5)]
+            block2s = [b2 for _p, _b1, b2, _n in server.seen if b2 is not None]
+            assert block2s == [(1, False, 5), (2, False, 5)]
+
+    async def test_a_body_that_fits_one_block_never_uses_block1(self) -> None:
+        payload = b"y" * 1024
+        async with _coap_loopback() as (api, server):
+            response = await api.request(DeviceRequest(method="PUT", path="/echo", payload=payload))
+            assert response.body == payload
+            assert server.seen == [("/echo", None, None, 1024)]
+
+    async def test_a_refusal_mid_block1_is_the_response(self) -> None:
+        async with _coap_loopback(refuse=True) as (api, server):
+            response = await api.request(
+                DeviceRequest(method="PUT", path="/echo", payload=b"z" * 2000)
+            )
+            assert response.status == _COAP_TOO_LARGE
+            assert response.body == b""
+            assert len(server.seen) == 1
+
+    async def test_a_block2_out_of_sequence_is_an_operation_failure(self) -> None:
+        async with _coap_loopback(misnumber=True) as (api, _server):
+            with pytest.raises(DeviceApiOperationFailure, match="lost its sequence at byte 1024"):
+                await api.request(DeviceRequest(method="GET", path="/big"))

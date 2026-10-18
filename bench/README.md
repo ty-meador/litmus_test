@@ -69,10 +69,10 @@ writing them is logged in `FRICTION.md`, which is the other deliverable of #139.
 | `make bench-rack` | `rack.py` | The four networked/serial devices under one `parallel` owner: one record for the rack. |
 | `make bench-soak` | `rack.py` x `RACK_RUNS` | The rack many times over, every run's record and log under `.soak/bench/`; where a leaked task or session shows up. A settled Fail does not stop the soak; the target is red if any run was not Pass. |
 
-As of 2026-10-16 the guest, Pi-hole, and GPIO suites are green. The serial suite is
-red at `configure()` and the CoAP suite is red on its 1500-byte echo, both on
-findings against the framework (`FRICTION.md` F1 and F15), so the rack and the soak
-are red until those are ruled on. That is the bench doing its job, not a bench bug.
+As of 2026-10-17 all five suites are green. The serial suite was red at
+`configure()` and the CoAP suite on its 1500-byte echo until the framework findings
+behind them (`FRICTION.md` F1 and F15) were fixed; the bench caught both on first
+contact with a real device, which is what it is for.
 
 `ssh_lab.py` and `pihole_lab.py` are the earlier wrappers that run the shipped
 examples unchanged except for `skip_host_verification`; `make bench-ssh` and
