@@ -161,6 +161,19 @@ class TestReferenceTable:
         }
         assert mismatched == {}
 
+    def test_the_test_utils_row_names_attributes_that_exist(self) -> None:
+        """Every method the `TestUtils` row promises (`use_serial` among them) is real."""
+        rows = [
+            line
+            for line in POLICY.read_text(encoding="utf-8").splitlines()
+            if line.startswith("| `TestUtils` |")
+        ]
+        assert len(rows) == 1
+        promised = re.findall(r"`([a-z_]+)`", rows[0].split("|")[3])
+        assert {"use_shell", "get_shell", "use_serial", "get_serial"} <= set(promised)
+        missing = [name for name in promised if not hasattr(litmus.TestUtils, name)]
+        assert missing == []
+
     def test_every_row_points_at_a_document_that_exists(self) -> None:
         in_reference = False
         for line in POLICY.read_text(encoding="utf-8").splitlines():

@@ -19,10 +19,16 @@ must pass before any implementation MR opens.
 Windows `COM` port) via `pyserial-asyncio`; it never dials a socket. `address` is
 `None` — matching `RemoteInterface`'s own note that "a UART on a local device node
 has no address" — so `connect()` rejects `host`/`port` with `TypeError`, same as
-any unaddressed transport. `endpoint` falls back to the device path.
+any unaddressed transport. `endpoint` is the device basename.
+
+A suite reaches it the way it reaches SSH: `utils.use_serial(device=...)` in
+`configure()` declares the console as the node's exec route, `utils.get_serial`
+opens one as an auxiliary endpoint, both hand back a `Shell`, and the framework
+owns the close (see "Routing" below). The transport itself is constructed only by
+the router and the self-tests.
 
 ```python
-console = SerialInterface(device="/dev/ttyUSB0", baud=115200)
+await utils.use_serial(device="/dev/ttyUSB0", baud=115200)
 ```
 
 ## Serial Prompt Contract
@@ -181,8 +187,8 @@ does. The resolution reuses the seam `RemoteInterface` already has for this:
 `hop` and `endpoint` let a transport name its place in the topology independent
 of how its bytes move ("an owned via hop and a borrowed tunnel answer alike").
 `SerialInterface` takes a `via: SshInterface | None` constructor argument,
-structurally matching `SshInterface`'s own `via` (owned only — a console has no
-tunnel to borrow): when given, the "wire" is not a local pyserial handle but the
+structurally matching `SshInterface`'s own `via` (SSH only — a console has no
+other kind of hop): when given, the "wire" is not a local pyserial handle but the
 stdin/stdout of a bridging command run **through the hop's own `exec`** and kept
 open as a long-lived remote process. Every contract above — prompt, timeouts,
 line discipline, sentinel, abort — operates on that bytestream identically;
@@ -193,30 +199,58 @@ hard-cancels that exec through the hop — never the hop's own
 connection (Exec Routing Contract: a router "must not disconnect, cancel, or
 collapse its hop").
 
+**Borrowed hops.** When the exec router supplies the hop — an inherited
+`use_shell` route, or an explicit `via=jump` `Shell` — that hop is already live
+and belongs to the router, so the console takes it through `tunnel=` rather than
+`via=`: it must arrive connected, a failed bridge leaves it standing, and
+`disconnect` closes only the bridge. `via` and `tunnel` are mutually exclusive,
+the same two channels `SshInterface` has, with the same ownership rule.
+
 **Routing line.** `route_label`'s existing chain-walk needs no new rendering
-code: placement 1 renders `exec routing: via ttyUSB0 (declared via use_shell)` —
+code: placement 1 renders `exec routing: via ttyUSB0 (declared via use_serial)` —
 no network in the picture; placement 2 renders `exec routing: via bastion ->
-console-pi -> ttyUSB0 (declared via use_shell)` — test-host-first, exactly as any
+console-pi -> ttyUSB0 (declared via use_serial)` — test-host-first, exactly as any
 SSH chain renders today.
 
-**Deferred to the implementation MR.** `use_shell`'s four documented shapes all
-resolve through `SshConnector`'s `host`/`username` request — there is no existing
-shape for handing it an already-built `SerialInterface` (a device path and baud
-rate are not a `host`/`username` pair). A fifth call shape, or a narrower
-attach-a-built-transport escape hatch, touches the Exec Routing Contract and
-needs its own `needs-sign-off` issue, separate from this transport. Until it
-lands, a suite constructs `SerialInterface` directly, holds it in ctx, and calls
-`.exec()` explicitly — fully usable standalone; only the `use_shell(host=...)`
-convenience is deferred.
+## Routing: `use_serial` and `get_serial`
+
+`TestUtils.use_serial` and `TestUtils.get_serial` are `use_shell` and `get_shell`
+for a device path. A device path and baud rate are not a `host`/`username` pair,
+so the console has its own request (`SerialOpenRequest`) and its own connector seam
+(`SerialConnector`, the mirror of `SshConnector`), and the router treats what comes
+back exactly as it treats an SSH remote: `ExecRouter.for_ssh` attaches it, the
+`opened` set records it, `disconnect_opened` closes it after the post-cleanup
+survey, and the run-level abort sweep hard-closes it on an operator Ctrl-C. The
+parameters are the transport's constructor arguments (`device`, `baud`, `prompt`,
+`login_prompt`, `password_prompt`, `username`, `password`, `login_timeout`,
+`prompt_timeout`, `bridge_command`, `output_budget`) plus the routing trio `via`,
+`inherit`, `propagate`.
+
+Two shapes, not four: `use_serial(device=...)` opens and binds; `use_serial()` with
+no arguments reads the active route. The policy-only shapes (`inherit=False`,
+`propagate=False`) stay with `use_shell`, and `use_serial` refuses them with a
+`TypeError` that says so. The declaring form is admitted only while `configure()`
+runs, under the same `ContractViolation` as `use_shell`, and `litmus-check`'s
+`litmus/shell-in-configure` reads `use_serial(...)` with arguments the same way.
+`via` must resolve to an SSH hop (a `Shell` from `use_shell` or `get_shell`): a
+console has no other tunnel to borrow, and the connector names `use_serial` in the
+`TypeError` when handed anything else. A local `Shell` as `via` is a direct open on
+the test host, as it is for `use_shell`.
+
+`bench/suites/serial_console.py` is the shape in use: one `use_serial` in
+`configure()`, `utils.exec` in every claim, no handle in ctx, no `cleanup()`.
 
 ## Packaging
 
 `pyserial-asyncio` is checked for GPL-2.0 compatibility at implementation time and
 lands as an optional extra: `pip install litmus[serial]`. Core `litmus` gains no
-new dependency and `import litmus` never imports `litmus.serial`. `SerialInterface`
+new dependency and `import litmus` never imports `litmus.serial`: the default
+connector imports it on the first `use_serial` / `get_serial`, and a local open
+without the extra raises `ModuleNotFoundError` naming the install. `SerialInterface`
 stays off `litmus.__all__`, same policy as `RemoteInterface`, `SshInterface`, and
-`JunitXml` today ("stay private by test-pinned ruling") — self-tests and the
-transport-contract suite import the module directly.
+`JunitXml` today ("stay private by test-pinned ruling") — the promised way to a
+console is `use_serial` / `get_serial`; self-tests and the transport-contract suite
+import the module directly.
 
 ## Conformance: the shared transport-contract suite
 

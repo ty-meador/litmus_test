@@ -573,8 +573,10 @@ class ChildBoundary:
             if policy.halts_run_on_error:
                 raise self._as_integration_failure(slot, error) from error
             # Suite code raised something that is not a verdict. It lands in Fail, but
-            # banners itself so nobody mistakes a broken test for a broken unit.
-            violation = ContractViolation(self._node, cause=error)
+            # banners itself so nobody mistakes a broken test for a broken unit. The
+            # banner names the exception: "return PASS" is not the fix for a stray
+            # ValueError, and the cause alone is buried in the record.
+            violation = ContractViolation.escaped(self._node, error)
             if not policy.swallows_errors:
                 # The swallow path logs what it discards; logging here too would
                 # report one event as two.

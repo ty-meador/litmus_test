@@ -468,6 +468,87 @@ class TestVia:
             await listener.aclose()
 
 
+class TestTunnel:
+    """A borrowed hop, the exec router's channel: handed over live, left standing."""
+
+    async def test_exec_through_a_borrowed_ssh_hop(self) -> None:
+        listener = await LoopbackSshd.start()
+        hop = SshInterface(
+            host="127.0.0.1",
+            port=listener.port,
+            username=listener.username,
+            password=listener.password,
+            skip_host_verification=True,
+        )
+        transport = SerialInterface(
+            device="/dev/ttyUSB0",
+            tunnel=hop,
+            bridge_command=SERIAL_BRIDGE_COMMAND,
+        )
+        try:
+            await hop.connect()
+            await transport.connect()
+            result = await transport.exec("uname")
+            assert result == ExecResult(stdout="uname", stderr="", exit_code=0)
+            assert transport.hop is hop
+            assert "127.0.0.1" in transport.connect_provenance
+            assert transport.route_label.endswith("ttyUSB0")
+            await transport.disconnect()
+            assert hop.connected is True
+            assert (await hop.exec("uname")).exit_code == 0
+        finally:
+            await transport.disconnect()
+            await hop.disconnect()
+            await listener.aclose()
+
+    async def test_an_unconnected_tunnel_is_rejected(self) -> None:
+        hop = SshInterface(
+            host="127.0.0.1",
+            username="ops",
+            password="jump",
+            skip_host_verification=True,
+        )
+        transport = SerialInterface(device="/dev/ttyUSB0", tunnel=hop)
+
+        with pytest.raises(ConnectionError, match="handed over connected"):
+            await transport.connect()
+        assert transport.connected is False
+
+    async def test_a_dead_bridge_leaves_the_borrowed_hop_standing(self) -> None:
+        listener = await LoopbackSshd.start()
+        hop = SshInterface(
+            host="127.0.0.1",
+            port=listener.port,
+            username=listener.username,
+            password=listener.password,
+            skip_host_verification=True,
+        )
+        transport = SerialInterface(
+            device="/dev/ttyUSB0",
+            tunnel=hop,
+            bridge_command="not-a-console",
+            login_timeout=0.5,
+        )
+        try:
+            await hop.connect()
+            with pytest.raises(ConnectionError, match=r"closed|timed out"):
+                await transport.connect()
+            assert transport.connected is False
+            assert hop.connected is True
+        finally:
+            await hop.disconnect()
+            await listener.aclose()
+
+    def test_via_and_tunnel_are_mutually_exclusive(self) -> None:
+        hop = SshInterface(host="127.0.0.1", username="ops", skip_host_verification=True)
+        with pytest.raises(TypeError, match="mutually exclusive"):
+            SerialInterface(device="/dev/ttyUSB0", via=hop, tunnel=hop)
+
+    def test_tunnel_must_be_ssh(self) -> None:
+        with pytest.raises(TypeError, match="SshInterface"):
+            SerialInterface(device="/dev/ttyUSB0", tunnel="not-an-ssh")  # type: ignore[arg-type]
+
+
 class TestMissingExtra:
     async def test_local_connect_names_the_extra_when_pyserial_is_missing(
         self, monkeypatch: pytest.MonkeyPatch

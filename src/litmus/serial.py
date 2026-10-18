@@ -1,13 +1,16 @@
 """Serial/UART console transport, a `RemoteInterface` peer of SSH.
 
-Suite authors construct this directly until a `use_shell` shape exists for a
-device path (deferred on #91). Self-tests and the transport-contract suite
-import the module directly. Not on the public surface.
+Suite authors do not construct this. `ExecRouting.use_serial` / `get_serial`
+open it by device path and hand back a `Shell`, the way `use_shell` does for
+SSH; the class itself stays off the public surface like `SshInterface`.
+Self-tests and the transport-contract suite import the module directly.
 
 Two placements, one contract: a local device node via `pyserial-asyncio`, or
-the same byte stream through an owned SSH `via` hop. `pyserial-asyncio` is an
-optional extra (`litmus[serial]`); importing this module does not import it,
-and `import litmus` never imports this module. Via placement talks SSH only.
+the same byte stream through an SSH hop — owned (`via`) when the console
+brings the hop up itself, borrowed (`tunnel`) when the exec router already did.
+`pyserial-asyncio` is an optional extra (`litmus[serial]`); importing this
+module does not import it, and `import litmus` never imports this module. Via
+placement talks SSH only.
 """
 
 from __future__ import annotations
@@ -219,6 +222,9 @@ class SerialInterface(RemoteInterface):
         lifecycle.
       - A `via` hop is owned: it must arrive unconnected, `connect` brings it
         up, a failed connect collapses it, `disconnect` tears it down.
+      - A `tunnel` hop is borrowed, the exec router's channel: it must arrive
+        connected, a failed connect leaves it standing, and `disconnect` closes
+        only the bridge. `via` and `tunnel` are mutually exclusive.
     """
 
     def __init__(
@@ -226,7 +232,7 @@ class SerialInterface(RemoteInterface):
         *,
         device: str,
         baud: int = 115200,
-        prompt: str = _DEFAULT_PROMPT,
+        prompt: str | None = None,
         login_prompt: str | None = None,
         password_prompt: str | None = None,
         username: str | None = None,
@@ -234,16 +240,30 @@ class SerialInterface(RemoteInterface):
         login_timeout: float = 10.0,
         prompt_timeout: float = 30.0,
         via: SshInterface | None = None,
+        tunnel: SshInterface | None = None,
         bridge_command: str | None = None,
         output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
     ) -> None:
+        """Capture the line settings; nothing is opened until `connect`.
+
+        `prompt` is a regex matched against the tail of decoded output; `None`
+        is a bare POSIX prompt. `via` is an upstream SSH hop this console brings
+        up and owns. `tunnel` is a borrowed one, handed over connected by the exec
+        router and owned by whoever brought it up.
+        """
         if via is not None and not isinstance(via, SshInterface):  # pyright: ignore[reportUnnecessaryIsInstance]
-            msg = "via must be an SshInterface; a console has no tunnel to borrow"
+            msg = "via must be an SshInterface; a console has no other hop to own"
+            raise TypeError(msg)
+        if tunnel is not None and not isinstance(tunnel, SshInterface):  # pyright: ignore[reportUnnecessaryIsInstance]
+            msg = "tunnel must be an SshInterface; a console has no other hop to borrow"
+            raise TypeError(msg)
+        if via is not None and tunnel is not None:
+            msg = "via and tunnel are mutually exclusive: own the hop or borrow it, never both"
             raise TypeError(msg)
         super().__init__()
         self._device = _require_non_empty_str("device", device)
         self._baud = _require_positive_int("baud", baud)
-        self._prompt = _compile_prompt("prompt", prompt)
+        self._prompt = _compile_prompt("prompt", _DEFAULT_PROMPT if prompt is None else prompt)
         self._login_prompt = (
             None if login_prompt is None else _compile_prompt("login_prompt", login_prompt)
         )
@@ -263,6 +283,7 @@ class SerialInterface(RemoteInterface):
         self._login_timeout = _require_finite_seconds("login_timeout", login_timeout)
         self._prompt_timeout = _require_finite_seconds("prompt_timeout", prompt_timeout)
         self._via = via
+        self._tunnel = tunnel
         self._bridge_command = (
             _require_non_empty_str("bridge_command", bridge_command)
             if bridge_command is not None
@@ -301,8 +322,10 @@ class SerialInterface(RemoteInterface):
 
     @property
     def hop(self) -> SshInterface | None:
-        """The owned SSH hop this console is reached through, if any."""
-        return self._via
+        """The SSH hop this console is reached through, owned (`via`) or borrowed."""
+        if self._via is not None:
+            return self._via
+        return self._tunnel
 
     @property
     def connect_provenance(self) -> str:
@@ -317,18 +340,26 @@ class SerialInterface(RemoteInterface):
 
     async def _connect(self) -> None:
         via = self._via
+        tunnel = self._tunnel
         if via is not None:
             if via.connected:
                 msg = "via hop is owned by this interface and must be handed over unconnected"
                 raise ConnectionError(msg)
             await via.connect()
+        if tunnel is not None and not tunnel.connected:
+            msg = "tunnel hop is borrowed and must be handed over connected"
+            raise ConnectionError(msg)
         try:
             if via is not None:
-                await self._open_via(via)
+                await self._open_via(via, "via")
+            elif tunnel is not None:
+                await self._open_via(tunnel, "tunnel")
             else:
                 await self._open_local()
             await self._resolve_login()
         except BaseException:
+            # The owned via is collapsed on failure; the borrowed tunnel is
+            # left standing for its owner, exactly as `SshInterface` does.
             await self._close_wire()
             if via is not None:
                 with contextlib.suppress(Exception):
@@ -403,8 +434,8 @@ class SerialInterface(RemoteInterface):
         transport = writer.transport
         self._serial = getattr(transport, "serial", None)
 
-    async def _open_via(self, via: SshInterface) -> None:
-        connection = SshInterface._live_hop_connection(via, "via")  # pyright: ignore[reportPrivateUsage]
+    async def _open_via(self, hop: SshInterface, role: str) -> None:
+        connection = SshInterface._live_hop_connection(hop, role)  # pyright: ignore[reportPrivateUsage]
         process = await connection.create_process(self._bridge_command, encoding=None)
         self._process = process
         self._reader = process.stdout

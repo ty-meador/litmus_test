@@ -2,22 +2,34 @@
 
 import ast
 import asyncio
+import contextlib
 import gc
 import inspect
+import os
 import shlex
 import sys
 import time
 import tracemalloc
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol, cast
 
 import pytest
+from tests.fake_console import open_pty_console
 from tests.mock_connector import ConnectorInstaller
 
 import litmus
-from litmus import PASS, ExecResult, LitmusTest, RunResult, TestFailure, TestUtils, Verdict
+from litmus import (
+    PASS,
+    ContractViolation,
+    ExecResult,
+    LitmusTest,
+    RunResult,
+    TestFailure,
+    TestUtils,
+    Verdict,
+)
 from litmus.lifecycle import Outcome, State
 from litmus.mock import MockTransport
 from litmus.remote import RemoteInterface
@@ -462,6 +474,122 @@ class TestUtilsExecNeverThrows:
 
         assert result.exit_code == -1
         assert "not connected" in result.stderr
+
+
+@contextlib.contextmanager
+def _slave_held_open(device: str) -> Generator[None]:
+    """Keep the pty slave open while a run sets up, so the fake console sees no EOF.
+
+    A pty master reads EIO while no slave is open; the self-test console takes that
+    as the session's end. The transport opens the slave itself, but only once
+    ``configure()`` runs, after ``run()`` has laid out the artifact directory.
+    """
+    fd = os.open(device, os.O_RDWR | os.O_NOCTTY)
+    try:
+        yield
+    finally:
+        os.close(fd)
+
+
+class TestUseSerial:
+    """The console is a route: `use_serial` in configure, `utils.exec` in every claim."""
+
+    async def test_declaring_form_binds_utils_exec_to_the_console(self) -> None:
+        async with open_pty_console() as (device, _console):
+            utils = TestUtils()
+            # These cases are about routing; open the configure-only window by hand.
+            node_runtime(utils).enter_configure()
+            shell = await utils.use_serial(device=device, prompt_timeout=5.0)
+            try:
+                result = await utils.exec("uname")
+                assert result == ExecResult(stdout="uname", stderr="", exit_code=0)
+                assert utils.exec_route == Path(device).name
+                assert shell.ssh is node_runtime(utils).routing.opened[0]
+            finally:
+                await node_runtime(utils).disconnect_opened()
+        assert shell.ssh is not None
+        assert shell.ssh.connected is False
+
+    async def test_bare_form_reads_the_active_route_and_the_framework_closes_the_port(
+        self,
+    ) -> None:
+        opened: list[RemoteInterface] = []
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str, device: str) -> None:
+                super().__init__(name=name)
+                self._device = device
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                shell = await utils.use_serial(device=self._device, prompt_timeout=5.0)
+                assert shell.ssh is not None
+                opened.append(shell.ssh)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("console", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                shell = await utils.use_serial()
+                result = await utils.exec("fail")
+                if shell.ssh is opened[0] and result.exit_code == 1 and result.stdout == "nope":
+                    return PASS
+                raise TestFailure("console not routed", "exit 1, nope", result)
+
+        async with open_pty_console() as (device, _console):
+            with _slave_held_open(device):
+                outcome = await Suite(name="board", device=device).run()
+
+        assert outcome.state is State.PASS
+        assert opened[0].connected is False
+
+    async def test_declaring_outside_configure_is_a_contract_violation(self) -> None:
+        class Suite(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.test("console", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                await utils.use_serial(device="/dev/ttyUSB0")
+                return PASS
+
+        outcome = await Suite(name="board").run()
+
+        assert outcome.state is State.FAIL
+        failure = outcome.summary_tree.children[0].failure
+        assert isinstance(failure, ContractViolation)
+        assert failure.is_bug
+        assert "use_serial declared a route outside configure()" in failure.fail_message
+        assert "call use_serial() with no arguments" in failure.fail_message
+
+    async def test_policy_only_shapes_are_refused_ahead_of_the_guard(self) -> None:
+        utils = TestUtils()
+        with pytest.raises(TypeError, match="use_shell"):
+            await utils.use_serial(inherit=False)
+
+    async def test_get_serial_does_not_change_the_routing_line(self) -> None:
+        async with open_pty_console() as (device, _console):
+            utils = TestUtils()
+            node_runtime(utils).enter_configure()
+            aux = await utils.get_serial(device=device, prompt_timeout=5.0)
+            try:
+                assert utils.exec_route == "local"
+                assert node_runtime(utils).routing.routing_line() == "local"
+                assert (await aux.exec("uname")).stdout == "uname"
+                assert node_runtime(utils).routing.opened == (aux.ssh,)
+            finally:
+                await node_runtime(utils).disconnect_opened()
+
+    async def test_the_run_level_abort_sweep_reaches_the_port(self) -> None:
+        async with open_pty_console() as (device, _console):
+            utils = TestUtils()
+            node_runtime(utils).enter_configure()
+            shell = await utils.use_serial(device=device, prompt_timeout=5.0)
+            assert shell.ssh is not None
+
+            await node_runtime(utils).transports.cancel_in_flight()
+
+            assert shell.ssh.connected is False
+            assert (await utils.exec("uname")).exit_code == -1
 
 
 class _EnvSuite(LitmusTest):

@@ -1,8 +1,9 @@
 """Topology-aware exec routing.
 
 `use_shell` answers "where does `utils.exec` go". `get_shell` answers "what other
-endpoints does this test touch" and never writes the router. Children inherit a
-route through `RouterRunParams`, never through ctx.
+endpoints does this test touch" and never writes the router. `use_serial` and
+`get_serial` are the same two answers for a console reached by its device path.
+Children inherit a route through `RouterRunParams`, never through ctx.
 
 Suite authors do not import this module. `TestUtils` owns one `ExecRouting` per node;
 self-tests import the policy machinery directly.
@@ -29,12 +30,12 @@ type RouterProvenance = Literal["local", "inherited", "declared", "isolated"]
 LOGGER = logging.getLogger(__name__)
 
 _ROUTING_REASONS: dict[RouterProvenance, str] = {
-    "declared": "declared via use_shell",
     "inherited": "inherited from parent",
     "isolated": "declared via use_shell(inherit=False)",
 }
 """Why the active route is where it is, in the words of the call that put it there.
-A node that never declared one has no reason to give, so `"local"` is deliberately
+A declared route names its declarer (`use_shell` or `use_serial`) at render time. A
+node that never declared one has no reason to give, so `"local"` is deliberately
 absent and renders bare."""
 
 
@@ -116,7 +117,11 @@ class SshConnector:
         """Reject a non-SSH or dead via; open an `SshInterface` borrowing the hop."""
         via = request.via
         if via is not None and not isinstance(via, SshInterface):
-            msg = "SshConnector via must be an SshInterface; pass an SshInterface hop"
+            msg = (
+                f"use_shell / get_shell via must be an SSH hop; got {via.endpoint} "
+                f"({type(via).__name__}), which cannot carry a tunnel. Pass via= an SSH "
+                "Shell, or inherit=False to open this endpoint directly"
+            )
             raise TypeError(msg)
         if via is not None and not via.connected:
             msg = (
@@ -139,6 +144,88 @@ class SshConnector:
         )
         await ssh.connect()
         return ssh
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class SerialOpenRequest:
+    """What a connector needs to open a console for `use_serial` / `get_serial`.
+
+    `prompt=None` is the transport's default, a bare POSIX prompt. `output_budget=None`
+    is the run's shared ceiling. `via` is the resolved hop, already live, or `None`
+    for a device node on the test host.
+    """
+
+    device: str
+    baud: int = 115200
+    prompt: str | None = None
+    login_prompt: str | None = None
+    password_prompt: str | None = None
+    username: str | None = None
+    password: str | None = None
+    login_timeout: float = 10.0
+    prompt_timeout: float = 30.0
+    bridge_command: str | None = None
+    output_budget: int | None = None
+    via: RemoteInterface | None = None
+
+
+class ConsoleConnector(Protocol):
+    """Opens a console for `use_serial` / `get_serial`."""
+
+    async def open(self, request: SerialOpenRequest) -> RemoteInterface:
+        """Connect and return the console. The caller owns disconnect."""
+        ...
+
+
+@final
+class SerialConnector:
+    """Default console connector: `SerialInterface`, connected before return.
+
+    The mirror of `SshConnector` for a device path. A hop the router resolves is
+    already live, so the console *borrows* it through the transport's `tunnel=`
+    channel and never claims ownership via `via=`; teardown of the hop stays with
+    the router. `litmus.serial` is imported on first open, not at module import,
+    so `import litmus` never pulls in the serial extra.
+    """
+
+    def __init__(self, *, output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET) -> None:
+        self._output_budget = output_budget
+
+    async def open(self, request: SerialOpenRequest) -> RemoteInterface:
+        """Reject a non-SSH or dead via; open a `SerialInterface` borrowing the hop."""
+        from litmus.serial import SerialInterface
+
+        via = request.via
+        if via is not None and not isinstance(via, SshInterface):
+            msg = (
+                "use_serial / get_serial via must be an SSH hop (a Shell from use_shell "
+                "or get_shell); a console has no other tunnel to borrow"
+            )
+            raise TypeError(msg)
+        if via is not None and not via.connected:
+            msg = (
+                "routed via hop must be live at open time; "
+                "bring the hop up before passing it as via"
+            )
+            raise ConnectionError(msg)
+        budget = self._output_budget if request.output_budget is None else request.output_budget
+        console = SerialInterface(
+            device=request.device,
+            baud=request.baud,
+            prompt=request.prompt,
+            login_prompt=request.login_prompt,
+            password_prompt=request.password_prompt,
+            username=request.username,
+            password=request.password,
+            login_timeout=request.login_timeout,
+            prompt_timeout=request.prompt_timeout,
+            tunnel=via,
+            bridge_command=request.bridge_command,
+            output_budget=budget,
+        )
+        await console.connect()
+        return console
 
 
 @final
@@ -178,7 +265,11 @@ class ExecRouter:
 
     @classmethod
     def for_ssh(cls, ssh: RemoteInterface) -> ExecRouter:
-        """Commands run through `ssh`. Label names the hop this route attaches to."""
+        """Commands run through `ssh`. Label names the hop this route attaches to.
+
+        Any `RemoteInterface` qualifies: a serial console declared by `use_serial`
+        attaches the same way, and the label then names its device.
+        """
         return cls(f"via {ssh.endpoint}", ssh, ssh.exec)
 
 
@@ -216,16 +307,39 @@ def require_connection_pair(host: str | None, username: str | None) -> None:
         raise TypeError(msg)
 
 
+def require_console_form(
+    device: str | None, *, via: Shell | None, inherit: bool, propagate: bool
+) -> None:
+    """Refuse a `use_serial` that shapes the route without naming a console.
+
+    `use_serial` has two shapes: `device=` opens and binds, no arguments reads. The
+    policy-only shapes (`inherit=False`, `propagate=False`, a bare `via`) belong to
+    `use_shell`; shared by ``ExecRouting`` and ``TestUtils`` so the ``TypeError`` is
+    raised wherever the call is made, ahead of the configure-only guard.
+    """
+    if device is not None:
+        return
+    if via is not None or not inherit or not propagate:
+        msg = (
+            "use_serial shapes the route only with device=; call use_serial() with no "
+            "arguments to read the active route, or use_shell(inherit=..., propagate=...) "
+            "for a policy-only declaration"
+        )
+        raise TypeError(msg)
+
+
 @final
 class ExecRouting:
-    """Per-node exec policy. The only writer of the router is `use_shell`.
+    """Per-node exec policy. The only writers of the router are `use_shell` and `use_serial`.
 
-    `get_shell` may open extra endpoints and may *read* `inherit` to pick a
-    tunnel. It never assigns `_router` or `_propagate`.
+    `get_shell` and `get_serial` may open extra endpoints and may *read* `inherit`
+    to pick a tunnel. They never assign `_router` or `_propagate`.
     """
 
     __slots__ = (
         "_connector",
+        "_console_connector",
+        "_declarer",
         "_local_exec",
         "_logger",
         "_on_open",
@@ -241,6 +355,7 @@ class ExecRouting:
         *,
         inherited: ExecRouter | None = None,
         connector: ShellConnector | None = None,
+        console_connector: ConsoleConnector | None = None,
         logger: logging.Logger | logging.LoggerAdapter[logging.Logger] | None = None,
         on_open: TransportOpened | None = None,
         output_budget: int = DEFAULT_EXEC_OUTPUT_BUDGET,
@@ -251,17 +366,21 @@ class ExecRouting:
             local_exec: Where `exec` lands before any topology is declared.
             inherited: A parent's route, handed down through `RouterRunParams`.
             connector: Opens connection-form shells. Defaults to real SSH.
+            console_connector: Opens consoles for `use_serial` / `get_serial`.
+                Defaults to the real serial transport.
             logger: Where connect provenance is recorded. A node's scoped adapter
                 keeps the line in that node's evidence trail.
             on_open: Run-level observer for every successfully opened transport.
-            output_budget: Ceiling applied to SSH sessions this node opens. The
-                local executor is constructed with the same number by `TestUtils`.
+            output_budget: Ceiling applied to SSH sessions and consoles this node
+                opens. The local executor is constructed with the same number by
+                `TestUtils`.
         """
         self._local_exec = local_exec
         self._logger = logger if logger is not None else LOGGER
         self._on_open = on_open
         self._router = inherited
         self._propagate = True
+        self._declarer = "use_shell"
         if inherited is not None:
             self._provenance: RouterProvenance = "inherited"
         else:
@@ -270,6 +389,10 @@ class ExecRouting:
             self._connector: ShellConnector = connector
         else:
             self._connector = SshConnector(output_budget=output_budget)
+        if console_connector is not None:
+            self._console_connector: ConsoleConnector = console_connector
+        else:
+            self._console_connector = SerialConnector(output_budget=output_budget)
         self._opened: list[RemoteInterface] = []
 
     @property
@@ -383,8 +506,7 @@ class ExecRouting:
         if shell.ssh is None:
             msg = "use_shell connection form did not yield a remote interface"
             raise RuntimeError(msg)
-        self._router = ExecRouter.for_ssh(shell.ssh)
-        self._provenance = "declared"
+        self._declare(shell.ssh, "use_shell")
         return shell
 
     async def get_shell(
@@ -423,14 +545,105 @@ class ExecRouting:
             via=tunnel,
         )
         remote = await self._connector.open(request)
-        self._opened.append(remote)
-        if self._on_open is not None:
-            self._on_open(remote)
-        # Logged on the way up, not on the way in: what is recorded is a connection
-        # that exists, with the credential path the transport actually selected.
-        for line in remote.provenance_lines:
-            self._logger.info("%s", line)
-        return Shell(remote.exec, remote)
+        return self._admit(remote)
+
+    async def use_serial(
+        self,
+        *,
+        device: str | None = None,
+        baud: int = 115200,
+        prompt: str | None = None,
+        login_prompt: str | None = None,
+        password_prompt: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        login_timeout: float = 10.0,
+        prompt_timeout: float = 30.0,
+        bridge_command: str | None = None,
+        output_budget: int | None = None,
+        via: Shell | None = None,
+        inherit: bool = True,
+        propagate: bool = True,
+    ) -> Shell:
+        """Declare this node's exec policy through a console, or read the active route.
+
+        Two call shapes:
+          - `use_serial(device=...)` — open the console and bind exec to it. With
+            `via=jump` (or an inherited SSH route and `inherit=True`) the device path
+            names a node on the hop box and the bytes bridge through that hop.
+          - `use_serial()` — return the active Shell (inherited or local).
+
+        The policy-only shapes belong to `use_shell`; `require_console_form` refuses
+        them here. `propagate=False` stops this node's router from flowing to children.
+        """
+        require_console_form(device, via=via, inherit=inherit, propagate=propagate)
+        if device is None:
+            return self._active_shell()
+        self._propagate = propagate
+        shell = await self.get_serial(
+            device=device,
+            baud=baud,
+            prompt=prompt,
+            login_prompt=login_prompt,
+            password_prompt=password_prompt,
+            username=username,
+            password=password,
+            login_timeout=login_timeout,
+            prompt_timeout=prompt_timeout,
+            bridge_command=bridge_command,
+            output_budget=output_budget,
+            via=via,
+            inherit=inherit,
+            propagate=propagate,
+        )
+        if shell.ssh is None:
+            msg = "use_serial did not yield a remote interface"
+            raise RuntimeError(msg)
+        self._declare(shell.ssh, "use_serial")
+        return shell
+
+    async def get_serial(
+        self,
+        *,
+        device: str,
+        baud: int = 115200,
+        prompt: str | None = None,
+        login_prompt: str | None = None,
+        password_prompt: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        login_timeout: float = 10.0,
+        prompt_timeout: float = 30.0,
+        bridge_command: str | None = None,
+        output_budget: int | None = None,
+        via: Shell | None = None,
+        inherit: bool = True,
+        propagate: bool = True,
+    ) -> Shell:
+        """Open a console as an extra endpoint. Does not write the router or propagate flag.
+
+        `inherit` picks the auto-tunnel default when `via` is omitted, so a console
+        node under an SSH route is opened on the hop box. `propagate` is a documented
+        no-op: this method does not touch it.
+        """
+        del propagate
+        tunnel = self._resolve_tunnel(via=via, inherit=inherit)
+        request = SerialOpenRequest(
+            device=device,
+            baud=baud,
+            prompt=prompt,
+            login_prompt=login_prompt,
+            password_prompt=password_prompt,
+            username=username,
+            password=password,
+            login_timeout=login_timeout,
+            prompt_timeout=prompt_timeout,
+            bridge_command=bridge_command,
+            output_budget=output_budget,
+            via=tunnel,
+        )
+        remote = await self._console_connector.open(request)
+        return self._admit(remote)
 
     def routing_line(self) -> str:
         """Where this node's `exec` lands, and why it lands there.
@@ -442,10 +655,29 @@ class ExecRouting:
         where = "local"
         if router is not None and router.ssh is not None:
             where = f"via {router.ssh.route_label}"
+        if self._provenance == "declared":
+            return f"{where} (declared via {self._declarer})"
         reason = _ROUTING_REASONS.get(self._provenance)
         if reason is None:
             return where
         return f"{where} ({reason})"
+
+    def _declare(self, remote: RemoteInterface, declarer: str) -> None:
+        """Bind exec to `remote` and remember which call said so, for the routing line."""
+        self._router = ExecRouter.for_ssh(remote)
+        self._provenance = "declared"
+        self._declarer = declarer
+
+    def _admit(self, remote: RemoteInterface) -> Shell:
+        """Record an opened transport: this node's sweep, the run's sweep, and the log."""
+        self._opened.append(remote)
+        if self._on_open is not None:
+            self._on_open(remote)
+        # Logged on the way up, not on the way in: what is recorded is a connection
+        # that exists, with the credential path the transport actually selected.
+        for line in remote.provenance_lines:
+            self._logger.info("%s", line)
+        return Shell(remote.exec, remote)
 
     def _active_shell(self) -> Shell:
         router = self._router

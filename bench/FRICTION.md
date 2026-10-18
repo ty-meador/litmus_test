@@ -43,7 +43,7 @@ the park lasted until SIGTERM; in-process tests tore the console down right afte
 the cancel and never saw it. Bytes are now pumped by their own task, and a self-test
 reconnects after a cancel.
 
-## F2. No `use_serial` / `get_serial`: the console cannot be a route (gap, high)
+## F2. No `use_serial` / `get_serial`: the console cannot be a route (gap, high) — closed 2026-10-17
 
 **Wanted:** `await utils.use_serial(device=...)` in `configure()`, then `utils.exec`
 in every claim, as `use_shell` lets an SSH suite do.
@@ -58,6 +58,19 @@ device through `utils.exec` does not work for a serial device at all.
 
 **Close it:** `use_serial(...)` / `get_serial(...)` on `TestUtils` in the shape of
 `use_shell` / `get_shell`, `SerialInterface` promoted to the promised surface.
+
+**Closed:** `use_serial(...)` / `get_serial(...)` on `TestUtils`, the two shapes of
+`use_shell` / `get_shell` for a device path. `use_serial(device=...)` in `configure()`
+opens the console and binds `utils.exec` to it for the node and its descendants;
+`use_serial()` reads the active route; `get_serial(device=...)` opens an auxiliary
+console without touching the router. The console joins the node's opened set like an
+SSH session, so the post-cleanup sweep and the run-level abort sweep close the port.
+Behind a hop the console borrows the router's live SSH session
+(`SerialInterface(tunnel=...)`) rather than owning one; the policy-only shapes
+(`inherit=False`, `propagate=False`, a bare `via`) stay with `use_shell`.
+`litmus/shell-in-configure` and `litmus/no-input-fallback` know the new names. The
+suite now has no transport import, no handle in ctx, and no `cleanup()`;
+`make bench-suite-serial` is green against the pty pair.
 
 ## F3. Cleanup after a failed `configure()` sees an empty ctx (idiom, medium)
 
@@ -138,7 +151,7 @@ the gap to the record, where the FT reads it, without lowering the NaN guard.
 refuses a module with two suites. The Makefile says `::PiHole`. A module-level
 `__suite__ = PiHole` the runner honours would let the file name the default.
 
-## F13. One in-flight request per `DeviceApi` handle, and `parallel` does not know (gap, high)
+## F13. One in-flight request per `DeviceApi` handle, and `parallel` does not know (gap, high) — closed 2026-10-17
 
 **Wanted:** `configure()` opens one CoAP session; five independent echo leaves under
 a `parallel` each make one request on it.
@@ -157,6 +170,19 @@ queue), or `request()` on a busy handle raises `DeviceApiOperationFailure` so th
 existing rule catches it, or the idiom page says one handle per concurrent leaf. And
 the banner for an escaped non-`TestFailure` should name the exception, not advise
 returning `PASS`.
+
+**Closed:** the handle serialises. `DeviceApiInterface.request` takes a per-handle turn
+(an `asyncio.Lock`) around the whole retry loop, so `parallel` leaves sharing the session
+`configure()` opened queue in call order; a queued request logs the depth, its `timeout`
+bounds only its own transfer, and one still waiting when the handle is cancelled or
+closed is never sent and fails with `DeviceApiOperationFailure`, which
+`litmus/model-resolution-failure` already covers. The one-request `ValueError` survives
+only for re-entrancy (a backend calling `request` on its own handle mid-attempt), where
+waiting would deadlock. The banner for a non-`TestFailure` exception that escapes a node
+now names it (`ValueError escaped the node: ...; a developer bug — catch it and raise
+TestFailure, or fix the call`) instead of advising `PASS`. The suite's echo leaves are a
+`parallel` again and `make bench-suite-coap` is green; `docs/hil/device-api.md` and the
+idioms page say what a shared handle does to a latency measurement.
 
 ## F14. An evidence key may not reuse a ctx key, and only the contract page says so (idiom, medium)
 

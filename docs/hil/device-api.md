@@ -94,10 +94,20 @@ request.
   timeout are the operational exceptions; a well-formed error response is
   not one of them.
 - `request(req) -> DeviceResponse` performs one application-level attempt
-  (see retries below). One in-flight request per handle. A second
-  `request` is refused while one is active; it is not queued to surprise
-  the next lifecycle phase. Framework termination takes precedence over
-  this admission rule.
+  (see retries below). One handle carries one request at a time, in call
+  order. A `request` that arrives while another is on the wire waits its
+  turn; it does not collide, and it does not fail. A handle shared by the
+  leaves of a `parallel` therefore serialises them: the claims stay
+  independent, their requests do not, and a latency measured around
+  `request` on that handle includes the wait for siblings. A leaf that
+  must measure the DUT alone takes its own handle. The wait is bounded by
+  the node clock, not by the request ceiling, because a sibling ahead in
+  the queue is not the DUT being slow. Framework termination takes
+  precedence over the queue: a handle cancelled or closed while a request
+  waited its turn never sends it (see the closed-session contract below).
+  The only refusal left is re-entrancy — a backend's `_exchange` calling
+  `request` on the handle it is already mid-attempt on — and that is a
+  `ValueError` at the call site, a developer bug, not a queue.
 - Each operation records the requested method, path, payload length,
   request-header *names*, whether the adapter confirmed a response, the
   status if one arrived, and the body length. Request-header *values*
@@ -152,6 +162,9 @@ to the Floor Technician.
 - `cancel_in_flight` stops the in-flight attempt *and* the retry loop.
   A cancelled retry does not start the next attempt. The record names how
   many attempts ran and that the remainder were not started.
+- One logical request holds the handle's turn from its first attempt to
+  its last. A retry never interleaves with a sibling's request, so the
+  attempt log for one request reads as one request.
 
 **Developer obligation:** Leave retries at zero unless this bench has a
 named reason to repeat a request. When retries are declared, treat the
@@ -191,6 +204,13 @@ integration hook, and it does not invent a shutdown request.
   was confirmed. A repeated call cannot start a new request or replay the
   last one. A closed handle remains closed; there is no automatic
   reconnect.
+- A request waiting its turn behind the aborted one is not sent. When its
+  turn comes on a cancelled or closed handle it fails with
+  `DeviceApiOperationFailure` naming that the handle was cancelled or
+  closed while the request was queued — an operational failure the author
+  catches and models as a verdict, never a `ValueError` and never a
+  silent request on a dead session. `disconnect()` treats waiters the same
+  way.
 - The framework does not transmit a "safe" PUT, DELETE, or CoAP action
   on abort. A DUT that needs a specific last request gets it from
   authored `cleanup()`, which the hard cut does not wait for. Inventing
@@ -202,11 +222,16 @@ integration hook, and it does not invent a shutdown request.
   operation and its ceiling. It does not manufacture the `timeout`
   evidence reserved for the winning node clock in the
   [Time Budget Contract](../contracts.md#time-budget-contract). A long
-  poll cannot extend the node clock.
+  poll cannot extend the node clock. The request ceiling starts when the
+  request takes its turn on the handle, not when it was queued: the wait
+  behind a sibling is bounded by the node clock alone.
 - A backend whose shared session would let one node's close starve
   another owner's in-flight request must refuse the conflicting
   acquisition before either owner requests. It cannot sacrifice Group
-  Isolation to offer more nodes on one socket.
+  Isolation to offer more nodes on one socket. Serialising requests on
+  one handle is not that: the handle has one owner, the node whose
+  `configure()` opened it, and the leaves queuing on it are that owner's
+  subtree, closed together when that owner's clock expires.
 
 **Developer obligation:** Select a fixture for which "this node stops
 talking" is the intended safe state. Declare shared sessions honestly.
@@ -312,7 +337,9 @@ identify the DUT as the cause.
 
 | Situation | Raised as | Terminal state |
 |---|---|---|
-| Invalid method, path, payload, retry declaration, or conflicting in-flight use | `TypeError` / `ValueError` at the call site | `ContractViolation` (Fail, `bug: true`) if it escapes |
+| Invalid method, path, payload, or retry declaration; `request` re-entered from inside the handle's own in-flight request | `TypeError` / `ValueError` at the call site | `ContractViolation` (Fail, `bug: true`) naming the exception if it escapes |
+| A second `request` while one is on the wire | No exception: it waits its turn, logged as queued | Whatever verdict the author writes; the measured latency includes the wait |
+| Handle cancelled or closed while a request waited its turn | `DeviceApiOperationFailure` naming the handle, method, path, and that it was queued, never sent | Fail when the author catches it and states the verdict; BUG-signaled Fail when it escapes |
 | HTTP 4xx / 5xx or CoAP 4.xx / 5.xx on a well-formed response | No exception: status and body are the result | Whatever verdict the author writes. The interface does not guess Fail |
 | Connection refused, TLS/DTLS handshake failure, protocol violation, request exceeds its ceiling, close cannot be confirmed at bring-up | `DeviceApiOperationFailure` (provisional `LitmusError`) naming the handle, operation, method, path, and ceiling | Fail when the author catches it and states the verdict; BUG-signaled Fail when it escapes |
 | Backend cannot reach the adapter at bring-up | `ConnectionError` from the interface's own `connect` | Absorbed the way `RemoteInterface` connect failures are absorbed today |
@@ -335,7 +362,10 @@ against a shared contract suite so a bug in either backend is caught by
 the same assertions.
 
 Required proofs: refuse a non-`bytes` payload and an absolute-URL path
-before the adapter is touched; one in-flight request; status-as-data
+before the adapter is touched; concurrent requests on one handle run one
+at a time in call order, and a cancel or close mid-queue fails the
+waiters as `DeviceApiOperationFailure` without sending them; a re-entered
+`request` is refused rather than deadlocked; status-as-data
 (4xx is a response, not an exception); retries default to zero and each
 declared attempt is evidenced; non-idempotent retry refused unless opted
 in; `cancel_in_flight` stops the retry loop; redirects do not follow
