@@ -124,5 +124,5 @@ class TestEnvViaUtilsAtTheCommandLine:
 
         assert status == EXIT_VIOLATIONS
         lines = out.getvalue().splitlines()
-        assert lines[0].startswith(f"{fixtures / 'seeded_suite.py'}:106:15: {CODE} ")
+        assert lines[0].startswith(f"{fixtures / 'seeded_seams.py'}:22:42: {CODE} ")
         assert lines[-1] == "Found 1 violation."

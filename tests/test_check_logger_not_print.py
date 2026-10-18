@@ -103,5 +103,5 @@ class TestLoggerNotPrintAtTheCommandLine:
 
         assert status == EXIT_VIOLATIONS
         lines = out.getvalue().splitlines()
-        assert lines[0].startswith(f"{fixtures / 'seeded_suite.py'}:107:9: {CODE} ")
+        assert lines[0].startswith(f"{fixtures / 'seeded_seams.py'}:24:9: {CODE} ")
         assert lines[-1] == "Found 1 violation."
