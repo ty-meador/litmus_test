@@ -1,13 +1,13 @@
 """A suite with one seeded violation per rule; ``tests/test_check_*`` pin the lines.
 
-Keep the seeds one per rule and keep the line numbers stable: each rule's CLI test names
-the exact ``line:col`` it expects, which is what proves the fixture is caught end to
-end rather than merely somewhere.
+Keep the seeds one per rule, each tripping only its own rule, and the line numbers stable.
 """
 
+import os
 from typing import Any
 
 from litmus import PASS, LitmusTest, TestFailure, TestUtils, Verdict, evidence, measure
+from litmus.errors import ArpResolutionFailure
 
 
 class SeededBlade(LitmusTest):
@@ -81,8 +81,10 @@ class SeededGateway(LitmusTest):
         self._ip = ip
 
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
-        resolved = await utils.get_arp_resolver(mac=self._mac).resolve()
-        ip = self._ip or resolved["ip"]  # seed: litmus/no-input-fallback
+        try:  # the guarded resolve keeps model-resolution-failure quiet; the next line is the seed
+            ip = self._ip or (await utils.get_arp_resolver(mac=self._mac).resolve())["ip"]
+        except ArpResolutionFailure as error:  # seed above: litmus/no-input-fallback
+            raise TestFailure("no address", "an IP", error.mac) from error
         return {"ip": ip}
 
     def build_suite(self) -> LitmusTest:
@@ -90,5 +92,36 @@ class SeededGateway(LitmusTest):
 
     async def _reachable(self, utils: TestUtils) -> Verdict:
         if utils.ctx["ip"]:
+            return PASS
+        raise TestFailure("no address", "an IP", "none")
+
+
+class SeededSeams(LitmusTest):
+    """One departure from each seam idiom; nothing here trips a rule seeded above."""
+
+    def __init__(self, *, name: str) -> None:
+        super().__init__(name=name)
+
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+        mac = os.environ["DUT_MAC"]  # seed: litmus/env-via-utils
+        print(mac)  # seed: litmus/logger-not-print
+        return {"mac": mac}
+
+    def build_suite(self) -> LitmusTest:
+        return self.test("reachable", self._reachable)
+
+    async def _reachable(self, utils: TestUtils) -> Verdict:
+        try:
+            result = await utils.exec("true")
+        except BaseException:  # seed: litmus/no-swallowed-cancel
+            raise TestFailure("exec interrupted", "exit 0", "cancelled") from None
+        if result.exit_code == 0:
+            return PASS
+        raise TestFailure("unreachable", "exit 0", str(result.exit_code))
+
+    async def _resolve(self, utils: TestUtils) -> Verdict:
+        arp = utils.get_arp_resolver(mac=utils.ctx["mac"])
+        resolved = await arp.resolve()  # seed: litmus/model-resolution-failure
+        if resolved["ip"]:
             return PASS
         raise TestFailure("no address", "an IP", "none")

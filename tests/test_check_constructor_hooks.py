@@ -159,13 +159,17 @@ class TestConstructorHooksAtTheCommandLine:
         assert codes == [
             "litmus/constructor-hooks",
             "litmus/ctx-provenance",
+            "litmus/env-via-utils",
             "litmus/evidence-fulfilled",
             "litmus/gated-pass",
             "litmus/immutable-self",
+            "litmus/logger-not-print",
             "litmus/measurement-in-node",
             "litmus/measurement-name-unique",
             "litmus/method-reference",
+            "litmus/model-resolution-failure",
             "litmus/no-input-fallback",
+            "litmus/no-swallowed-cancel",
             "litmus/no-verdict-in-cleanup",
             "litmus/pure-build-suite",
             "litmus/raise-test-failure",
@@ -174,4 +178,4 @@ class TestConstructorHooksAtTheCommandLine:
             "litmus/unannotated-interface",
         ]
         assert all("seeded_suite.py" in line for line in lines[:-1])
-        assert lines[-1] == "Found 15 violations."
+        assert lines[-1] == "Found 19 violations."

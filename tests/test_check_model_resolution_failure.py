@@ -144,5 +144,5 @@ class TestModelResolutionFailureAtTheCommandLine:
 
         assert status == EXIT_VIOLATIONS
         lines = out.getvalue().splitlines()
-        assert lines[0].startswith(f"{fixtures / 'seeded_seams.py'}:23:27: {CODE} ")
+        assert lines[0].startswith(f"{fixtures / 'seeded_suite.py'}:124:20: {CODE} ")
         assert lines[-1] == "Found 1 violation."

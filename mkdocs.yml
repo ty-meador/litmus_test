@@ -34,6 +34,7 @@ nav:
   - Overview: overview.md
   - Idioms: idioms.md
   - Contracts: contracts.md
+  - Utilities: utilities.md
   - Inspector JSON: inspector-json.md
   - Inspector (target specification): inspector.md
   - Measurements: measurements.md

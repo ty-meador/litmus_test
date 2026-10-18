@@ -400,8 +400,8 @@ class TestOperatorAbortOnLoopbackSshd:
         peer = await LoopbackSshd.start()
         coordinator = _SshCoordinator(_SSH_DUT_COUNT)
         rack = _SshRack(peer=peer, coordinator=coordinator)
+        running = asyncio.create_task(rack.run())
         try:
-            running = asyncio.create_task(rack.run())
             await asyncio.wait_for(coordinator.all_started.wait(), _SSH_WAIT_LIMIT_SECONDS)
             assert coordinator.started == set(range(_SSH_DUT_COUNT))
             coordinator.release.set()
@@ -420,6 +420,10 @@ class TestOperatorAbortOnLoopbackSshd:
             assert all(node.state is State.ABORTED for node in dut_nodes)
             assert all(isinstance(node.failure, OperatorInterrupt) for node in dut_nodes)
         finally:
+            # A failed rendezvous must report, not park 70 DUTs forever.
+            if not running.done():
+                running.cancel()
+                await asyncio.gather(running, return_exceptions=True)
             await peer.aclose()
 
 
