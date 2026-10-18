@@ -47,6 +47,7 @@ class FakeConsole:
         hang: bool = False,
         slow: bool = False,
         emit_prompt: bool = True,
+        mute: bool = False,
     ) -> None:
         self._prompt = prompt
         self._echo = echo
@@ -57,6 +58,7 @@ class FakeConsole:
         self._hang = hang
         self._slow = slow
         self._emit_prompt = emit_prompt
+        self._mute = mute
         self._stop = asyncio.Event()
         self._interrupt = asyncio.Event()
 
@@ -151,18 +153,45 @@ class FakeConsole:
         # pyserial flushes on open. Wait for the slave to be claimed before
         # writing the banner, otherwise connect sees an empty wire.
         await asyncio.sleep(0.1)
+        if self._mute:
+            # A dead line: reads everything, writes nothing, ever.
+            while not self._stop.is_set():
+                if not await read():
+                    return
+            return
         if self._login_prompt is not None:
-            await write(self._login_prompt.encode("utf-8"))
+            if self._emit_prompt:
+                await write(self._login_prompt.encode("utf-8"))
             state = "login"
         elif self._emit_prompt:
             await write(self._encoded_prompt())
             state = "shell"
         else:
             state = "shell"
+        # Bytes are pumped off the wire by their own task so a Ctrl-C lands while
+        # a command is parked; the session coroutine is the one that is parked.
+        lines: asyncio.Queue[str | None] = asyncio.Queue()
+        pump = asyncio.create_task(self._pump(read, lines), name="fake-console-pump")
+        try:
+            while not self._stop.is_set():
+                line = await lines.get()
+                if line is None:
+                    return
+                state = await self._handle_line(line, write, state)
+                if state == "done":
+                    return
+        finally:
+            if not pump.done():
+                pump.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pump
+
+    async def _pump(self, read: _ReadFn, lines: asyncio.Queue[str | None]) -> None:
         buf = bytearray()
         while not self._stop.is_set():
             chunk = await read()
             if not chunk:
+                lines.put_nowait(None)
                 return
             for byte in chunk:
                 if byte == 0x03:
@@ -172,18 +201,23 @@ class FakeConsole:
                 if byte in (0x0D, 0x0A):
                     if byte == 0x0A and not buf:
                         continue
-                    line = buf.decode("utf-8", errors="replace")
+                    # Enter starts a command with a clean slate: a Ctrl-C from
+                    # here on is for this command.
+                    self._interrupt.clear()
+                    lines.put_nowait(buf.decode("utf-8", errors="replace"))
                     buf.clear()
-                    state = await self._handle_line(line, write, state)
-                    if state == "done":
-                        return
                     continue
                 buf.append(byte)
+        lines.put_nowait(None)
 
     async def _handle_line(self, line: str, write: _WriteFn, state: str) -> str:
         if state == "login":
             if self._echo:
                 await write(f"{line}\r\n".encode())
+            if not line:
+                # A getty re-prompts on an empty name.
+                await write(self._login_prompt.encode("utf-8"))  # type: ignore[union-attr]
+                return "login"
             if self._password_prompt is not None:
                 await write(self._password_prompt.encode("utf-8"))
                 return "password"
@@ -196,6 +230,10 @@ class FakeConsole:
         command, wants_sentinel = _split_command(line)
         if self._echo:
             await write(f"{line}\r\n".encode())
+        if not command:
+            # Enter on an empty line: a shell re-prompts, wedged or not.
+            await write(self._encoded_prompt())
+            return "shell"
         if self._hang:
             await self._park()
             return "shell"
@@ -226,7 +264,6 @@ class FakeConsole:
         return "shell"
 
     async def _park(self) -> None:
-        self._interrupt.clear()
         stop_task = asyncio.create_task(self._stop.wait())
         interrupt_task = asyncio.create_task(self._interrupt.wait())
         try:

@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, cast, final
+from typing import Final, Literal, NamedTuple, cast, final
 from urllib.parse import urljoin, urlsplit
 
 from litmus.errors import DeviceApiOperationFailure
@@ -37,9 +37,17 @@ _DEFAULT_PORTS: Final[dict[str, int]] = {
 }
 
 _COAP_CODES: Final[dict[str, int]] = {"GET": 1, "POST": 2, "PUT": 3, "DELETE": 4}
-_COAP_URI_PATH = 11
+_COAP_URI_PATH: Final[int] = 11
+_COAP_BLOCK2: Final[int] = 23
+_COAP_BLOCK1: Final[int] = 27
 _COAP_CON = 0
 _COAP_VER = 1
+_COAP_CONTINUE: Final[int] = 0x5F  # 2.31: the server has the block, send the next
+_COAP_SUCCESS_CLASS: Final[int] = 2
+# RFC 7959 block size exponent for the request body: 2**(4+SZX) bytes a block.
+# 6 (1024 bytes) is the largest the option can name; a server that wants
+# smaller blocks says so in its 2.31 and the transfer follows it down.
+_COAP_BLOCK_SZX: Final[int] = 6
 
 
 def _require_int(name: str, value: object) -> int:
@@ -692,8 +700,44 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
     return None
 
 
+class _CoapBlock(NamedTuple):
+    """One Block1/Block2 option value (RFC 7959 §2.2): NUM, M, SZX."""
+
+    num: int
+    more: bool
+    szx: int
+
+    @property
+    def size(self) -> int:
+        return 1 << (self.szx + 4)
+
+    @property
+    def start(self) -> int:
+        return self.num * self.size
+
+    def encode(self) -> bytes:
+        value = (self.num << 4) | (int(self.more) << 3) | self.szx
+        return value.to_bytes((value.bit_length() + 7) // 8, "big")
+
+    @classmethod
+    def decode(cls, raw: bytes) -> _CoapBlock:
+        value = int.from_bytes(raw, "big")
+        return cls(value >> 4, bool(value & 0x08), value & 0x07)
+
+
+type _CoapOptions = list[tuple[int, bytes]]
+type _CoapReply = tuple[int, _CoapOptions, bytes]
+
+
 def _coap_encode(
-    method: str, path: str, payload: bytes | None, message_id: int, token: bytes
+    method: str,
+    path: str,
+    payload: bytes | None,
+    message_id: int,
+    token: bytes,
+    *,
+    block1: _CoapBlock | None = None,
+    block2: _CoapBlock | None = None,
 ) -> bytes:
     code = _COAP_CODES[method]
     header = bytes(
@@ -704,22 +748,28 @@ def _coap_encode(
             message_id & 0xFF,
         ]
     )
-    options = bytearray()
+    # Ascending by number, as the delta encoding requires: Uri-Path, Block2, Block1.
+    options: _CoapOptions = [
+        (_COAP_URI_PATH, segment.encode("utf-8")) for segment in path.split("/") if segment
+    ]
+    if block2 is not None:
+        options.append((_COAP_BLOCK2, block2.encode()))
+    if block1 is not None:
+        options.append((_COAP_BLOCK1, block1.encode()))
+    encoded = bytearray(header + token)
     last = 0
-    segments = [segment for segment in path.split("/") if segment]
-    for segment in segments:
-        raw = segment.encode("utf-8")
-        delta = _COAP_URI_PATH - last
-        last = _COAP_URI_PATH
-        delta_nibble, delta_ext = _coap_nibble(delta)
-        length_nibble, length_ext = _coap_nibble(len(raw))
-        options.append((delta_nibble << 4) | length_nibble)
-        options.extend(delta_ext)
-        options.extend(length_ext)
-        options.extend(raw)
+    for number, value in options:
+        delta_nibble, delta_ext = _coap_nibble(number - last)
+        length_nibble, length_ext = _coap_nibble(len(value))
+        last = number
+        encoded.append((delta_nibble << 4) | length_nibble)
+        encoded.extend(delta_ext)
+        encoded.extend(length_ext)
+        encoded.extend(value)
     if payload:
-        return header + token + bytes(options) + b"\xff" + payload
-    return header + token + bytes(options)
+        encoded.append(0xFF)
+        encoded.extend(payload)
+    return bytes(encoded)
 
 
 def _coap_nibble(value: int) -> tuple[int, bytes]:
@@ -730,30 +780,57 @@ def _coap_nibble(value: int) -> tuple[int, bytes]:
     raise ValueError("CoAP option value is too large for this backend")  # pragma: no cover
 
 
-def _coap_decode(datagram: bytes) -> tuple[int, int, bytes, bytes]:
-    if len(datagram) < 4:  # pragma: no cover - wire garbage
+def _coap_extended(nibble: int, rest: bytes) -> tuple[int, bytes]:
+    """Resolve an option delta or length nibble, consuming its extension bytes."""
+    if nibble == 13:
+        return 13 + rest[0], rest[1:]
+    if nibble == 14:
+        return 269 + int.from_bytes(rest[:2], "big"), rest[2:]
+    if nibble == 15:
+        raise ValueError("CoAP option nibble 15 outside the payload marker")
+    return nibble, rest
+
+
+def _coap_decode(datagram: bytes) -> tuple[int, bytes, _CoapOptions, bytes]:
+    """Code, token, options in wire order, payload. ValueError on wire garbage."""
+    if len(datagram) < 4:
         raise ValueError("CoAP datagram is truncated")
     tkl = datagram[0] & 0x0F
     code = datagram[1]
     token = datagram[4 : 4 + tkl]
     rest = datagram[4 + tkl :]
-    payload = b""
-    while rest:
-        if rest[0] == 0xFF:
-            payload = rest[1:]
-            break
-        nibble_len = rest[0] & 0x0F
-        rest = rest[1:]
-        if nibble_len == 13:  # pragma: no cover - long options
-            nibble_len = 13 + rest[0]
-            rest = rest[1:]
-        rest = rest[nibble_len:]
-    return code, tkl, token, payload
+    options: _CoapOptions = []
+    number = 0
+    try:
+        while rest:
+            if rest[0] == 0xFF:
+                return code, token, options, rest[1:]
+            head, rest = rest[0], rest[1:]
+            delta, rest = _coap_extended(head >> 4, rest)
+            length, rest = _coap_extended(head & 0x0F, rest)
+            number += delta
+            options.append((number, rest[:length]))
+            rest = rest[length:]
+    except IndexError:
+        raise ValueError("CoAP datagram is truncated") from None
+    return code, token, options, b""
+
+
+def _coap_block(options: _CoapOptions, number: int) -> _CoapBlock | None:
+    for option, value in options:
+        if option == number:
+            return _CoapBlock.decode(value)
+    return None
 
 
 @final
 class CoapInterface(DeviceApiInterface):
-    """CoAP CON/ACK over UDP. Cancel closes the datagram endpoint."""
+    """CoAP CON/ACK over UDP with RFC 7959 block-wise transfer.
+
+    A request body past one block goes out as Block1 blocks; a response that
+    arrives as Block2 blocks is fetched to the end and handed over whole. Cancel
+    closes the datagram endpoint.
+    """
 
     def __init__(
         self,
@@ -814,39 +891,98 @@ class CoapInterface(DeviceApiInterface):
         headers: Mapping[str, str],
     ) -> DeviceResponse:
         del headers
+        body = payload or b""
+        # Block1: a body past one block goes out a block at a time. Each 2.31
+        # may shrink the block size; any other answer mid-transfer is the
+        # server's last word and is returned as the response.
+        szx = _COAP_BLOCK_SZX
+        sent = 0
+        block1: _CoapBlock | None = None
+        while True:
+            size = 1 << (szx + 4)
+            if len(body) > size:
+                more = sent + size < len(body)
+                block1 = _CoapBlock(sent // size, more, szx)
+                chunk = body[sent : sent + size]
+            else:
+                more = False
+                chunk = body
+            code, options, data = await self._send(method, path, chunk, block1=block1)
+            if not more:
+                break
+            if code != _COAP_CONTINUE:
+                return DeviceResponse(status=code, body=data, headers=MappingProxyType({}))
+            sent += len(chunk)
+            ack = _coap_block(options, _COAP_BLOCK1)
+            if ack is not None and ack.szx < szx:
+                szx = ack.szx
+        # Block2: a response that arrives in blocks is fetched to the end. The
+        # continuation carries Block2 alone, no Block1 and no payload, which is
+        # how the reference stack (aiocoap) keys the transfer: on code and path.
+        block2 = _coap_block(options, _COAP_BLOCK2)
+        if block2 is None:
+            return DeviceResponse(status=code, body=data, headers=MappingProxyType({}))
+        parts = [data]
+        received = len(data)
+        while block2.more:
+            wanted = _CoapBlock(received // block2.size, False, block2.szx)
+            code, options, data = await self._send(method, path, b"", block2=wanted)
+            if code >> 5 != _COAP_SUCCESS_CLASS:
+                return DeviceResponse(status=code, body=data, headers=MappingProxyType({}))
+            block2 = _coap_block(options, _COAP_BLOCK2)
+            if block2 is None or block2.start != received:
+                raise ConnectionError(
+                    f"CoAP block-wise response lost its sequence at byte {received}: "
+                    f"asked for block {wanted.num}, got {block2}"
+                )
+            parts.append(data)
+            received += len(data)
+        return DeviceResponse(status=code, body=b"".join(parts), headers=MappingProxyType({}))
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        payload: bytes,
+        *,
+        block1: _CoapBlock | None = None,
+        block2: _CoapBlock | None = None,
+    ) -> _CoapReply:
+        """One CON datagram out, its reply back."""
         transport = self._transport
         protocol = self._protocol
         if transport is None or protocol is None:  # pragma: no cover
             raise ConnectionError("device API session is not connected")
         self._message_id = (self._message_id + 1) & 0xFFFF
         token = bytes([self._message_id & 0xFF])
-        datagram = _coap_encode(method, path, payload, self._message_id, token)
+        datagram = _coap_encode(
+            method, path, payload or None, self._message_id, token, block1=block1, block2=block2
+        )
         waiter = protocol.expect(token)
         transport.sendto(datagram)
-        code, body = await waiter
-        return DeviceResponse(status=code, body=body, headers=MappingProxyType({}))
+        return await waiter
 
 
 class _CoapProtocol(asyncio.DatagramProtocol):
     """Collect one CON reply at a time for ``CoapInterface``."""
 
     def __init__(self) -> None:
-        self._waiters: dict[bytes, asyncio.Future[tuple[int, bytes]]] = {}
+        self._waiters: dict[bytes, asyncio.Future[_CoapReply]] = {}
 
-    def expect(self, token: bytes) -> asyncio.Future[tuple[int, bytes]]:
-        waiter: asyncio.Future[tuple[int, bytes]] = asyncio.get_running_loop().create_future()
+    def expect(self, token: bytes) -> asyncio.Future[_CoapReply]:
+        waiter: asyncio.Future[_CoapReply] = asyncio.get_running_loop().create_future()
         self._waiters[token] = waiter
         return waiter
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         del addr
         try:
-            code, _tkl, token, payload = _coap_decode(data)
+            code, token, options, payload = _coap_decode(data)
         except ValueError:  # pragma: no cover - truncated peer
             return
         waiter = self._waiters.pop(token, None)
         if waiter is not None and not waiter.done():
-            waiter.set_result((code, payload))
+            waiter.set_result((code, options, payload))
 
     def fail(self, message: str) -> None:
         for waiter in tuple(self._waiters.values()):
