@@ -33,6 +33,7 @@ nav:
   - Floor Technician: floor-technician.md
   - Overview: overview.md
   - Idioms: idioms.md
+  - Utilities: utilities.md
   - Contracts: contracts.md
   - Inspector JSON: inspector-json.md
   - Inspector (target specification): inspector.md
