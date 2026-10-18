@@ -16,8 +16,14 @@ lint:  ## Lint with auto-fix
 
 fix: format lint  ## Auto-format + auto-fix lint
 
+# Pyright covers bench/, and the GPIO bench imports gpiod, which lives in the `bench`
+# group rather than the default sync. Without the group a fresh venv reads every gpiod
+# name as Unknown and strict mode fails; with it only on the machine that once ran a
+# GPIO target, the gate's verdict would depend on the venv's history.
+PYRIGHT = uv run --group bench pyright
+
 typecheck:  ## Pyright strict
-	uv run pyright
+	$(PYRIGHT)
 	uv run python tools/import_cycles.py
 
 test:  ## Run the framework self-test suite
@@ -52,7 +58,7 @@ smoke:  ## Install the wheel into a clean venv and run both console entry points
 check:  ## The gate (there is no CI) — verify only, no auto-fix. Green before push; the reviewer re-runs it before merge.
 	uv run ruff format --check .
 	uv run ruff check .
-	uv run pyright
+	$(PYRIGHT)
 	uv run python tools/import_cycles.py
 	$(MAKE) coverage
 	uv run litmus-check examples

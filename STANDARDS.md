@@ -159,11 +159,11 @@ that reader is soon a stranger.
   full suite and the rack suite many times over on `main`
   (`tools/nightly_soak.py`: `make nightly` runs and prints, `make nightly-record`
   also records the night on issue #68 with `LITMUS_BOT_TOKEN` exported); a red night
-  names the failing case and run in #general before an MR meets it. The `nightly-soak`
-  job in `.gitlab-ci.yml` is the same driver behind a pipeline schedule that stays
-  switched off (Ty, 2026-09-11: no pipeline minutes to spend on it); a night counts
-  only once it is posted, whichever machine ran it. Until a schedule runs again, the
-  Phase 6 exit is one recorded bench soak green on the release candidate head.
+  names the failing case and run in #general before an MR meets it. There is no
+  pipeline to run it instead: the dormant `nightly-soak` schedule of 2026-09-11 left
+  with `.gitlab-ci.yml`, which Ty removed on 2026-10-11. A night counts only once it
+  is posted, and the Phase 6 exit is one recorded bench soak green on the release
+  candidate head.
 - **Generated coverage must remain replayable.** `make check` and `make soak` retain
   the fixed Hypothesis seed in `pyproject.toml`. The nightly driver (`make nightly`)
   draws a fresh seed for every pytest invocation and writes the exact replay command

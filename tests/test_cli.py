@@ -452,7 +452,9 @@ _SSH_TARGET_VARS = (
     "GATEWAY_PORT",
 )
 
-_README_LITMUS_RUN_TARGETS = (
+# The README keeps the first run; the getting-started guide carries the examples in
+# teaching order, so it is the page that must run every one through `litmus run`.
+_GUIDE_LITMUS_RUN_TARGETS = (
     "examples/hello_world.py",
     "examples/test_composition.py::SequencedDevice",
     "examples/test_composition.py::ParallelDevice",
@@ -468,7 +470,7 @@ _README_LITMUS_RUN_TARGETS = (
 
 
 class TestExamples:
-    """Every example runs under ``litmus run`` as the README says."""
+    """Every example runs under ``litmus run`` as the getting-started guide says."""
 
     @pytest.mark.parametrize(
         ("target", "expected"),
@@ -523,8 +525,10 @@ class TestExamples:
         assert missing in err
         assert "cannot be constructed from its name alone" not in err
 
-    def test_readme_runs_every_local_example_through_litmus_run(self) -> None:
+    def test_getting_started_runs_every_local_example_through_litmus_run(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        for target in _README_LITMUS_RUN_TARGETS:
-            assert f"uv run litmus run {target}" in readme, target
-        assert "uv run python examples/" not in readme
+        guide = (ROOT / "docs" / "getting-started.md").read_text(encoding="utf-8")
+        assert "(docs/getting-started.md)" in readme
+        for target in _GUIDE_LITMUS_RUN_TARGETS:
+            assert f"uv run litmus run {target}" in guide, target
+        assert "uv run python examples/" not in readme + guide

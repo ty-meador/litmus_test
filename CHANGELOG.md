@@ -410,6 +410,21 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- The gate is green again from a fresh venv, and the tree agrees with the October
+  changes that turned it red. `make check` and `make typecheck` run pyright with the
+  `bench` dependency group, so `gpiod` resolves for `bench/gpio_sim.py` and
+  `bench/suites/gpio_lines.py` on every machine rather than only one that once ran a
+  GPIO target. `.gitlab-ci.yml` is gone (2026-10-11), so the dormant `nightly-soak`
+  schedule named in the #138 entries below no longer exists: the docs-site test now
+  asserts there is no pipeline definition, and `STANDARDS.md` §6 and
+  `tools/nightly_soak.py` no longer name the schedule. The README overhaul moved the
+  docs-tree and station URLs and the example runs into `docs/getting-started.md`; the
+  tests that pinned them follow. `docs/utilities.md` joins the site nav. The catalogue
+  tests read both seed files, `seeded_suite.py` and `seeded_seams.py`, and the
+  `no-input-fallback` seed no longer also trips `litmus/model-resolution-failure`,
+  whose one seed is in `seeded_seams.py`. `uv.lock` takes urllib3 2.8.0, which the
+  gate's audit requires for PYSEC-2026-4175/4176/4177; it reaches the tree only through
+  `pip-audit`'s `requests` in the dev group.
 - The executor's SIGKILL escalation is under test (issue #145). A host child that
   ignores SIGTERM is killed once the two-second grace runs out, and a second cancel
   landing inside that grace still kills and reaps it before the cancellation goes on;
