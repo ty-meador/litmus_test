@@ -177,5 +177,5 @@ class TestConstructorHooksAtTheCommandLine:
             "litmus/shell-in-configure",
             "litmus/unannotated-interface",
         ]
-        assert all("seeded_suite.py" in line for line in lines[:-1])
+        assert all("seeded_suite.py" in line or "seeded_seams.py" in line for line in lines[:-1])
         assert lines[-1] == "Found 19 violations."
