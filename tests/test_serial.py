@@ -5,12 +5,13 @@ from __future__ import annotations
 import ast
 import asyncio
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import asyncssh
 import pytest
-from tests.fake_console import SERIAL_BRIDGE_COMMAND, open_pty_console
+from tests.fake_console import SERIAL_BRIDGE_COMMAND, FakeConsole, open_pty_console
 from tests.loopback_sshd import LoopbackSshd
 
 from litmus.executor import ExecResult
@@ -338,6 +339,80 @@ class TestAbort:
                 assert transport.connected is True
             finally:
                 await transport.disconnect()
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    deadline = asyncio.get_running_loop().time() + 2
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline
+        await asyncio.sleep(0)
+
+
+class TestOneTurnAtATime:
+    """Concurrent execs on one console run one at a time, in call order (issue #150)."""
+
+    async def test_concurrent_execs_queue_and_settle_in_call_order(self) -> None:
+        async with open_pty_console() as (device, console):
+            transport = SerialInterface(device=device, prompt_timeout=5.0)
+            await transport.connect()
+            try:
+                tasks = [
+                    asyncio.create_task(transport.exec(command))
+                    for command in ("delay 0.2", "fail", "uname")
+                ]
+                # Only the first is on the wire; the rest wait their turn, unsent.
+                await _until(lambda: transport.queued == 2 and console.received == ["delay 0.2"])
+                results = await asyncio.gather(*tasks)
+            finally:
+                await transport.disconnect()
+
+        assert results == [
+            ExecResult(stdout="woke", stderr="", exit_code=0),
+            ExecResult(stdout="nope", stderr="", exit_code=1),
+            ExecResult(stdout="uname", stderr="", exit_code=0),
+        ]
+        assert console.received == ["delay 0.2", "fail", "uname"]
+        assert transport.queued == 0
+
+    async def test_prompt_timeout_bounds_only_the_commands_own_wait(self) -> None:
+        # Three 0.3 s commands behind a 0.7 s prompt_timeout: the queue takes
+        # 0.9 s, no single command waits more than 0.3 s for its own prompt.
+        async with open_pty_console() as (device, _console):
+            transport = SerialInterface(device=device, prompt_timeout=0.7)
+            await transport.connect()
+            try:
+                results = await asyncio.gather(*(transport.exec("delay 0.3") for _ in range(3)))
+            finally:
+                await transport.disconnect()
+
+        assert [result.exit_code for result in results] == [0, 0, 0]
+        assert [result.stdout for result in results] == ["woke", "woke", "woke"]
+
+    @pytest.mark.parametrize("halt", ["cancel_in_flight", "disconnect"])
+    async def test_halt_settles_the_queued_exec_without_sending_it(self, halt: str) -> None:
+        async with open_pty_console() as (device, console):
+            transport = SerialInterface(device=device, prompt_timeout=5.0)
+            await transport.connect()
+            try:
+                parked = asyncio.create_task(transport.exec("sleep 30"))
+                queued = asyncio.create_task(transport.exec("uname"))
+                await _until(lambda: transport.queued == 1)
+                await asyncio.sleep(0.2)
+
+                await getattr(transport, halt)()
+
+                assert (await parked).exit_code == -1
+                result = await queued
+                assert result == ExecResult(stdout="", stderr="transport closed", exit_code=-1)
+                assert transport.connected is False
+                assert transport.queued == 0
+            finally:
+                await transport.disconnect()
+            self._assert_never_sent(console, "uname")
+
+    @staticmethod
+    def _assert_never_sent(console: FakeConsole, command: str) -> None:
+        assert command not in console.received, console.received
 
 
 class TestVia:
