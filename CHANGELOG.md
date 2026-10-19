@@ -634,6 +634,13 @@ of feature parity: the Python Inspector is still separate work.
   back Pass and carried the pass to the root, hiding the failure the archive still
   held. Those nodes now read **partly re-run**; their fresh chronology stays readable,
   and the production verdict stays on the Inspect tab (issue #141).
+- `tools/attribution_check.py` fails closed (issue #151, follow-up to !182). The range
+  scan in `make check` skipped every `#` line as editor commentary, but a recorded
+  message has none: `git commit -m` keeps a `#` line as written, so an attribution
+  committed with `--no-verify` passed the gate built to catch it. The scan now reads
+  every recorded line. The hook cuts its buffer the way git's default cleanup does,
+  dropping `#` commentary and everything below the `commit -v` scissors line, so a staged
+  diff that names an assistant no longer refuses the commit.
 
 ### Security
 

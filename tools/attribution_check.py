@@ -58,25 +58,41 @@ _PATTERNS = (
     re.compile(rf"https?://[^\s)]*(?:{'|'.join(map(re.escape, _ASSISTANT_HOSTS))})", re.IGNORECASE),
 )
 _COMMENT = "#"
+# The line `git commit -v` writes above the staged diff; git discards it and everything
+# below it when it cleans the message up.
+_SCISSORS = re.compile(r"^#\s*-+ >8 -+\s*$")
 
 
 def offending_lines(message: str) -> tuple[str, ...]:
     """The lines of ``message`` that credit an assistant, in order; empty when clean.
 
-    Lines starting with ``#`` are git's own commentary in the editor and are not part of
-    the message that gets recorded, so they are skipped.
+    Every line counts. A recorded message has no editor commentary left in it: with
+    ``-m`` or ``--cleanup=verbatim`` git keeps a ``#`` line as written, so skipping one
+    here would let the gate pass exactly the commit that bypassed the hook.
     """
-    found: list[str] = []
-    for line in message.splitlines():
-        if line.startswith(_COMMENT):
-            continue
-        if any(pattern.search(line) for pattern in _PATTERNS):
-            found.append(line)
-    return tuple(found)
+    return tuple(line for line in message.splitlines() if any(p.search(line) for p in _PATTERNS))
+
+
+def editor_message(buffer: str) -> str:
+    """The part of the hook's buffer that git records under its default cleanup.
+
+    The hook runs before cleanup, so the buffer still holds git's ``#`` commentary and,
+    under ``-v``, the staged diff below the scissors line. Neither is recorded, and
+    either can name an assistant innocently (a file name, a diff line), so a refusal on
+    them would teach ``--no-verify``. The cut can be wrong only one way: under ``-m``
+    git keeps a ``#`` line the hook has dropped, and the range scan catches it.
+    """
+    kept: list[str] = []
+    for line in buffer.splitlines():
+        if _SCISSORS.match(line):
+            break
+        if not line.startswith(_COMMENT):
+            kept.append(line)
+    return "\n".join(kept)
 
 
 def strip(message: str) -> str:
-    """``message`` without its offending lines and without the blank run they leave behind.
+    """``message`` without its offending lines and without the trailing blanks they leave.
 
     Everything else is returned byte for byte, so a rewrite that uses this changes no
     message it did not have to.
@@ -90,8 +106,8 @@ def strip(message: str) -> str:
 
 
 def check_message(path: Path, out: TextIO = sys.stdout) -> int:
-    """The hook: refuse the message at ``path`` when any line credits an assistant."""
-    offending = offending_lines(path.read_text(encoding="utf-8"))
+    """The hook: refuse the message at ``path`` when any line git will record credits one."""
+    offending = offending_lines(editor_message(path.read_text(encoding="utf-8")))
     if not offending:
         return EXIT_CLEAN
     print(
