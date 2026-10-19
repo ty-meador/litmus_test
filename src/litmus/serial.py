@@ -220,6 +220,13 @@ class SerialInterface(RemoteInterface):
         The hop itself is not cancelled — that would take down every other
         consumer of the SSH connection. `disconnect` still owns the hop's
         lifecycle.
+      - `exec` takes a turn. A console carries one byte stream and no channel
+        per caller, so concurrent `exec` calls (`parallel` leaves on a
+        `use_serial` route) queue in call order on one lock and go out one at
+        a time. `prompt_timeout` bounds only the caller's own wait for the
+        prompt, never its time in the queue; the node clock bounds that. A
+        command still queued when `cancel_in_flight` or `disconnect` lands
+        never reaches the wire and settles `"transport closed"`.
       - A `via` hop is owned: it must arrive unconnected, `connect` brings it
         up, a failed connect collapses it, `disconnect` tears it down.
       - A `tunnel` hop is borrowed, the exec router's channel: it must arrive
@@ -294,6 +301,10 @@ class SerialInterface(RemoteInterface):
         self._writer: Any = None
         self._serial: Any = None
         self._process: Any = None
+        # One turn at a time (issue #150, the console's F13). ``_queued`` counts
+        # the exec calls waiting behind the one on the wire; tests read it.
+        self._turn = asyncio.Lock()
+        self._queued = 0
 
     @property
     def output_budget(self) -> int:
@@ -314,6 +325,11 @@ class SerialInterface(RemoteInterface):
     def prompt_timeout(self) -> float:
         """Seconds `exec` will wait for the prompt before settling `-1`."""
         return self._prompt_timeout
+
+    @property
+    def queued(self) -> int:
+        """How many `exec` calls are waiting their turn behind the one on the wire."""
+        return self._queued
 
     @property
     def endpoint(self) -> str:
@@ -382,6 +398,25 @@ class SerialInterface(RemoteInterface):
         await self._close_wire()
 
     async def _exec(self, command: str) -> ExecResult:
+        # One command on the wire at a time, in call order. The halt does not
+        # take a turn: `_cancel_in_flight` writes past whoever holds the lock.
+        self._queued += 1
+        try:
+            # A node deadline that cancels this task mid-wait leaves the lock
+            # alone and the count honest; only a taken turn needs releasing.
+            await self._turn.acquire()
+        finally:
+            self._queued -= 1
+        try:
+            if not self._connected:
+                # The halt or the close landed while this command was queued.
+                # It never reaches the wire, so the record must not say it did.
+                return ExecResult.settled("", "transport closed", None)
+            return await self._exec_in_turn(command)
+        finally:
+            self._turn.release()
+
+    async def _exec_in_turn(self, command: str) -> ExecResult:
         sent = f'{command}; echo "{_RC_MARKER}=$?"'
         try:
             await self._write_enter(sent)
