@@ -659,6 +659,8 @@ Use when tests are fully independent. The Floor Technician sees everything broke
 
 Independent claims can still share one resource. A single `DeviceApi` handle opened in `configure()` and read from ctx by every leaf serialises their requests: the leaves run concurrently, their requests go out one at a time in call order, and a latency measured around `request` includes the wait for siblings. That is correct when the claim is about the bytes; when the claim is about the DUT's own latency, give each leaf its own handle.
 
+The same holds for a routed console. `use_serial(device=...)` in `configure()` binds `utils.exec` for the node and its descendants to one `SerialInterface`, and `parallel` leaves under it take turns on it in call order (`docs/hil/serial.md`, Serial Turn Contract). A console costs more to share than a handle does: the leaves share one shell's state, so a `cd` or an exported variable in one leaf is visible to the next. Claims that need isolation want one console each, via `get_serial(device=...)`.
+
 ---
 
 ## ArpResolver — MAC to IP
