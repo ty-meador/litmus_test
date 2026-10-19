@@ -49,9 +49,10 @@ class TestOffendingLines:
         line = "Drafted with ANTHROPIC's assistant and reviewed by hand."
         assert offending_lines(f"Subject\n\n{line}\n") == (line,)
 
-    def test_editor_commentary_is_not_the_message(self) -> None:
-        message = CLEAN + "# Please enter the commit message. Lines starting with '#'\n# claude\n"
-        assert offending_lines(message) == ()
+    def test_a_hash_line_in_a_recorded_message_is_still_the_message(self) -> None:
+        # `git commit -m` keeps a `#` line verbatim; the gate must not read it as commentary.
+        line = "# Generated with Claude Code"
+        assert offending_lines(f"Subject\n\n{line}\n") == (line,)
 
 
 class TestStrip:
@@ -83,6 +84,38 @@ class TestCheckMessage:
         assert check_message(path, out) == EXIT_ATTRIBUTED
         assert TRAILER in out.getvalue()
         assert "STANDARDS.md section 7" in out.getvalue()
+
+    def test_the_hook_ignores_editor_commentary(self, tmp_path: Path) -> None:
+        path = tmp_path / "COMMIT_EDITMSG"
+        path.write_text(
+            CLEAN + "# Please enter the commit message.\n#\tmodified:   docs/claude-notes.md\n",
+            encoding="utf-8",
+        )
+
+        assert check_message(path, io.StringIO()) == EXIT_CLEAN
+
+    def test_the_hook_ignores_the_verbose_diff_below_the_scissors(self, tmp_path: Path) -> None:
+        # `git commit -v`: the staged diff is not part of the message and is never recorded.
+        path = tmp_path / "COMMIT_EDITMSG"
+        path.write_text(
+            CLEAN
+            + "# ------------------------ >8 ------------------------\n"
+            + "# Do not modify or remove the line above.\n"
+            + "diff --git a/pins.txt b/pins.txt\n"
+            + "+anthropic sdk pinned\n",
+            encoding="utf-8",
+        )
+
+        assert check_message(path, io.StringIO()) == EXIT_CLEAN
+
+    def test_the_hook_still_refuses_a_trailer_above_the_scissors(self, tmp_path: Path) -> None:
+        path = tmp_path / "COMMIT_EDITMSG"
+        path.write_text(
+            CLEAN + "\n" + TRAILER + "\n# ------------------------ >8 ------------------------\n",
+            encoding="utf-8",
+        )
+
+        assert check_message(path, io.StringIO()) == EXIT_ATTRIBUTED
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -130,6 +163,15 @@ class TestCheckRange:
         assert check_range("base", out, repo) == EXIT_ATTRIBUTED
         assert "1 attributed" in out.getvalue()
         assert TRAILER in out.getvalue()
+
+    def test_a_recorded_hash_line_is_red(self, tmp_path: Path) -> None:
+        # The bypass the gate exists for: no hook ran, and `-m` recorded the `#` line as written.
+        repo = _seed_repo(tmp_path, ["Base commit\n", "Subject\n\n# Generated with Claude Code\n"])
+        _git(repo, "branch", "base", "HEAD~1")
+        out = io.StringIO()
+
+        assert check_range("base", out, repo) == EXIT_ATTRIBUTED
+        assert "# Generated with Claude Code" in out.getvalue()
 
     def test_a_missing_base_scans_the_whole_history(self, tmp_path: Path) -> None:
         repo = _seed_repo(tmp_path, [SESSION + "\n", "Clean\n"])
