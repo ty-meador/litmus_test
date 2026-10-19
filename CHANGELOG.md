@@ -48,6 +48,17 @@ of feature parity: the Python Inspector is still separate work.
   from `utils.env` are the blessed shapes and stay quiet, as are the same shapes outside
   `configure()`. The rule guards a style, not a verdict; its row in
   `docs/litmus-check.md` says so rather than inventing a runtime counterpart.
+- Four tier-3 rules, recorded here after the fact (issue #149): they reached `main` on
+  2026-10-11 without an entry. `litmus/env-via-utils` reports suite code that reads
+  `os.environ` or `os.getenv` under any alias instead of `utils.env`, the run's
+  recorded snapshot. `litmus/logger-not-print` reports a builtin `print` inside a
+  `LitmusTest` subclass, whose output never reaches the timeline. `litmus/no-swallowed-cancel`
+  reports a bare `except`, `except BaseException`, or `except CancelledError` around an
+  await that does not re-raise, and any `contextlib.suppress` naming either, because
+  `CancelledError` is the abort signal. `litmus/model-resolution-failure` reports an
+  awaited `.resolve()`, `.reacquire(...)` or `.request(...)` that is not inside a `try`
+  whose handler raises `TestFailure`. Each rule has a row in `docs/litmus-check.md`
+  naming the tier that already holds the guarantee, or saying that none can.
 - Doctrine: the node names what it needs, the framework decides where it comes from
   (issue #142, Ty's ruling of 2026-09-12; recorded under issue #143). A constructor
   argument is identity fixed at composition time; runtime state comes from `utils` in
@@ -569,6 +580,23 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Fixed
 
+- `SerialInterface.connect()` prompts the console instead of only listening (bench
+  finding F1, issue #139). A console that printed its prompt before the port opened
+  never printed another, so `configure()` timed out. Once the wire is open the
+  transport now writes one carriage return before the first expect. After the shell
+  prompt resolves, it drains the line until the wire has been quiet for 0.2 s, bounded
+  at 2 s, so the second prompt that the carriage return earned is not what the first
+  `exec` matches. The transport now writes to the DUT on connect: a console at a
+  bootloader countdown takes the carriage return as the key that stops autoboot, and
+  a half-typed line runs. The signed Serial Prompt Contract in `docs/hil/serial.md`
+  does not yet say so; that amendment waits on issue #149.
+- `CoapInterface` speaks RFC 7959 block-wise transfer (bench finding F15, issue #139).
+  A request body larger than 1024 bytes came back 2.04 and short. It now goes out as
+  Block1 blocks, and a 2.31 naming a smaller block size shrinks the rest of the
+  transfer. A Block2 response is fetched to the end and handed over whole. Beneath
+  that was a second fault: the option decoder never consumed the extension bytes of
+  the 13 and 14 delta and length forms, so any option numbered 13 or higher misplaced
+  the payload marker.
 - `SshInterface` password auth no longer scans `~/.ssh`: the password path passed
   `client_keys=[]`, which asyncssh reads as "load the default key files", so every
   connect loaded and validated whatever keys the test host held (about 0.2s for a
