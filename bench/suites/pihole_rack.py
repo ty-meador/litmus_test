@@ -188,9 +188,6 @@ class BlocklistRoundTrip(LitmusTest):
 
     async def cleanup(self, utils: TestUtils) -> None:
         """Take the entry back off and end the session; a Pi-hole left dirty is a bug."""
-        # `_settle` lives outside the class: `litmus/model-resolution-failure` wants every
-        # awaited `request` under a handler that raises `TestFailure`, and
-        # `litmus/no-verdict-in-cleanup` forbids exactly that here (bench/FRICTION.md).
         api: DeviceApi = utils.ctx["api"]
         headers = {"sid": utils.ctx["sid"]}
         removed = await _settle(

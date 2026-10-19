@@ -11,6 +11,7 @@ from textwrap import dedent
 from litmus_check import SuiteModule, Violation
 from litmus_check.cli import EXIT_VIOLATIONS, LitmusCheckCommand
 from litmus_check.rules.model_resolution_failure import ModelResolutionFailureRule
+from litmus_check.rules.no_verdict_in_cleanup import NoVerdictInCleanupRule
 
 CODE = "litmus/model-resolution-failure"
 
@@ -80,6 +81,37 @@ class TestModelResolutionFailureFire:
         """
         assert _lines(source) == [7]
 
+    def test_an_unguarded_request_in_cleanup_asks_for_a_log_not_a_verdict(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def cleanup(self, utils: TestUtils) -> None:
+                    await utils.ctx["api"].request(DeviceRequest(method="DELETE", path="/"))
+        """
+        violations = _check(source)
+
+        assert [v.line for v in violations] == [4]
+        assert "cleanup must not throw" in violations[0].message
+        assert "utils.logger" in violations[0].message
+        assert "raise TestFailure" not in violations[0].message
+
+    def test_a_handler_that_raises_is_not_a_cleanup_guard(self) -> None:
+        # A TestFailure is the verdict cleanup cannot give; a bare raise is the throw the
+        # Lifecycle Contract forbids. Either way the teardown after the call is skipped.
+        source = """
+            class Suite(LitmusTest):
+                async def cleanup(self, utils: TestUtils) -> None:
+                    try:
+                        await utils.ctx["api"].request(request)
+                    except DeviceApiOperationFailure as error:
+                        raise TestFailure("left behind", "200", repr(error)) from error
+                    try:
+                        await utils.ctx["arp"].reacquire(utils)
+                    except ArpResolutionFailure:
+                        utils.logger.warning("gone")
+                        raise
+        """
+        assert _lines(source) == [5, 9]
+
 
 class TestModelResolutionFailureStaySilent:
     def test_the_documented_shape_is_clean(self) -> None:
@@ -115,6 +147,41 @@ class TestModelResolutionFailureStaySilent:
                     raise TestFailure("rejected", "200", str(response.status))
         """
         assert _lines(source) == []
+
+    def test_a_cleanup_that_logs_the_miss_is_clean_under_both_rules(self) -> None:
+        # Issue #153: before the cleanup guard, this rule demanded the TestFailure that
+        # litmus/no-verdict-in-cleanup forbids, and no cleanup could satisfy both.
+        source = """
+            class Suite(LitmusTest):
+                async def cleanup(self, utils: TestUtils) -> None:
+                    try:
+                        await utils.ctx["api"].request(DeviceRequest(method="DELETE", path="/"))
+                    except DeviceApiOperationFailure as error:
+                        utils.logger.warning("deny-list entry left behind: %s", error)
+                    async def settle() -> None:
+                        try:
+                            await utils.ctx["arp"].reacquire(utils)
+                        except ArpResolutionFailure:
+                            utils.logger.warning("device did not come back")
+                    await settle()
+        """
+        module = SuiteModule(Path("suite.py"), dedent(source))
+
+        assert _lines(source) == []
+        assert list(NoVerdictInCleanupRule().check(module)) == []
+
+    def test_a_nested_helper_inside_cleanup_is_held_to_the_cleanup_guard(self) -> None:
+        source = """
+            class Suite(LitmusTest):
+                async def cleanup(self, utils: TestUtils) -> None:
+                    async def settle() -> None:
+                        await utils.ctx["arp"].reacquire(utils)
+                    await settle()
+        """
+        violations = _check(source)
+
+        assert [v.line for v in violations] == [5]
+        assert "cleanup must not throw" in violations[0].message
 
     def test_an_unawaited_call_is_left_for_the_caller_to_guard(self) -> None:
         source = """
