@@ -85,7 +85,7 @@ rule documents as the escape; nothing in `docs/idioms.md` says cleanup must use 
 **Close it:** a sentence in the cleanup idiom, or skip `cleanup()` when `configure()`
 did not settle (the lifecycle example suggests the latter is not the intent).
 
-## F4. Two tier-3 rules collide on an API call in `cleanup()` (tooling, medium)
+## F4. Two tier-3 rules collide on an API call in `cleanup()` (tooling, medium) — closed 2026-10-19
 
 **Wanted:** `cleanup()` that `DELETE`s the deny-list entry it added.
 
@@ -96,6 +96,12 @@ module-level `_settle()` helper, which the rule does not look inside.
 
 **Close it:** the resolution rule accepts a handler that logs when the enclosing
 method is `cleanup`, or a survey/audit hook.
+
+**Closed:** in `cleanup()`, and helpers nested in it, `litmus/model-resolution-failure`
+asks for a handler that raises nothing and logs the miss, the shape
+`litmus/no-verdict-in-cleanup` also accepts (issue #153). `_settle()` stays as the
+helper both teardown requests share. It no longer needs to sit outside the class to
+get past the rule.
 
 ## F5. A session credential has to ride in ctx, which is on the record (gap, medium)
 
