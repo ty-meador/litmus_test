@@ -3,6 +3,11 @@
 **Status: SIGNED — Ty, 2026-09-10** ("all approved", recorded on #91). Implementation
 lands with the MR that carries this status change.
 
+**Amendment pending sign-off — issue #150, 2026-10-18:** the Serial Turn Contract
+below changes the transport's concurrency contract (one command on the wire at a
+time, queued in call order; Zavala's recommended "queue", not "refuse"). It takes
+Ty's sign-off on #150 before this line reads SIGNED.
+
 Ty ruled **both** placements on 2026-09-05: `SerialInterface` as a local peer of
 `SshInterface` (console header on the litmus host), and the same transport reached
 through the existing `via` hop (a console server, or a Pi with a USB-UART, driven
@@ -151,9 +156,47 @@ abort is framework-owned and idempotent; suite code never calls
 **Consequence:** Any `exec` still parked when the sequence runs settles with
 `stderr` naming `"transport closed"` — the same cause string
 `_name_transport_death` gives SSH, so a Floor Technician's grep for a dead
-resource does not need to know which transport produced it. A 30-minute console
-session in progress when the run aborts does not keep mutating hardware after the
-sequence completes.
+resource does not need to know which transport produced it. An `exec` still
+queued behind it settles the same way without ever reaching the wire (Serial
+Turn Contract below). A 30-minute console session in progress when the run
+aborts does not keep mutating hardware after the sequence completes.
+
+## Serial Turn Contract
+
+**Framework obligation:** `exec` on one `SerialInterface` runs one command at a
+time, in call order. A console carries one byte stream and no channel per
+caller — unlike an SSH session, which opens a channel per `exec` — so two callers
+writing back to back would both read the same reply. The transport holds an
+`asyncio.Lock` around each command's write-and-read; a caller that arrives while
+another is on the wire waits its turn, and waiters are served in the order they
+called. This is the turn a shared `DeviceApi` handle takes per request (bench
+finding F13), applied to the console, and it is what makes a `use_serial` route
+safe under `self.parallel()`: the leaves run concurrently, their commands go out
+one at a time.
+
+`prompt_timeout` bounds only the command's own wait for the prompt once it is on
+the wire, never its time in the queue — a sibling ahead in the queue is not the
+DUT being slow, and the node clock bounds the whole wait. A command still queued
+when `cancel_in_flight` or `disconnect` lands never reaches the wire: it settles
+`exit_code == -1` with `stderr` `"transport closed"`, the same evidence an
+in-flight command gets from the Serial Abort Contract. The halt itself takes no
+turn — BREAK, Ctrl-C, and the close go out past whatever holds the lock, so the
+halt never waits.
+
+**Developer obligation:** Know what the leaves share. Queued leaves share one
+shell, so its state travels between them: a `cd`, an exported variable, or a
+background job started in one leaf is visible to the next. That is the cost
+particular to a console — a `DeviceApi` handle shares a session, not a shell.
+Claims that need isolation want one console each (`get_serial(device=...)` per
+leaf, or one `use_serial` per child suite), and a latency measured around
+`utils.exec` on a shared console includes the wait for siblings.
+
+**Consequence:** The F13 shape on a console — one `use_serial(device=...)` in
+`configure()`, `utils.exec` in every `parallel` leaf — comes back with each
+leaf's own verdict. Before this contract the second caller's read collided with
+the first's: `utils.exec` raised `asyncio.StreamReader`'s `RuntimeError` through
+the node, a false `ContractViolation` beside a false `"prompt timeout"` on a
+board that was healthy (issue #150).
 
 ## Error-taxonomy mapping
 
@@ -234,8 +277,11 @@ runs, under the same `ContractViolation` as `use_shell`, and `litmus-check`'s
 `litmus/shell-in-configure` reads `use_serial(...)` with arguments the same way.
 `via` must resolve to an SSH hop (a `Shell` from `use_shell` or `get_shell`): a
 console has no other tunnel to borrow, and the connector names `use_serial` in the
-`TypeError` when handed anything else. A local `Shell` as `via` is a direct open on
-the test host, as it is for `use_shell`.
+`TypeError` when handed anything else — naming the hop it was handed and the
+`inherit=False` escape, since under a `use_serial` parent that hop was inherited,
+not passed. A local `Shell` as `via` is a direct open on the test host, as it is
+for `use_shell`. The route is shared by the node and its descendants, so
+`parallel` leaves under it take turns on the one console (Serial Turn Contract).
 
 `bench/suites/serial_console.py` is the shape in use: one `use_serial` in
 `configure()`, `utils.exec` in every claim, no handle in ctx, no `cleanup()`.

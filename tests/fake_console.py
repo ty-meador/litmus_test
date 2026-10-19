@@ -32,7 +32,9 @@ class FakeConsole:
 
     Speaks CRLF. Echoes input unless `echo` is false. Answers `uname` by
     echoing the command (matching LoopbackSshd), `fail` with `nope` and
-    status 1, and `sleep N` by parking until Ctrl-C or EOF.
+    status 1, `sleep N` by parking until Ctrl-C or EOF, and `delay N` with
+    `woke` after N seconds. Every command line that reaches the shell is kept
+    in `received`, in arrival order.
     """
 
     def __init__(
@@ -61,6 +63,7 @@ class FakeConsole:
         self._mute = mute
         self._stop = asyncio.Event()
         self._interrupt = asyncio.Event()
+        self.received: list[str] = []
 
     def stop(self) -> None:
         """Unblock a parked session so the fixture can tear down."""
@@ -234,6 +237,7 @@ class FakeConsole:
             # Enter on an empty line: a shell re-prompts, wedged or not.
             await write(self._encoded_prompt())
             return "shell"
+        self.received.append(command)
         if self._hang:
             await self._park()
             return "shell"
@@ -249,6 +253,9 @@ class FakeConsole:
             await self._park()
             if self._stop.is_set() or self._interrupt.is_set():
                 return "shell"
+            output = "woke"
+        elif command.startswith("delay "):
+            await asyncio.sleep(float(command.split()[1]))
             output = "woke"
         elif command.startswith("dump "):
             remaining = int(command.split()[1])

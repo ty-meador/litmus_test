@@ -200,7 +200,9 @@ class SerialConnector:
         if via is not None and not isinstance(via, SshInterface):
             msg = (
                 "use_serial / get_serial via must be an SSH hop (a Shell from use_shell "
-                "or get_shell); a console has no other tunnel to borrow"
+                f"or get_shell); got {via.endpoint} ({type(via).__name__}), which cannot "
+                "carry a console bridge. Pass via= an SSH Shell, or inherit=False to open "
+                "the device directly, since the hop may have been inherited, not passed"
             )
             raise TypeError(msg)
         if via is not None and not via.connected:
