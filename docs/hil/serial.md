@@ -3,10 +3,9 @@
 **Status: SIGNED — Ty, 2026-09-10** ("all approved", recorded on #91). Implementation
 lands with the MR that carries this status change.
 
-**Amendment pending sign-off — issue #150, 2026-10-18:** the Serial Turn Contract
-below changes the transport's concurrency contract (one command on the wire at a
-time, queued in call order; Zavala's recommended "queue", not "refuse"). It takes
-Ty's sign-off on #150 before this line reads SIGNED.
+**Amendment SIGNED — Ty, 2026-10-18 (#150, merged as !184):** the Serial Turn
+Contract below changes the transport's concurrency contract (one command on the
+wire at a time, queued in call order). Ty ruled "queue", not "refuse".
 
 Ty ruled **both** placements on 2026-09-05: `SerialInterface` as a local peer of
 `SshInterface` (console header on the litmus host), and the same transport reached
