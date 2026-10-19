@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse a commit message that credits an assistant (#149): a Co-Authored-By naming one,
+# a "Generated with" footer, a session link. The record names people; the repo is public.
+# make check runs the same check over origin/main..HEAD for a clone without the hook.
+exec uv run python tools/attribution_check.py --message "$1"

@@ -60,6 +60,7 @@ check:  ## The gate (there is no CI) — verify only, no auto-fix. Green before 
 	uv run ruff check .
 	$(PYRIGHT)
 	uv run python tools/import_cycles.py
+	uv run python tools/attribution_check.py
 	$(MAKE) coverage
 	uv run litmus-check examples
 	$(MAKE) smoke
