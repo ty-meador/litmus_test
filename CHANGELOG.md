@@ -569,6 +569,17 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Fixed
 
+- `SerialInterface.exec` takes a turn (issue #150, the console's F13). `parallel` leaves
+  under a `use_serial` route ran their commands on one console at the same moment, so the
+  second caller's read collided with the first's: `utils.exec` raised
+  `asyncio.StreamReader`'s `RuntimeError` through the node, a false `ContractViolation`
+  beside a false `"prompt timeout"` on a healthy board. Concurrent `exec` calls now queue
+  in call order on one lock; `prompt_timeout` bounds only a command's own wait for the
+  prompt, and one still queued when `cancel_in_flight` or `disconnect` lands never reaches
+  the wire and settles `"transport closed"`. The halt takes no turn. `docs/hil/serial.md`
+  records the Serial Turn Contract and the cost particular to a console: queued leaves
+  share one shell's state. `SerialConnector` now names the hop it refused and the
+  `inherit=False` escape, as `SshConnector` does.
 - `SshInterface` password auth no longer scans `~/.ssh`: the password path passed
   `client_keys=[]`, which asyncssh reads as "load the default key files", so every
   connect loaded and validated whatever keys the test host held (about 0.2s for a

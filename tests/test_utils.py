@@ -543,6 +543,50 @@ class TestUseSerial:
         assert outcome.state is State.PASS
         assert opened[0].connected is False
 
+    async def test_parallel_leaves_take_turns_on_the_routed_console(self) -> None:
+        """Issue #150: the F13 shape on a console. One use_serial, independent leaves."""
+
+        class Suite(LitmusTest):
+            def __init__(self, *, name: str, device: str) -> None:
+                super().__init__(name=name)
+                self._device = device
+
+            async def configure(self, utils: TestUtils) -> dict[str, object]:
+                await utils.use_serial(device=self._device, prompt_timeout=3.0)
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.parallel(
+                    "claims",
+                    [
+                        self.test("slow-ok", self._expect, command="delay 0.3", want=(0, "woke")),
+                        self.test("fails-cleanly", self._expect, command="fail", want=(1, "nope")),
+                        self.test("echoes", self._expect, command="uname", want=(0, "uname")),
+                    ],
+                )
+
+            async def _expect(
+                self, utils: TestUtils, *, command: str, want: tuple[int, str]
+            ) -> Verdict:
+                result = await utils.exec(command)
+                if (result.exit_code, result.stdout) == want:
+                    return PASS
+                raise TestFailure(command, want, result)
+
+        async with open_pty_console() as (device, console):
+            with _slave_held_open(device):
+                outcome = await Suite(name="board", device=device).run()
+
+        assert outcome.state is State.PASS, outcome.summary_tree
+        claims = outcome.summary_tree.children[0]
+        assert {child.name: child.state for child in claims.children} == {
+            "slow-ok": State.PASS,
+            "fails-cleanly": State.PASS,
+            "echoes": State.PASS,
+        }
+        # Three commands reached one shell, one at a time, in call order.
+        assert console.received == ["delay 0.3", "fail", "uname"]
+
     async def test_declaring_outside_configure_is_a_contract_violation(self) -> None:
         class Suite(LitmusTest):
             def build_suite(self) -> LitmusTest:
