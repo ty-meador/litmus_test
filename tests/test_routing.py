@@ -669,6 +669,19 @@ class TestSerialConnector:
             await child.use_serial(device="/dev/ttyUSB1")
         assert child.routing_line() == "via ttyUSB0 (inherited from parent)"
 
+    async def test_the_refusal_names_the_inherited_hop_and_the_escape(self) -> None:
+        # Issue #150: the child never passed a via; `_resolve_tunnel` handed it
+        # the parent's console. The message must say which hop, and how to open
+        # the device without it, the way the SSH connector's refusal does.
+        parent = _Routing()
+        await parent.routing.use_serial(device="/dev/ttyUSB0")
+        child = ExecRouting(_Local().run)
+        child.apply_run_params(parent.routing.child_run_params())
+
+        with pytest.raises(TypeError, match=r"got ttyUSB0 \(_Console\).*inherit=False") as raised:
+            await child.get_serial(device="/dev/ttyUSB1")
+        assert "may have been inherited, not passed" in str(raised.value)
+
     async def test_rejects_a_dead_via_hop(self) -> None:
         hop = SshInterface(
             host="127.0.0.1",
