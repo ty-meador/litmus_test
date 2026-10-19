@@ -580,6 +580,14 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Fixed
 
+- `litmus/model-resolution-failure` and `litmus/no-verdict-in-cleanup` agree on
+  `cleanup()` (bench finding F4, issue #153). The first demanded a `try` whose handler
+  raises `TestFailure` around every awaited `request()` / `resolve()` / `reacquire()`; the
+  second forbids that raise in `cleanup()`, so no teardown could satisfy both. In
+  `cleanup()`, and helpers nested in it, the resolution rule now asks for a handler that
+  raises nothing and logs the miss, which is what the Lifecycle Contract's "must not
+  throw" already required: an escaping exception there is swallowed and skips the rest of
+  the teardown.
 - `SerialInterface.exec` takes a turn (issue #150, the console's F13). `parallel` leaves
   under a `use_serial` route ran their commands on one console at the same moment, so the
   second caller's read collided with the first's: `utils.exec` raised

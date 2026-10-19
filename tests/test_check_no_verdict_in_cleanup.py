@@ -99,6 +99,19 @@ class TestNoVerdictInCleanupStaysQuiet:
         """
         assert _lines(source) == []
 
+    def test_a_cleanup_that_logs_a_request_miss_is_clean(self) -> None:
+        # The shape litmus/model-resolution-failure asks for in cleanup (issue #153):
+        # the two rules must agree on it, so each self-test pins its own half.
+        source = """
+            class Suite(LitmusTest):
+                async def cleanup(self, utils: TestUtils) -> None:
+                    try:
+                        await utils.ctx["api"].request(DeviceRequest(method="DELETE", path="/"))
+                    except DeviceApiOperationFailure as error:
+                        utils.logger.warning("deny-list entry left behind: %s", error)
+        """
+        assert _lines(source) == []
+
     def test_non_litmus_classes_are_ignored(self) -> None:
         source = """
             class Plain:
