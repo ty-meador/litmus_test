@@ -204,5 +204,10 @@ that reader is soon a stranger.
   first. `tests/test_public_surface.py` refuses an MR that updates one without the others.
 - Commits: imperative subject line, ≤72 chars, body explains *why* when non-obvious.
   Run `make check` before pushing — it is the gate, and an MR that fails it is not merged.
+- **The record names people.** No AI attribution in commits, MRs, or notes: no
+  `Co-Authored-By:` naming an assistant, no "Generated with" footer, no session link
+  (tenet 4 of the watch, #149). `.githooks/commit-msg` refuses such a message at commit
+  time, and `make check` runs `tools/attribution_check.py` over `origin/main..HEAD` so a
+  clone that never ran `make hooks` is red at the gate instead of on review.
 - Never commit: `.venv/`, caches, artifacts, secrets, real hostnames/credentials from
   test racks. `uv.lock` **is** committed.
