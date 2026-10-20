@@ -35,9 +35,12 @@ type `run-result`; consumers do not need to derive the run directory name.
 | `suite_target` | string or null | The loader target that produced the run, as `litmus run` resolved it: an absolute suite file or module name, `::`, and the suite class name. `litmus inspect` loads this suite for its Re-Run tab, so the technician re-runs a node with the code that ran in production; `--suite` overrides it. `null` when the run was started without one, from a developer's own harness. Added within version 1 on 2026-09-10; a consumer written before it treats the field as additive. |
 
 A measurement entry is `{name, value, unit, limits, in_limits, timestamp}` as
-`docs/measurements.md` defines it: `limits` is `{low, high}` with `null` for an open
-side or `null` altogether, `in_limits` is `true`, `false`, or `null` when no window was
-given, and `timestamp` is UTC ending in `Z`. `in_limits` is evidence, never a verdict;
+`docs/measurements.md` defines it: `value` is a number, or `null` when the suite tried
+to take the reading and could not (issue #159; a hole in the series, never a zero),
+`limits` is `{low, high}` with `null` for an open side or `null` altogether,
+`in_limits` is `true`, `false` (always `false` for a `null` value against a window), or
+`null` when no window was given, and `timestamp` is UTC ending in `Z`. `in_limits` is
+evidence, never a verdict;
 version 1 defines no aggregation, SPC, or Cpk, and an integrator must not infer them
 from the entries. Because `result.json` is the root's record, the entries a leaf
 recorded reach the file through `measurements` on its `summary_tree` node, not
@@ -160,7 +163,9 @@ One rule governs all of them.
 
 Before 1.0.0 the record may change in place under version 1, because no consumer
 exists to break; the `type` vocabulary was renamed this way to match the composition
-vocabulary (ruling on issue #111, 2026-09-06). From 1.0.0 rule 2 applies as written.
+vocabulary (ruling on issue #111, 2026-09-06), and `measurements[].value` became
+nullable this way for a reading not taken (ruling on issue #159, 2026-10-20). From
+1.0.0 rule 2 applies as written.
 
 ## Published schemas
 

@@ -12,6 +12,12 @@ Ty asked for on issue #85: the same call as ``utils.measure``, resolved through 
 binding, and refused when nothing is bound. Recording and publishing belong to
 ``TestUtils`` and ``base.py`` respectively, so the alias never becomes a second
 mechanism.
+
+A reading the suite tried to take and could not is ``value=None`` (issue #159, bench
+finding F10). It is recorded as not taken, so the gap lands where the Floor Technician
+reads it instead of behind a ``try`` in every claim that reads over a shell. ``NaN`` is
+still refused: a blank answer from the device is a fact about the device, a ``NaN`` is a
+bug in the suite, and the record keeps the two apart.
 """
 
 from __future__ import annotations
@@ -54,18 +60,25 @@ class Measurement:
     reading was recorded without a window, ``True`` or ``False`` otherwise; it is a
     recorded fact, and the verdict is decided elsewhere.
 
+    A reading that was not taken has ``value=None``. It is never inside its window, so
+    ``in_limits`` is ``False`` when limits were given: a gate written on the window
+    fails the claim however it is spelled, and the claim decides what a missing
+    reading means. Without limits it is ``None``, as for any trend reading.
+
     Attributes:
         name: The identity of the quantity, unique within the node.
-        value: The reading, an ``int`` or a finite ``float``.
+        value: The reading, an ``int`` or a finite ``float``; ``None`` when the suite
+            tried to take it and could not.
         unit: The developer's label for the reading, or ``None`` for a dimensionless
             count. Never validated, never converted.
         limits: The inclusive ``(low, high)`` window, or ``None`` when none was given.
-        in_limits: Whether ``value`` sits inside ``limits``; ``None`` without limits.
+        in_limits: Whether ``value`` sits inside ``limits``; ``False`` for a reading not
+            taken against a window; ``None`` without limits.
         timestamp: When the reading was recorded, timezone-aware UTC.
     """
 
     name: str
-    value: int | float
+    value: int | float | None
     unit: str | None
     limits: Limits | None
     in_limits: bool | None
@@ -132,7 +145,7 @@ def new_measurement(
     Args:
         node: Name of the node recording the measurement, for the violation banner.
         name: Non-empty identity of the quantity.
-        value: An ``int`` or finite ``float``.
+        value: An ``int`` or finite ``float``, or ``None`` for a reading not taken.
         unit: Free label or ``None``.
         limits: ``None``, or an inclusive ``(low, high)`` tuple with at most one open
             side, finite bounds, and ``low <= high``.
@@ -147,11 +160,13 @@ def new_measurement(
         raise MeasurementInvalid(
             node, measurement=measurement_label(name), reason="name must be a non-empty str"
         )
-    if not _is_finite_number(value):
+    # ``None`` is the one non-number admitted: the device gave no reading. Everything
+    # else that is not a finite number is the suite's bug and stays a violation.
+    if value is not None and not _is_finite_number(value):
         raise MeasurementInvalid(
             node,
             measurement=name,
-            reason=f"value must be an int or a finite float, not {value!r}",
+            reason=f"value must be an int, a finite float, or None, not {value!r}",
         )
     if unit is not None and not isinstance(unit, str):
         raise MeasurementInvalid(
@@ -162,7 +177,12 @@ def new_measurement(
     if limits is not None:
         window = _validated_limits(node, name, limits)
         low, high = window
-        in_limits = (low is None or value >= low) and (high is None or value <= high)
+        # A reading not taken is never inside its window, so a claim gated on the
+        # window fails through its own gate rather than passing on a hole.
+        if value is None:
+            in_limits = False
+        else:
+            in_limits = (low is None or value >= low) and (high is None or value <= high)
     return Measurement(
         name=name,
         value=value,
@@ -221,7 +241,7 @@ def _validated_limits(node: str, name: str, limits: object) -> Limits:
 
 def measure(
     name: str,
-    value: int | float,
+    value: int | float | None,
     *,
     unit: str | None = None,
     limits: Limits | None = None,
@@ -236,7 +256,7 @@ def measure(
 
     Args:
         name: Non-empty identity of the quantity, unique within the node.
-        value: An ``int`` or finite ``float``.
+        value: An ``int`` or finite ``float``, or ``None`` for a reading not taken.
         unit: Free label such as ``"V"`` or ``"ms"``, or ``None`` for a count.
         limits: Inclusive ``(low, high)`` window, ``None`` on an open side, or ``None``.
 

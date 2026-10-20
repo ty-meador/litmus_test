@@ -41,6 +41,7 @@ from litmus.errors import (
     MeasurementViolation,
 )
 from litmus.results import SummaryTreeNode
+from litmus.run_data import JsonValue
 
 type Recorder = Callable[[TestUtils], object]
 """A scripted call made from inside a lifecycle slot; what it does is the test."""
@@ -49,6 +50,9 @@ type Spelling = Callable[..., Measurement]
 """One of the two ways to spell the call; both must obey every rule identically."""
 
 RESULT_SCHEMA = Path(__file__).resolve().parent.parent / "docs" / "schema" / "result-v1.schema.json"
+
+_NOT_NUMERIC = "value must be an int, a finite float, or None"
+"""The refusal every non-number but ``None`` earns; ``None`` is the reading not taken (#159)."""
 
 
 def _via_utils(utils: TestUtils, **call: Any) -> Measurement:
@@ -252,6 +256,135 @@ class TestTimelineLine:
         ]
 
 
+class TestNotTaken:
+    """``measure(name, None)`` records a reading not taken (issue #159, bench finding F10).
+
+    The ruling: ``value`` is nullable in place under result version 1, a hole is never
+    inside its window, and the framework still decides nothing about the verdict.
+    """
+
+    @SPELLINGS
+    async def test_none_against_a_window_is_recorded_outside_it(self, spelling: Spelling) -> None:
+        def record(utils: TestUtils) -> None:
+            spelling(utils, name="root_used_pct", value=None, unit="%", limits=(None, 90))
+
+        result = await _Bench(name="guest", during_test=record).run()
+
+        # The framework changed nothing: the claim returned PASS without gating.
+        assert result.state is State.PASS
+        entry = _only(_leaf(result.summary_tree))
+        entry.pop("timestamp")
+        assert entry == {
+            "name": "root_used_pct",
+            "value": None,
+            "unit": "%",
+            "limits": {"low": None, "high": 90},
+            "in_limits": False,
+        }
+
+    async def test_none_without_a_window_is_a_hole_in_the_trend(self) -> None:
+        def record(utils: TestUtils) -> None:
+            utils.measure("uptime_s", None, unit="s")
+
+        result = await _Bench(name="guest", during_test=record).run()
+
+        entry = _only(_leaf(result.summary_tree))
+        assert entry["value"] is None
+        assert entry["in_limits"] is None
+        assert entry["limits"] is None
+
+    async def test_a_claim_gated_on_the_window_fails_through_its_own_gate(self) -> None:
+        class Gated(LitmusTest):
+            def build_suite(self) -> LitmusTest:
+                return self.test("claim", self._claim)
+
+            async def _claim(self, utils: TestUtils) -> Verdict:
+                reading = utils.measure("rail_v", None, unit="V", limits=(4.75, 5.25))
+                if reading.in_limits:
+                    return PASS({"rail_v": reading.value})
+                raise TestFailure("rail not read", "4.75-5.25 V", "no reading")
+
+        result = await Gated(name="psu").run()
+
+        assert result.state is State.FAIL
+        failure = _leaf(result.summary_tree).failure
+        assert isinstance(failure, TestFailure)
+        assert failure.fail_message == "rail not read"
+        # The hole is still on the record, beside the Fail that names it.
+        assert _only(_leaf(result.summary_tree))["value"] is None
+
+    async def test_the_record_keeps_call_order_and_validates_against_the_schema(self) -> None:
+        def record(utils: TestUtils) -> None:
+            utils.measure("boot_time_s", 12.5, unit="s")
+            utils.measure("mem_available_mb", None, unit="MB", limits=(512, None))
+            utils.measure("entropy_bits", 3000, unit="bit", limits=(256, None))
+
+        result = await _Bench(name="guest", during_test=record).run()
+
+        payload = json.loads(json.dumps(result.to_json(), allow_nan=False))
+        leaf = payload["summary_tree"]["children"][0]
+        assert [entry["value"] for entry in leaf["measurements"]] == [12.5, None, 3000]
+        assert _accepts(Draft202012Validator(json.loads(RESULT_SCHEMA.read_text())), payload)
+
+    async def test_a_reading_not_taken_logs_at_warning_in_words(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def record(utils: TestUtils) -> None:
+            utils.measure("root_used_pct", None, unit="%", limits=(None, 90))
+            utils.measure("uptime_s", None, unit="s")
+
+        with caplog.at_level("INFO"):
+            await _Bench(name="guest", during_test=record).run()
+
+        lines = [
+            (logged.levelname, logged.getMessage())
+            for logged in caplog.records
+            if logged.getMessage().startswith("measurement: ")
+        ]
+        assert lines == [
+            ("WARNING", "measurement: root_used_pct not taken limits=[null, 90] in_limits=false"),
+            ("WARNING", "measurement: uptime_s not taken limits=null in_limits=null"),
+        ]
+
+    @SPELLINGS
+    async def test_the_name_is_still_unique_whether_or_not_the_reading_was_taken(
+        self, spelling: Spelling
+    ) -> None:
+        def record(utils: TestUtils) -> None:
+            spelling(utils, name="rail_v", value=None, unit="V")
+            spelling(utils, name="rail_v", value=5.0, unit="V")
+
+        result = await _Bench(name="psu", during_test=record).run()
+
+        assert result.state is State.FAIL
+        assert isinstance(_leaf(result.summary_tree).failure, MeasurementDuplicate)
+        assert _only(_leaf(result.summary_tree))["value"] is None
+
+    def test_the_schema_admits_null_and_still_refuses_every_other_non_number(self) -> None:
+        validator = Draft202012Validator(json.loads(RESULT_SCHEMA.read_text()))
+        entry: JsonObject = {
+            "name": "root_used_pct",
+            "value": None,
+            "unit": "%",
+            "limits": {"low": None, "high": 90},
+            "in_limits": False,
+            "timestamp": "2026-10-20T01:14:03.118402Z",
+        }
+        tree = SummaryTreeNode(
+            name="guest",
+            type=NodeType.SUITE,
+            state=State.PASS,
+            log_path="0001-guest-0123456789ab/timeline.jsonl",
+            measurements=(entry,),
+        )
+        node = tree.to_json()
+        assert _accepts(validator, _minimal_result(node))
+        refusals: list[JsonValue] = ["", "5.02", True, [None]]
+        for refused in refusals:
+            bad = _minimal_result({**node, "measurements": [{**entry, "value": refused}]})
+            assert not _accepts(validator, bad), repr(refused)
+
+
 class TestGuards:
     @SPELLINGS
     @pytest.mark.parametrize(
@@ -259,10 +392,10 @@ class TestGuards:
         [
             ({"name": "", "value": 1}, "name must be a non-empty str"),
             ({"name": 7, "value": 1}, "name must be a non-empty str"),
-            ({"name": "flag", "value": True}, "value must be an int or a finite float"),
-            ({"name": "nan", "value": float("nan")}, "value must be an int or a finite float"),
-            ({"name": "inf", "value": float("-inf")}, "value must be an int or a finite float"),
-            ({"name": "text", "value": "5.0"}, "value must be an int or a finite float"),
+            ({"name": "flag", "value": True}, _NOT_NUMERIC),
+            ({"name": "nan", "value": float("nan")}, _NOT_NUMERIC),
+            ({"name": "inf", "value": float("-inf")}, _NOT_NUMERIC),
+            ({"name": "text", "value": "5.0"}, _NOT_NUMERIC),
             ({"name": "unit", "value": 1, "unit": 3}, "unit must be a str or None"),
             ({"name": "none", "value": 1, "limits": (None, None)}, "bounds nothing"),
             ({"name": "backwards", "value": 1, "limits": (5, 4)}, "exceeds high"),
