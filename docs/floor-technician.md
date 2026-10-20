@@ -109,7 +109,7 @@ The declared tree is still complete, so you can see what was skipped.
 | `children` | Ordered children. Groups keep declaration order after settlement. |
 | `evidence` | The readings this claim handed back with its verdict, or `null`. Read it beside the failure: a Fail with `evidence` shows you what the unit measured. |
 | `evidence_declared` | The readings this claim promised to take on a pass, or `null`. A name listed here that is missing from `evidence` is a reading that was **not taken**: the claim failed, aborted, or never ran before it got there. It is not a reading of zero. |
-| `measurements` | The numbers this claim recorded, with their windows, or `null` if it never ran. An entry with `in_limits: false` is a reading outside its window. Read `state` beside it: it is not a Fail unless `state` says Fail. The four cases are in `docs/measurements.md`, "What the Floor Technician reads". |
+| `measurements` | The numbers this claim recorded, with their windows, or `null` if it never ran. An entry with `in_limits: false` is a reading outside its window. An entry with `value: null` is a reading the claim tried to take and the device did not give; it is **not** a reading of zero. Read `state` beside either: it is not a Fail unless `state` says Fail. The cases are in `docs/measurements.md`, "What the Floor Technician reads". |
 
 ### The failure object
 

@@ -27,7 +27,7 @@ its node the way a log line is.
 def measure(
     self,
     name: str,
-    value: int | float,
+    value: int | float | None,
     *,
     unit: str | None = None,
     limits: tuple[float | None, float | None] | None = None,
@@ -46,11 +46,19 @@ same quantity in the same unit. Use the same spelling discipline as evidence key
 appended, because a consumer that sees two `output_voltage_v` rows for one node cannot
 tell a retry from a bug.
 
-**`value`** — an `int` or a finite `float`. `bool` is refused (it is an `int` to
-Python and a category to a process engineer), as are `NaN` and the infinities, for the
-same reason `run_data` refuses them: a JSON consumer cannot carry them. A textual
-observation (`ftl_state: "running"`) is evidence on the verdict, not a measurement;
-SPC and Cpk are defined on numbers, and this protocol does not pretend otherwise.
+**`value`** — an `int` or a finite `float`, or `None` for a reading the suite tried to
+take and could not. `bool` is refused (it is an `int` to Python and a category to a
+process engineer), as are `NaN` and the infinities, for the same reason `run_data`
+refuses them: a JSON consumer cannot carry them. A textual observation
+(`ftl_state: "running"`) is evidence on the verdict, not a measurement; SPC and Cpk are
+defined on numbers, and this protocol does not pretend otherwise.
+
+`None` and `NaN` are kept apart on purpose (issue #159, bench finding F10). A blank
+answer over a shell is a fact about the device, and the record is where the Floor
+Technician should find it; a `NaN` can only come from arithmetic in the suite, and that
+is a bug the `ContractViolation` names. Before #159 every reading parsed from a shell
+needed its own `try` to turn the blank into a failure; now the parse hands `measure`
+the `None` and the gate below does the rest.
 
 **`unit`** — a free string the developer chooses (`"V"`, `"ms"`, `"°C"`), or `None`
 for a dimensionless count. The framework validates nothing about it and never converts;
@@ -85,6 +93,38 @@ The framework evaluated the limit once, the developer chose what to do about it,
 `litmus/gated-pass` can see the predicate beside the `PASS`. Whether an out-of-window
 reading is a `TestFailure`, a warning to trend, or a reason to re-seat the probe and
 read again is the suite author's decision, taken in the suite.
+
+### A reading not taken
+
+`measure(name, None, ...)` records that the suite tried and the device gave nothing.
+The verdict rule for it follows from the one above and adds nothing to it:
+
+- **A missing reading is never inside its window.** With `limits`, `in_limits` is
+  `false`, so the gate in the example fails the claim however it is spelled
+  (`if rail.in_limits:` or `if rail.in_limits is False:`). The claim then says what the
+  hole means, usually a `TestFailure` naming the command that answered blank. Without
+  `limits`, `in_limits` is `null`, as for any trend reading.
+- **The framework still changes nothing.** A limit is evidence, never a verdict, and a
+  hole is no different: a claim that gates on the reading fails through its own gate; a
+  trend-only reading leaves the verdict where the claim put it. A `Pass` beside a
+  `value: null` means the claim did not gate on that reading, and that is the claim
+  author's decision, visible in the record.
+- **The record keeps the entry.** The reading sits in `measurements` in call order with
+  `value: null`, so the consumer sees a hole in the series where there was one, and the
+  Floor Technician sees the name of what was not taken rather than a shorter array.
+
+```python
+@evidence("root_used_pct")
+async def _root_filesystem(self, utils: TestUtils) -> Verdict:
+    result = await utils.exec("df --output=pcent / | tail -n 1")
+    used = _number(result.stdout.rstrip().rstrip("%"))  # float | None; no try here
+    reading = utils.measure("root_used_pct", used, unit="%", limits=(None, 90))
+    if reading.value is None:
+        raise TestFailure("df gave no percentage", "N%", result.stdout.strip())
+    if reading.in_limits:
+        return PASS({"root_used_pct": reading.value})
+    raise TestFailure("root filesystem too full", "<= 90 %", f"{reading.value:g} %")
+```
 
 ### Where it may be called
 
@@ -147,10 +187,10 @@ Each call appends one object to the node's `measurements` array, in call order:
 | Field | JSON type | Meaning |
 |---|---|---|
 | `name` | string | The measurement's identity within the node; unique in the array. |
-| `value` | number | The reading, exactly as passed. |
+| `value` | number or null | The reading, exactly as passed; null when the suite tried to take it and could not. A consumer charting the series skips null: it is a hole, not a zero. |
 | `unit` | string or null | The developer's label. Never converted. |
 | `limits` | object or null | `{ "low": number or null, "high": number or null }`, inclusive; null when the call declared none. |
-| `in_limits` | boolean or null | `low <= value <= high` with an open side always satisfied; null when `limits` is null. Evidence, not a verdict. |
+| `in_limits` | boolean or null | `low <= value <= high` with an open side always satisfied; false when `value` is null and `limits` is not; null when `limits` is null. Evidence, not a verdict. |
 | `timestamp` | string | When the reading was recorded, UTC ending in `Z`, the same form the timeline uses. |
 
 The node path, the run, and the station are not repeated in every entry. They are
@@ -158,9 +198,9 @@ properties of the node and the run directory the array sits in, and repeating th
 would invite a consumer to trust the copy over the tree.
 
 **In two lines:** `measurements` is an array, one object per `measure` call in call
-order, each `{name, value, unit, limits: {low, high} | null, in_limits: bool | null,
-timestamp}`. It appears on the node's `run_data` and on the node's `summary_tree`
-entry; node path comes from the tree, run id from the run directory.
+order, each `{name, value: number | null, unit, limits: {low, high} | null, in_limits:
+bool | null, timestamp}`. It appears on the node's `run_data` and on the node's
+`summary_tree` entry; node path comes from the tree, run id from the run directory.
 
 ### Where it appears in `result.json`
 
@@ -195,7 +235,7 @@ is a new `$defs/measurement` and two references to it:
   "required": ["name", "value", "unit", "limits", "in_limits", "timestamp"],
   "properties": {
     "name": { "type": "string", "minLength": 1 },
-    "value": { "type": "number" },
+    "value": { "type": ["number", "null"] },
     "unit": { "type": ["string", "null"] },
     "limits": {
       "anyOf": [
@@ -236,6 +276,12 @@ and drops the "empty in version 1" wording; `summaryTreeNode` gains
 `measurement` object stays open, like every framework-owned object, so a field added
 later within version 1 is accepted by a consumer validating with this file.
 
+`value` became nullable on 2026-10-20 (issue #159), in place and under version 1. Rule 2
+of the versioning policy would bump the number for a nullability change; the policy's
+own pre-1.0.0 clause lets the record change in place because no consumer exists to
+break, and Ty ruled on the issue that this is the time to make such changes. From 1.0.0
+the same change would be a version 2.
+
 ## Evidence, never a verdict
 
 The framework evaluates the limit and writes `in_limits`. It does not raise, does not
@@ -267,6 +313,7 @@ their windows. An entry with `in_limits: false` is a reading outside its window.
 | `Fail` | `false` | The claim named that window in its check and the unit missed it. `evidence` on the same node usually carries the same reading. | Hardware. Follow the station protocol for the failure name; the entry tells you by how much. |
 | `Pass` | `false` | The claim recorded the number for trend and did not gate on it, or the window is not yet a pass criterion. | Ship on the verdict. Do not scrap the unit on this line alone; route the reading to the process engineer. |
 | `Pass` or `Fail` | `null` | Recorded without a window. | Trend only. Nothing to act on here. |
+| any | `false` or `null`, with `value: null` | The claim tried to take this reading and the device gave nothing. Not a reading of zero. | Read `state` and `failure` beside it: a `Fail` names what answered blank. A `Pass` means the claim did not gate on it; route the hole to the process engineer, not to scrap. |
 | `Aborted` | anything | The number was taken before the run stopped; no verdict exists. | Follow the Aborted protocol for the failure. The measurement is context, not a category. |
 
 In the timeline, every call writes one scoped line so the chronology carries the number
@@ -275,12 +322,14 @@ next to what the suite was doing when it took it:
 ```
 measurement: output_voltage_v = 5.02 V limits=[4.75, 5.25] in_limits=true
 measurement: output_voltage_v = 5.31 V limits=[4.75, 5.25] in_limits=false
+measurement: output_voltage_v not taken limits=[4.75, 5.25] in_limits=false
 ```
 
-An in-window or unlimited reading logs at `info`; an out-of-window reading logs at
-`warning`, so it stands out in `timeline.log` without the FT filtering for it. The line
-is a log entry and nothing more: it is not the record (the array is), and it does not
-change the node's state.
+An in-window or unlimited reading logs at `info`; an out-of-window reading, or one not
+taken, logs at `warning`, so it stands out in `timeline.log` without the FT filtering
+for it. The not-taken line says so in words rather than printing `= null V`, which reads
+as a number missing its digits. The line is a log entry and nothing more: it is not the
+record (the array is), and it does not change the node's state.
 
 ### Relationship to `@evidence` and `PASS(evidence)`
 
@@ -319,7 +368,7 @@ against this page and the schema alone:
 |---|---|---|
 | A stable name | `measurements[].name`, unique within the node | The developer's promise; a rename is a new series. |
 | A unit | `measurements[].unit` | A label, never converted. Changing it under a name breaks the series. |
-| A numeric value | `measurements[].value` | Always a JSON number; never a string, boolean, or non-finite. |
+| A numeric value | `measurements[].value` | A JSON number, or `null` when the reading was not taken (#159); never a string, boolean, or non-finite. The consumer skips `null` in a series: a hole, not a zero. |
 | The limits it was judged against | `measurements[].limits.low` / `.high`, or null | Inclusive; an open side is null. |
 | Whether it was inside | `measurements[].in_limits` | Evidence; the consumer does not recompute the verdict from it. |
 | A timestamp | `measurements[].timestamp` | UTC, `Z`-terminated, same form as the timeline. Depends on the station clock rule in `docs/floor-technician.md`. |
@@ -342,7 +391,7 @@ alias, and every one of them is a `ContractViolation` (developer bug, `bug: true
 | Guard | Fires when |
 |---|---|
 | Duplicate name | The node already recorded that name. |
-| Not numeric | `value` is a `bool`, a `str`, `NaN`, an infinity, or anything that is not `int`/`float`. |
+| Not numeric | `value` is a `bool`, a `str`, `NaN`, an infinity, or anything that is not `int`/`float`. `None` is not refused: it is the reading not taken (#159). |
 | Invalid limits | Both sides `None`, a non-finite bound, or `low > high`. |
 | Outside a node | `litmus.measure` with nothing bound, or either spelling from `cleanup`, a survey, an audit, a hook, or after the node settled. |
 
