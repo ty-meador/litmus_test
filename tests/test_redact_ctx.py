@@ -450,6 +450,49 @@ class TestRecordContainment:
         result_json = json.loads(next(root.rglob("result.json")).read_text())
         assert result_json["run_data"]["sid"] == REDACTED
 
+    @pytest.mark.parametrize("write", ["setdefault", "ior"])
+    async def test_a_secret_inserted_by_setdefault_or_ior_is_masked_run_wide(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, write: str
+    ) -> None:
+        # ``dict.setdefault`` and ``dict.__ior__`` insert at C level without passing
+        # through ``__setitem__``; each override must register on its own, or the ctx
+        # view says REDACTED while the secret sits in the timeline and the failure.
+        class Suite(LitmusTest):
+            redact_ctx = ("sid",)
+
+            async def configure(self, utils: TestUtils) -> dict[str, Any]:
+                # ``|=`` on the property would rebind it; the write goes to the mapping.
+                ctx = utils.ctx
+                assert isinstance(ctx, RunContext)
+                if write == "setdefault":
+                    ctx.setdefault("sid", _SID)
+                else:
+                    ctx |= {"sid": _SID}
+                return {}
+
+            def build_suite(self) -> LitmusTest:
+                return self.test("login", self._login)
+
+            async def _login(self, utils: TestUtils) -> Verdict:
+                utils.logger.info("session %s", utils.ctx["sid"])
+                raise TestFailure(
+                    f"FTL refused session {utils.ctx['sid']}", "200", utils.ctx["sid"]
+                )
+
+        with caplog.at_level(logging.DEBUG, logger="litmus"):
+            result = await Suite(name="pihole").run(env={"PHYSICAL_LOCATION": "bench-154"})
+        haystack = _evidence(result, tmp_path / "artifacts", caplog)
+
+        assert result.state is State.FAIL
+        assert result.run_data["sid"] == REDACTED
+        assert _SID.encode() not in haystack
+        login = (
+            result.summary_tree.children[0] if result.summary_tree.children else result.summary_tree
+        )
+        assert login.failure is not None
+        assert str(login.failure) == f"FTL refused session {REDACTED}"
+        assert login.failure.to_json()["received"] == REDACTED
+
     async def test_a_nested_suite_secret_is_masked_run_wide(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
