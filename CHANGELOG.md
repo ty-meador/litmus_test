@@ -449,6 +449,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- `docs/idioms.md` says what the Lifecycle Contract already implied: `cleanup()` reads
+  every ctx key with `.get()` or `in`, because it also runs when `configure()` raised
+  before returning, and a `[]` read there logs a `ContractViolation` beside the real
+  Fail (bench finding F3, issue #152). The bench's `pihole_rack.py` cleanup follows it.
+  Whether `configure()` may checkpoint ctx for cleanup is issue #163, unruled.
 - The gate is green again from a fresh venv, and the tree agrees with the October
   changes that turned it red. `make check` and `make typecheck` run pyright with the
   `bench` dependency group, so `gpiod` resolves for `bench/gpio_sim.py` and
