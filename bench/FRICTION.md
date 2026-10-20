@@ -72,7 +72,7 @@ Behind a hop the console borrows the router's live SSH session
 suite now has no transport import, no handle in ctx, and no `cleanup()`;
 `make bench-suite-serial` is green against the pty pair.
 
-## F3. Cleanup after a failed `configure()` sees an empty ctx (idiom, medium)
+## F3. Cleanup after a failed `configure()` sees an empty ctx (idiom, medium) — closed 2026-10-20
 
 **Wanted:** `cleanup()` reads `utils.ctx["console"]` and closes it.
 
@@ -84,6 +84,14 @@ rule documents as the escape; nothing in `docs/idioms.md` says cleanup must use 
 
 **Close it:** a sentence in the cleanup idiom, or skip `cleanup()` when `configure()`
 did not settle (the lifecycle example suggests the latter is not the intent).
+
+**Closed:** Ty ruled on issue #152 to keep the contract as designed: `cleanup()` runs
+after a configure Fail, because that is the case it exists for. The Immutable-self rules
+in `docs/idioms.md` now say `cleanup()` reads every key with `.get()` or `in`, and the
+lifecycle example's cleanup comment says why. `pihole_rack.py` was the one bench cleanup
+still reading `[]`; it now returns early when configure never returned the entry. What
+a half-finished configure cannot hand cleanup (the `sid` of a login whose add then
+failed) is the open question on #163.
 
 ## F4. Two tier-3 rules collide on an API call in `cleanup()` (tooling, medium) — closed 2026-10-19
 

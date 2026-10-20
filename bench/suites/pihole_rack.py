@@ -187,14 +187,26 @@ class BlocklistRoundTrip(LitmusTest):
         }
 
     async def cleanup(self, utils: TestUtils) -> None:
-        """Take the entry back off and end the session; a Pi-hole left dirty is a bug."""
-        api: DeviceApi = utils.ctx["api"]
-        headers = {"sid": utils.ctx["sid"]}
+        """Take the entry back off and end the session; a Pi-hole left dirty is a bug.
+
+        Every read is ``.get()``: cleanup also runs after a configure Fail, and then
+        ctx holds none of these keys (issue #152). ``configure()`` returns them only
+        once the entry is on the list, so a missing key means there is nothing to take
+        off. A login whose deny-list add then failed leaves its session to FTL's own
+        timeout, because the ``sid`` never reached ctx; #163 asks for a way to carry it.
+        """
+        api: DeviceApi | None = utils.ctx.get("api")
+        sid: str | None = utils.ctx.get("sid")
+        domain: str | None = utils.ctx.get("domain")
+        if api is None or sid is None or domain is None:
+            utils.logger.info("configure did not settle the deny-list entry; nothing to undo")
+            return
+        headers = {"sid": sid}
         removed = await _settle(
             api,
             DeviceRequest(
                 method="DELETE",
-                path=f"/api/domains/deny/exact/{utils.ctx['domain']}",
+                path=f"/api/domains/deny/exact/{domain}",
                 headers=headers,
             ),
         )
