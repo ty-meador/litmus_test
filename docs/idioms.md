@@ -27,6 +27,7 @@ After `__init__` runs, `self` is read-only. What the tests need flows through co
 - `__init__` sets read-only config (MAC, credentials, site, etc.)
 - `configure()` returns what the tests will read, as a plain dict — the framework merges it into `utils.ctx` and closes it
 - test methods, `cleanup()`, and all child test bodies read from `utils.ctx`, not from `self`; every key they read with `[]` is one `configure()` returned, and a key it did not provide is read with `.get()` or not at all — a missing `[]` read is a `ContractViolation`, not a `KeyError` (issue #112)
+- `cleanup()` reads every key with `.get()` or `in`, never `[]`: it also runs when `configure()` raised before it returned, and then ctx holds nothing `configure()` would have provided. A `[]` read there logs a `ContractViolation` beside the real Fail (issue #152)
 - No `self.field = value` after construction, and no write to `utils.ctx` after `configure()` — a reading travels with the verdict, `PASS({...})`, and a thing that changes mid-run (an address, a connection) is an object in ctx that manages itself (issue #118)
 
 **Why:** Mutable state, on `self` or in ctx, creates hidden coupling between lifecycle phases. When inputs flow through ctx and readings flow out with the verdict, the data path is explicit and traceable. The Floor Technician benefits because each leaf's record carries exactly what that leaf handed back, beside the limits it judged against.
@@ -554,6 +555,8 @@ class MyDevice(LitmusTest):
 
     # pass or fail, cleanup is GUARANTEED to run at the end of the lifecycle.
     # Use it to close any opened connections, put the device into a neutral state, etc.
+    # It runs after a configure Fail too, so read ctx with .get(): "token" may never
+    # have been returned.
     async def cleanup(self, utils: TestUtils) -> None:
         pass  # ssh auto-disconnected by framework, after the post-cleanup survey
 
