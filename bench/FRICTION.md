@@ -113,7 +113,7 @@ asks for a handler that raises nothing and logs the miss, the shape
 helper both teardown requests share. It no longer needs to sit outside the class to
 get past the rule.
 
-## F5. A session credential has to ride in ctx, which is on the record (gap, medium)
+## F5. A session credential has to ride in ctx, which is on the record (gap, medium) — closed 2026-10-20
 
 **Wanted:** log in to FTL's API once in `configure()` and have every claim's request
 carry the session id.
@@ -126,6 +126,11 @@ of every Pi-hole run carries a live session id until logout. Every request also 
 
 **Close it:** `DeviceApi.set_header(name, value)` (or `headers` mutable on the handle),
 and a way to mark a ctx key as not-for-the-record.
+
+**Closed:** `redact_ctx = ("sid",)` on the suite class keeps the session id off the
+record on every surface the Evidence Contract names for an SSH credential (issue
+#154). The `sid` still rides in ctx and the claims still pass `headers={"sid": ...}`
+by hand: Ty declined `set_header` as more API than the gap deserves.
 
 ## F6. JSON is hand-rolled on both sides of `DeviceRequest` (ergonomics, low)
 

@@ -43,7 +43,9 @@ from litmus.errors import (
     HookName,
     MissingVerdict,
     TestFailure,
+    bind_redactions,
 )
+from litmus.redaction import Redactions
 from litmus.run_data import MEASUREMENTS_KEY, JsonObject, invalid_evidence_key, json_evidence
 from litmus.verdict import Verdict
 
@@ -486,6 +488,7 @@ class ChildBoundary:
         audit_signal: AuditSignal | None = None,
         time_budget_clocks: tuple[TimeBudgetClock, ...] = (),
         evidence_contract: EvidenceContract | None = None,
+        redactions: Redactions | None = None,
     ) -> None:
         """Bind the boundary to the one node it guards.
 
@@ -503,6 +506,11 @@ class ChildBoundary:
                 declared one.
             evidence_contract: What this node's verdict may and must carry. Defaults
                 to no declaration and no reserved keys.
+            redactions: The run's registry of secret values (issue #154). Every
+                failure the boundary records is bound to it, and every evidence
+                payload is masked against it, before either reaches the record.
+                `None` leaves both as they came, which is what a standalone boundary
+                in a self-test wants.
         """
         self._node = node
         self._run_abort = run_abort if run_abort is not None else RunAbort()
@@ -512,6 +520,7 @@ class ChildBoundary:
         self._evidence_contract = (
             evidence_contract if evidence_contract is not None else EvidenceContract()
         )
+        self._redactions = redactions
         self._outcome: Outcome | None = None
 
     @property
@@ -625,7 +634,7 @@ class ChildBoundary:
                 self._node, {} if payload is None else payload, held=True
             )
             if violation is None:
-                evidence = None if payload is None else json_evidence(payload)
+                evidence = None if payload is None else self._evidence_json(payload)
                 return Outcome(slot, self._node, State.PASS, value=verdict, evidence=evidence)
             # A pass without its evidence is not a pass. The verdict is kept as the
             # value for the record; the state is a developer-bug Fail.
@@ -654,7 +663,7 @@ class ChildBoundary:
             self._logger.error("%s", violation.fail_message)
             return Outcome(slot, self._node, State.FAIL, failure=violation)
         return Outcome(
-            slot, self._node, State.FAIL, failure=failure, evidence=json_evidence(payload)
+            slot, self._node, State.FAIL, failure=failure, evidence=self._evidence_json(payload)
         )
 
     def _classify_cancellation(self, slot: Slot) -> Outcome:
@@ -710,5 +719,15 @@ class ChildBoundary:
         return failure
 
     def _record(self, outcome: Outcome) -> Outcome:
+        if self._redactions is not None:
+            bind_redactions(outcome.failure, self._redactions)
+            bind_redactions(outcome.swallowed, self._redactions)
         self._outcome = outcome
         return outcome
+
+    def _evidence_json(self, payload: Mapping[str, object]) -> JsonObject:
+        """Detach a validated evidence payload, masked against the run's secrets."""
+        evidence = json_evidence(payload)
+        if self._redactions is None:
+            return evidence
+        return cast("JsonObject", self._redactions.mask_json(evidence))

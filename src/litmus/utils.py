@@ -39,6 +39,7 @@ from litmus.measurement import (
     measurement_label,
     new_measurement,
 )
+from litmus.redaction import Redactions, key_is_redacted
 from litmus.remote import RemoteInterface
 from litmus.routing import (
     ExecRouting,
@@ -190,11 +191,16 @@ class _RunTransports:
 class _ArtifactStore:
     """Private persistence boundary shared by every node in one run."""
 
-    __slots__ = ("_base_root", "_root")
+    __slots__ = ("_base_root", "_redactions", "_root")
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, redactions: Redactions | None = None) -> None:
         self._base_root = Path(root).expanduser().resolve()
         self._root = self._base_root
+        # A captured artifact is masked against the run's redactions (#154) on its way
+        # to disk. result.json needs no pass of its own: every part of a RunResult
+        # that can carry a secret is masked where it is made, so the file matches
+        # ``RunResult.to_json()`` byte for byte.
+        self._redactions = redactions
 
     @property
     def root(self) -> Path:
@@ -223,7 +229,10 @@ class _ArtifactStore:
 
     def _capture_sync(self, artifact: Artifact) -> Path:
         """Serialize and atomically publish one artifact from an executor thread."""
-        serialized = self._serialize(artifact.to_json())
+        payload: object = artifact.to_json()
+        if self._redactions is not None:
+            payload = self._redactions.mask_json(payload)
+        serialized = self._serialize(payload)
         temporary = self._write_temporary(serialized, kind="artifact")
         try:
             timestamp = artifact.timestamp.strftime("%Y%m%dT%H%M%S.%fZ")
@@ -328,11 +337,39 @@ def _measurement_line(measurement: Measurement) -> str:
     return f"{text} limits=[{bounds}] in_limits={verdict}"
 
 
+def _render_log_message(msg: object, args: tuple[object, ...]) -> tuple[str, str | None]:
+    """Format one record the way ``logging`` would; never raise.
+
+    Returns the rendered text and, when formatting failed, the warning that explains
+    why the text is the unformatted message followed by its arguments.
+    """
+    try:
+        raw_message = str(msg)
+        if len(args) == 1 and isinstance(args[0], Mapping) and args[0]:
+            return raw_message % args[0], None
+        return (raw_message % args if args else raw_message), None
+    except Exception as error:
+        try:
+            raw_message = str(msg)
+        except Exception:
+            raw_message = f"<unprintable {type(msg).__name__}>"
+        try:
+            rendered_args = repr(args)
+        except Exception:
+            rendered_args = "<unprintable arguments>"
+        warning = (
+            "logging message formatting failed "
+            f"({type(error).__name__}); preserved the unformatted "
+            "message and arguments"
+        )
+        return f"{raw_message} {rendered_args}", warning
+
+
 @final
 class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
     """A standard logger carrying the exact node path on every record."""
 
-    __slots__ = ("_scope", "_timeline", "_timeline_paths")
+    __slots__ = ("_redactions", "_scope", "_timeline", "_timeline_paths")
 
     def __init__(
         self,
@@ -341,11 +378,19 @@ class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
         *,
         timeline: RunTimeline | None = None,
         timeline_paths: TimelinePaths | None = None,
+        redactions: Redactions | None = None,
     ) -> None:
-        """Bind ``logger`` records to a root-to-leaf node path."""
+        """Bind ``logger`` records to a root-to-leaf node path.
+
+        ``redactions`` is the run's registry of secret values (issue #154). Every
+        record is masked against it before it reaches the timeline or the process
+        logging policy, so a suite that logs a redacted ctx value by hand still
+        leaves no trace of it.
+        """
         self._scope = scope
         self._timeline = timeline
         self._timeline_paths = timeline_paths
+        self._redactions = redactions
         node = scope[-1] if scope else ""
         super().__init__(
             logger,
@@ -360,34 +405,33 @@ class ScopedLogger(logging.LoggerAdapter[logging.Logger]):
         return super().isEnabledFor(level)
 
     def log(self, level: int, msg: object, *args: object, **kwargs: Any) -> None:
-        """Persist the record before offering it to the process logging policy."""
+        """Persist the record before offering it to the process logging policy.
+
+        The record is rendered once here, masked against the run's redactions
+        (issue #154), and that one rendering goes to both the durable timeline and
+        the process logger: a secret the suite declared is on neither.
+        """
+        persisting = self._timeline is not None and self._timeline_paths is not None
+        masking = self._redactions is not None and bool(self._redactions)
+        if not persisting and not masking:
+            super().log(level, msg, *args, **kwargs)
+            return
+        message, formatting_warning = _render_log_message(msg, args)
+        supplied_extra = kwargs.get("extra")
+        extra: dict[str, Any] | None = None
+        if isinstance(supplied_extra, Mapping):
+            extra = dict(cast("Mapping[str, Any]", supplied_extra))
+        if self._redactions is not None and masking:
+            masked = self._redactions.mask(message)
+            if extra is not None:
+                extra = cast("dict[str, Any]", self._redactions.mask_json(extra))
+                kwargs = {**kwargs, "extra": extra}
+            if masked != message:
+                # The secret was in the rendered text, so the process logger gets the
+                # masked rendering and nothing left to format.
+                message = masked
+                msg, args = masked, ()
         if self._timeline is not None and self._timeline_paths is not None:
-            formatting_warning: str | None = None
-            try:
-                raw_message = str(msg)
-                if len(args) == 1 and isinstance(args[0], Mapping) and args[0]:
-                    message = raw_message % args[0]
-                else:
-                    message = raw_message % args if args else raw_message
-            except Exception as error:
-                try:
-                    raw_message = str(msg)
-                except Exception:
-                    raw_message = f"<unprintable {type(msg).__name__}>"
-                try:
-                    rendered_args = repr(args)
-                except Exception:
-                    rendered_args = "<unprintable arguments>"
-                message = f"{raw_message} {rendered_args}"
-                formatting_warning = (
-                    "logging message formatting failed "
-                    f"({type(error).__name__}); preserved the unformatted "
-                    "message and arguments"
-                )
-            supplied_extra = kwargs.get("extra")
-            extra: dict[str, Any] | None = None
-            if isinstance(supplied_extra, Mapping):
-                extra = dict(cast("Mapping[str, Any]", supplied_extra))
             self._timeline.write(
                 self._timeline_paths,
                 scope=self._scope,
@@ -433,13 +477,43 @@ class RunContext(dict[str, Any]):
     authored instance whose ``configure()`` fills it, named once the instance binds.
     """
 
-    __slots__ = ("frozen", "owner")
+    __slots__ = ("_patterns", "_redactions", "frozen", "owner")
 
-    def __init__(self, seed: Mapping[str, Any] | None = None, *, owner: str | None = None) -> None:
-        """Start from a copy of ``seed``; ``owner`` may be named later by the framework."""
+    def __init__(
+        self,
+        seed: Mapping[str, Any] | None = None,
+        *,
+        owner: str | None = None,
+        redactions: Redactions | None = None,
+    ) -> None:
+        """Start from a copy of ``seed``; ``owner`` may be named later by the framework.
+
+        ``redactions`` is the run's registry of secret values (issue #154); the keys
+        this context treats as secret arrive with the owner, through :meth:`_declare`.
+        """
         super().__init__({} if seed is None else seed)
         self.owner = owner
         self.frozen = False
+        self._patterns: tuple[re.Pattern[str], ...] = ()
+        self._redactions = redactions
+
+    def redacted(self, key: str) -> bool:
+        """True when the owner's ``redact_ctx`` claims ``key`` (issue #154)."""
+        return bool(self._patterns) and key_is_redacted(key, self._patterns)
+
+    def _declare(self, patterns: tuple[re.Pattern[str], ...]) -> None:
+        """Adopt the owner's ``redact_ctx``. Framework only; runs once, with the owner."""
+        self._patterns = patterns
+        self._register_all()
+
+    def _register(self, key: str, value: Any) -> None:
+        if self._redactions is not None and self.redacted(key):
+            self._redactions.register(value)
+
+    def _register_all(self) -> None:
+        if self._redactions is not None and self._patterns:
+            for key, value in self.items():
+                self._register(key, value)
 
     def __missing__(self, key: str) -> NoReturn:
         raise ContextInsufficient(self.owner or "context", key=key, owner=self.owner)
@@ -451,6 +525,7 @@ class RunContext(dict[str, Any]):
         """Merge configure's return. Framework only; the context is still open."""
         for key, value in provided.items():
             super().__setitem__(key, value)
+            self._register(key, value)
 
     def _freeze(self) -> None:
         """Close the context once ``configure()`` has settled. Framework only."""
@@ -460,6 +535,7 @@ class RunContext(dict[str, Any]):
         if self.frozen:
             self._refuse(key)
         super().__setitem__(key, value)
+        self._register(key, value)
 
     def __delitem__(self, key: str) -> None:
         if self.frozen:
@@ -471,6 +547,7 @@ class RunContext(dict[str, Any]):
         if self.frozen:
             self._refuse(_first_key(args, kwargs, "update(...)"))
         super().update(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType]
+        self._register_all()
 
     def setdefault(self, key: str, default: Any = None) -> Any:
         """Read an existing key freely; inserting a new one is refused once frozen."""
@@ -619,6 +696,7 @@ class NodeRuntime:
         "measurements",
         "opened_device_apis",
         "owns_timeline",
+        "redactions",
         "routing",
         "scope",
         "signal",
@@ -646,10 +724,11 @@ class NodeRuntime:
         """Build the unscoped run seed behind ``utils``; :meth:`for_node` scopes it."""
         self.utils = utils
         self.suite_target = suite_target
-        self.ctx = RunContext(ctx)
+        self.redactions = Redactions()
+        self.ctx = RunContext(ctx, redactions=self.redactions)
         self.base_logger = LOGGER if logger is None else logger
         self.scope: tuple[str, ...] = ()
-        self.logger = ScopedLogger(self.base_logger, self.scope)
+        self.logger = ScopedLogger(self.base_logger, self.scope, redactions=self.redactions)
         self.timeline: RunTimeline | None = None
         self.timeline_paths: TimelinePaths | None = None
         self.owns_timeline = False
@@ -670,7 +749,7 @@ class NodeRuntime:
             configured_artifact_root = self.env.get(
                 "LITMUS_ARTIFACT_ROOT", Path.cwd() / "artifacts"
             )
-        self.artifact_store = _ArtifactStore(configured_artifact_root)
+        self.artifact_store = _ArtifactStore(configured_artifact_root, redactions=self.redactions)
         self.local_exec = LocalExec(output_budget=output_budget)
         self.transports = _RunTransports(self.local_exec)
         self.integration_hooks = (
@@ -733,7 +812,10 @@ class NodeRuntime:
         scoped.utils = TestUtils(_runtime=scoped)
         scoped.suite_target = self.suite_target
         scoped.artifact_store = self.artifact_store
-        scoped.ctx = RunContext(owner=node) if isolate_context else self.ctx
+        scoped.redactions = self.redactions
+        # A fresh context is named, and adopts its ``redact_ctx``, when the authored
+        # instance binds it (``own_context``), which happens before any code runs.
+        scoped.ctx = RunContext(redactions=self.redactions) if isolate_context else self.ctx
         scoped.env = self.env
         scoped.env_filter_warning = self.env_filter_warning
         scoped.base_logger = self.base_logger
@@ -756,6 +838,7 @@ class NodeRuntime:
             scoped.scope,
             timeline=scoped.timeline,
             timeline_paths=scoped.timeline_paths,
+            redactions=self.redactions,
         )
         if not self.scope and scoped.env_filter_warning is not None:
             if scoped.timeline is not None and scoped.timeline_paths is not None:
@@ -789,10 +872,16 @@ class NodeRuntime:
 
     # --- the context phases -------------------------------------------------------
 
-    def own_context(self, node: str) -> None:
-        """Name the authored instance whose ``configure()`` fills this context."""
+    def own_context(self, node: str, redact: tuple[re.Pattern[str], ...] = ()) -> None:
+        """Name the authored instance whose ``configure()`` fills this context.
+
+        ``redact`` is that instance's compiled ``redact_ctx`` (issue #154). It is
+        adopted with the owner, so the leaves a suite stamps out share its secrets
+        without declaring them again.
+        """
         if self.ctx.owner is None:
             self.ctx.owner = node
+            self.ctx._declare(redact)  # pyright: ignore[reportPrivateUsage]
 
     def enter_configure(self) -> None:
         """Open the route-declaration window around ``configure()``."""

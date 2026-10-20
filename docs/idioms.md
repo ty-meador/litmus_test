@@ -161,6 +161,31 @@ Stripping is deterministic and all-or-nothing at each top-level ctx entry. If a 
 dict contains one invalid nested value, that complete entry is absent from `run_data`.
 Litmus does not remove only the handle and leave a plausible-looking partial record.
 
+A value the claims need but the record must not carry, such as a session credential
+obtained in `configure()`, is named in `redact_ctx` on the suite class (issue #154).
+Each entry is a ctx key, exact or as a regular expression the key matches whole. The
+key appears in `run_data` as `<REDACTED>`, and the string under it is masked on every
+record surface, including a log line or a `TestFailure` the author hands it to. The
+record shows that the key was held; it never shows what. ctx itself is unchanged: the
+claims read the real value.
+
+```python
+class BlocklistRoundTrip(LitmusTest):
+    redact_ctx = ("sid", r"api_.*")
+
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+        sid = await self._login(utils)
+        return {"sid": sid, "api_token": await self._token(utils, sid), "domain": "x.test"}
+
+
+# RunResult.run_data => {
+#     "measurements": [],
+#     "sid": "<REDACTED>",
+#     "api_token": "<REDACTED>",
+#     "domain": "x.test",
+# }
+```
+
 ```python
 # configure returns data — it appears in run_data automatically
 async def configure(self, utils: TestUtils) -> dict[str, Any]:
