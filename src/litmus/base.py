@@ -6,11 +6,12 @@ import functools
 import inspect
 import math
 import os
+import re
 import signal
 import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast, final
+from typing import Any, ClassVar, cast, final
 
 from litmus.artifacts import Artifact
 from litmus.errors import (
@@ -48,8 +49,8 @@ from litmus.lifecycle import (
 )
 from litmus.measurement import current_utils
 from litmus.results import NodeType, RunResult, SummaryTreeNode
-from litmus.run_data import MEASUREMENTS_KEY, JsonObject, snapshot_run_data
-from litmus.utils import NodeRuntime, TestUtils, node_runtime
+from litmus.run_data import MEASUREMENTS_KEY, JsonObject, redact_run_data, snapshot_run_data
+from litmus.utils import NodeRuntime, RunContext, TestUtils, node_runtime
 from litmus.verdict import Verdict
 
 type _TestFunction = Callable[..., Awaitable[Verdict]]
@@ -342,6 +343,49 @@ def _is_declared_test_method(cls: type[object], name: str, member: object) -> bo
     return any(_returns_verdict(base.__dict__.get(name)) for base in cls.__mro__[1:])
 
 
+def _redaction_rule(cls: type[object], entry: object) -> re.Pattern[str]:
+    """Compile one ``redact_ctx`` entry, or refuse it while the class is being defined.
+
+    A string is a regular expression. A plain key name is one that has no
+    metacharacters, so ``"sid"`` and ``r".*_token"`` share one mechanism. A compiled
+    pattern is taken as written, so an author can pass flags.
+    """
+    if isinstance(entry, re.Pattern):
+        pattern = cast(re.Pattern[Any], entry)
+        if isinstance(pattern.pattern, str):
+            return cast(re.Pattern[str], pattern)
+    if isinstance(entry, str) and entry:
+        try:
+            return re.compile(entry)
+        except re.error as exc:
+            msg = f"{cls.__name__}.redact_ctx entry {entry!r} is not a valid pattern: {exc}"
+            raise TypeError(msg) from exc
+    msg = (
+        f"{cls.__name__}.redact_ctx entry {entry!r} is not a ctx key name or pattern; "
+        "each entry is a non-empty str or a compiled str pattern"
+    )
+    raise TypeError(msg)
+
+
+def _redaction(cls: type[object]) -> tuple[re.Pattern[str], ...]:
+    """Compile ``cls.redact_ctx`` and keep every rule its base classes declared.
+
+    A subclass that names its own keys adds them to its bases' keys. It does not
+    replace them. An ordinary class-attribute override would quietly put a base's
+    secret back on the record, and redaction must fail closed.
+    """
+    declared: object = cls.__dict__.get("redact_ctx", ())
+    if isinstance(declared, (str, bytes)) or not isinstance(declared, Sequence):
+        msg = (
+            f"{cls.__name__}.redact_ctx must be a list of ctx key names or patterns; "
+            'write redact_ctx = ("sid",), not redact_ctx = "sid"'
+        )
+        raise TypeError(msg)
+    inherited = [rule for base in cls.__bases__ for rule in getattr(base, "_redaction", ())]
+    own = [_redaction_rule(cls, entry) for entry in cast(Sequence[object], declared)]
+    return tuple(dict.fromkeys([*inherited, *own]))
+
+
 class _LitmusTestMeta(type):
     """Freeze an instance only after its most-derived constructor has returned."""
 
@@ -383,6 +427,18 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         "_time_budget",
     )
 
+    redact_ctx: ClassVar[Sequence[str | re.Pattern[str]]] = ()
+    """Ctx keys the record publishes as ``"<redacted>"`` instead of their value (#154).
+
+    Each entry is a key name or a regular expression that must match the whole key.
+    It covers this suite's ``run_data`` and that of every node sharing its context. A
+    subclass adds to its bases' entries and never replaces them. It is meant for a
+    credential the suite obtains for itself, such as a session id, that the claims
+    still need to read from ctx.
+    """
+
+    _redaction: ClassVar[tuple[re.Pattern[str], ...]] = ()
+
     def __init__(
         self,
         *,
@@ -421,6 +477,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Reject malformed authored classes before an instance can touch hardware."""
         super().__init_subclass__(**kwargs)
+        cls._redaction = _redaction(cls)
 
         for name in cls.__dict__:
             if name in _SEALED_METHODS or name.startswith("_safe_"):
@@ -859,7 +916,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         )
         utils = runtime.utils
         object.__setattr__(self, "_ctx", utils.ctx)
-        runtime.own_context(self.name)
+        runtime.own_context(self.name, redact=self._redaction)
         object.__setattr__(self, "_log_path", runtime.owned_log_path())
 
         integration_hooks = runtime.integration_hooks
@@ -1710,6 +1767,12 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             )
         node_type = self._node_type()
         run_data = self.run_data
+        # Redaction runs on what the run_data property returned, an override
+        # included, so a computed view cannot put a withheld key back on the record
+        # (issue #154). Evidence merges afterwards because the verdict carries what
+        # the author chose to publish, and a key that shadows ctx is already refused.
+        if isinstance(self._ctx, RunContext):
+            redact_run_data(run_data, self._ctx.redact)
         if outcome.evidence is not None:
             run_data.update(outcome.evidence)
         # Measurements are sealed here, on every terminal state including Aborted, and

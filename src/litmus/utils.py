@@ -428,15 +428,19 @@ class RunContext(dict[str, Any]):
     and a value cleanup must restore is captured in ``configure()`` (issue #118). The
     ``run_data`` snapshot iterates it and ``json.dumps`` accepts it. ``owner`` is the
     authored instance whose ``configure()`` fills it, named once the instance binds.
+    ``redact`` holds the compiled ``redact_ctx`` rules of every node bound to it. The
+    rules are kept on the context rather than on one node because every leaf that
+    shares the context publishes its keys in its own ``run_data`` (issue #154).
     """
 
-    __slots__ = ("frozen", "owner")
+    __slots__ = ("frozen", "owner", "redact")
 
     def __init__(self, seed: Mapping[str, Any] | None = None, *, owner: str | None = None) -> None:
         """Start from a copy of ``seed``; ``owner`` may be named later by the framework."""
         super().__init__({} if seed is None else seed)
         self.owner = owner
         self.frozen = False
+        self.redact: tuple[re.Pattern[str], ...] = ()
 
     def __missing__(self, key: str) -> NoReturn:
         raise ContextInsufficient(self.owner or "context", key=key, owner=self.owner)
@@ -786,10 +790,17 @@ class NodeRuntime:
 
     # --- the context phases -------------------------------------------------------
 
-    def own_context(self, node: str) -> None:
-        """Name the authored instance whose ``configure()`` fills this context."""
+    def own_context(self, node: str, *, redact: tuple[re.Pattern[str], ...] = ()) -> None:
+        """Name the authored instance whose ``configure()`` fills this context.
+
+        ``redact`` is the binding node's compiled ``redact_ctx``. It is added to the
+        rules already on the context and never replaces them, so a key stays
+        withheld whichever node sharing the context declared it.
+        """
         if self.ctx.owner is None:
             self.ctx.owner = node
+        if redact:
+            self.ctx.redact = tuple(dict.fromkeys((*self.ctx.redact, *redact)))
 
     def enter_configure(self) -> None:
         """Open the route-declaration window around ``configure()``."""
