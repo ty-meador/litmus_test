@@ -89,9 +89,11 @@ did not settle (the lifecycle example suggests the latter is not the intent).
 after a configure Fail, because that is the case it exists for. The Immutable-self rules
 in `docs/idioms.md` now say `cleanup()` reads every key with `.get()` or `in`, and the
 lifecycle example's cleanup comment says why. `pihole_rack.py` was the one bench cleanup
-still reading `[]`; it now returns early when configure never returned the entry. What
-a half-finished configure cannot hand cleanup (the `sid` of a login whose add then
-failed) is the open question on #163.
+still reading `[]`; it now returns early when configure never returned the entry. A
+half-finished configure still cannot hand cleanup the `sid` of a login whose add then
+failed. Ty closed #163 on 2026-10-20 and kept it that way, because a ctx checkpoint
+adds too much to the contracts. A later release may reconsider it, and until then the
+session waits out FTL's own timeout.
 
 ## F4. Two tier-3 rules collide on an API call in `cleanup()` (tooling, medium) — closed 2026-10-19
 
