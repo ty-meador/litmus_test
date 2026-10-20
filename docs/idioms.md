@@ -224,6 +224,12 @@ method only; `cleanup`, surveys, audits, and hooks are refused. `from litmus imp
 measure` is the same call resolved to the running node when a helper does not have
 `utils` in hand.
 
+When the reading comes over a shell, parse it to `float | None` and hand `measure` the
+`None` instead of wrapping the parse in a `try`: a reading not taken is recorded as
+such, it is never inside its window, and the same gate fails the claim (issue #159).
+Keep `NaN` out of the call; that is a bug in the suite's arithmetic, not a blank from
+the device, and the framework refuses it.
+
 ## Composition Factories: `self.test`, `self.sequence`, `self.parallel`
 
 `LitmusTest` exposes three instance factories for building the suite. The names are

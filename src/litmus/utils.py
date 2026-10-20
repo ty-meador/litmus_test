@@ -307,11 +307,16 @@ def _measurement_line(measurement: Measurement) -> str:
     """Render the timeline line for one reading in the shape ``docs/measurements.md`` fixes.
 
     JSON vocabulary (``null``, ``true``, ``false``) rather than Python's, so the log
-    line and the record read the same way to someone comparing them.
+    line and the record read the same way to someone comparing them. A reading not
+    taken says so in words, because ``= null V`` reads as a number that is missing its
+    digits and the Floor Technician should not have to decode it.
     """
-    text = f"{measurement.name} = {measurement.value}"
-    if measurement.unit is not None:
-        text = f"{text} {measurement.unit}"
+    if measurement.value is None:
+        text = f"{measurement.name} not taken"
+    else:
+        text = f"{measurement.name} = {measurement.value}"
+        if measurement.unit is not None:
+            text = f"{text} {measurement.unit}"
     if measurement.limits is None:
         return f"{text} limits=null in_limits=null"
     low, high = measurement.limits
@@ -1410,7 +1415,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
     def measure(
         self,
         name: str,
-        value: int | float,
+        value: int | float | None,
         *,
         unit: str | None = None,
         limits: Limits | None = None,
@@ -1427,6 +1432,12 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
                 return PASS({"output_voltage_v": volts})
             raise TestFailure("rail outside window", "4.75-5.25 V", f"{volts} V")
 
+        A reading the suite could not take is ``value=None``, recorded as not taken
+        (issue #159). It is never inside its window, so the gate above fails the claim
+        on a missing reading without a ``try`` around every read over a shell; without
+        a window it is a trend entry with a hole, and the verdict stays where the claim
+        put it.
+
         Synchronous and free of I/O, so no cancellation can land between the reading
         and its record. Allowed from ``configure()`` and the test method only, the two
         slots that produce the node's record; the record is sealed when the node
@@ -1436,8 +1447,9 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             name: Non-empty identity of the quantity, unique within this node. For the
                 life of the suite it names the same quantity in the same unit; a
                 consumer keys its series on it.
-            value: An ``int`` or finite ``float``. A textual observation is evidence on
-                the verdict, not a measurement.
+            value: An ``int`` or finite ``float``, or ``None`` when the reading could
+                not be taken. A textual observation is evidence on the verdict, not a
+                measurement; ``NaN`` is a bug in the suite, not a missing reading.
             unit: Free label such as ``"V"`` or ``"ms"``, or ``None`` for a
                 dimensionless count. Never validated, never converted.
             limits: Inclusive ``(low, high)`` window with ``None`` on an open side, or
@@ -1463,9 +1475,10 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             raise MeasurementDuplicate(node, measurement=measurement.name)
         runtime.measurements.append(measurement)
         # One scoped line per call, so the chronology carries the number next to what
-        # the suite was doing; a warning when out of window so it stands out in
-        # timeline.log without the Floor Technician filtering for it.
-        level = logging.WARNING if measurement.in_limits is False else logging.INFO
+        # the suite was doing; a warning when out of window or not taken, so either
+        # stands out in timeline.log without the Floor Technician filtering for it.
+        out_of_window = measurement.in_limits is False or measurement.value is None
+        level = logging.WARNING if out_of_window else logging.INFO
         runtime.logger.log(level, "measurement: %s", _measurement_line(measurement))
         return measurement
 

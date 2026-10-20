@@ -169,9 +169,11 @@ the record identifies the exact clock and budget without requiring the suite sou
     record's.
 - **Measurement Contract** (issue #86, `docs/measurements.md`). A limit is evidence,
   never a verdict: `utils.measure` records `in_limits` and touches neither the node's
-  state nor its failure. The framework refuses, as a `ContractViolation` naming the
-  node and the measurement: an empty name, a `bool`, `NaN`, or infinite value, a
-  non-text unit, or a window that bounds nothing or runs backwards; the same name
+  state nor its failure. A `None` value is admitted as a reading not taken (issue
+  #159): recorded with `value: null`, never inside its window, so a claim gated on the
+  window fails through its own gate. The framework refuses, as a `ContractViolation`
+  naming the node and the measurement: an empty name, a `bool`, `NaN`, or infinite
+  value, a non-text unit, or a window that bounds nothing or runs backwards; the same name
   recorded twice in one node; a call from outside `configure()` or the test method
   (`cleanup`, surveys, audits, hooks, or after the node settled); and `litmus.measure`
   where no node's slot is executing. The record is sealed on every terminal state,
