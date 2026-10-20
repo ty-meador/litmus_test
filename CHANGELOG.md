@@ -449,6 +449,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- `TestUtils.wait_for` returns the predicate's last truthy value (bench finding F9,
+  issue #158). `True` is still `True`, and a falsy look keeps polling until the same
+  timeout verdict. The Pi-hole query-log claim returns the matching entries from the
+  predicate instead of writing them into a closed-over list.
 - `docs/idioms.md` says what the Lifecycle Contract already implied: `cleanup()` reads
   every ctx key with `.get()` or `in`, because it also runs when `configure()` raised
   before returning, and a `[]` read there logs a `ContractViolation` beside the real
