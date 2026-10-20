@@ -475,6 +475,13 @@ class RunContext(dict[str, Any]):
     and a value cleanup must restore is captured in ``configure()`` (issue #118). The
     ``run_data`` snapshot iterates it and ``json.dumps`` accepts it. ``owner`` is the
     authored instance whose ``configure()`` fills it, named once the instance binds.
+
+    Every insertion path must end on :meth:`_register` (issue #154). ``dict`` inserts
+    at C level from ``setdefault``, ``update``, and ``|=`` without calling
+    ``__setitem__``, so each override registers after its own write. A new override
+    that inserts must do the same, or a secret under a redacted key is shown as
+    redacted in the ctx view while it sits in the log and the failure: a containment
+    guarantee that fails open is worse than none.
     """
 
     __slots__ = ("_patterns", "_redactions", "frozen", "owner")
@@ -553,7 +560,9 @@ class RunContext(dict[str, Any]):
         """Read an existing key freely; inserting a new one is refused once frozen."""
         if self.frozen and key not in self:
             self._refuse(key)
-        return super().setdefault(key, default)
+        value = super().setdefault(key, default)
+        self._register(key, value)
+        return value
 
     def pop(self, key: str, *default: Any) -> Any:
         """Remove while open; refused once frozen, since ctx is read-only after ``configure()``."""
@@ -577,6 +586,7 @@ class RunContext(dict[str, Any]):
         if self.frozen:
             self._refuse(_first_key((other,), {}, "|="))
         super().__ior__(other)
+        self._register_all()
         return self
 
 
