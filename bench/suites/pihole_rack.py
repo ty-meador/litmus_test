@@ -115,6 +115,10 @@ class PiHole(LitmusTest):
 class BlocklistRoundTrip(LitmusTest):
     """Add a domain to the deny list over the API and watch DNS refuse it."""
 
+    # The claims need the session id from ctx, and the record must not carry a live
+    # login until FTL logs it out (bench finding F5, issue #154).
+    redact_ctx = ("sid",)
+
     def __init__(
         self,
         *,

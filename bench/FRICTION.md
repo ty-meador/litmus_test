@@ -127,6 +127,11 @@ of every Pi-hole run carries a live session id until logout. Every request also 
 **Close it:** `DeviceApi.set_header(name, value)` (or `headers` mutable on the handle),
 and a way to mark a ctx key as not-for-the-record.
 
+**Half closed:** Ty ruled on issue #154 for a `redact_ctx` class attribute.
+`BlocklistRoundTrip` names `sid` there, so the record carries `"<redacted>"` where the
+live session id used to be. `set_header` is still unruled on the same issue, so every
+request still repeats `headers={"sid": ...}`.
+
 ## F6. JSON is hand-rolled on both sides of `DeviceRequest` (ergonomics, low)
 
 `payload` is `bytes`, so every JSON body is `json.dumps(...).encode()` plus a

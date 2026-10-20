@@ -19,6 +19,14 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `LitmusTest.redact_ctx` names the ctx keys whose values the record withholds (bench
+  finding F5, issue #154, by Ty's ruling on the issue). The claims still read the real
+  value. `run_data` carries the key with the value `"<redacted>"` on every node sharing
+  the suite's ctx, after any `run_data` override. An entry is a key name or a regular
+  expression that must match the whole key. A subclass adds to its bases' entries. A
+  malformed declaration is a `TypeError` at class definition. The Lifecycle Contract's
+  `run_data` line names the exception. The bench's Pi-hole round trip withholds its
+  `sid`. `DeviceApi.set_header`, the other half of F5, is not part of this change.
 - `utils.measure(name, None, ...)` records a reading not taken (bench finding F10, issue
   #159). The entry sits in `measurements` in call order with `value: null`; against a
   window it carries `in_limits: false`, so a claim gated on the window fails through its

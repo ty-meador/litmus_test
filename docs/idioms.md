@@ -196,6 +196,33 @@ Every snapshot includes `run_data["measurements"]`, the list `utils.measure` fil
 is framework-owned: a ctx entry with that key does not populate or replace it, and it
 is written after any `run_data` override runs, so an override cannot drop it.
 
+### Keeping a credential off the record: `redact_ctx`
+
+Sometimes a suite obtains a secret for itself that its claims must read from ctx, such
+as the session id a device API hands back at login. Name that key in `redact_ctx`. The
+claims still read the real value. The record carries the key with the value
+`"<redacted>"`, so the Floor Technician sees that it existed and was withheld.
+
+```python
+class PiHoleRack(LitmusTest):
+    # Each entry is a key name or a regular expression that must match the whole key.
+    redact_ctx = ("sid", r".*_token")
+
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+        sid = await self._login(utils)
+        return {"sid": sid, "domain": "blocked.example"}
+
+
+# RunResult.run_data => {"measurements": [], "sid": "<redacted>", "domain": "blocked.example"}
+```
+
+The rule covers this suite's `run_data` and that of every claim sharing its ctx, and it
+is applied after any `run_data` override. A subclass's `redact_ctx` adds to its bases'
+entries and never replaces them. Evidence is not redacted, because a verdict carries
+what you chose to publish. A malformed declaration is a `TypeError` when the class is
+defined. Credentials the framework holds itself, such as SSH passwords and keys, never
+reach ctx and need no entry.
+
 ## Measurements: `utils.measure`
 
 A reading with a unit and a window that a process engineer will chart belongs in

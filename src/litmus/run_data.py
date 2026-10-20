@@ -1,7 +1,8 @@
 """JSON-safe run-data snapshots: the ctx view and the evidence a verdict carries."""
 
 import math
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 type JsonScalar = bool | int | float | str | None
@@ -9,6 +10,24 @@ type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 type JsonObject = dict[str, JsonValue]
 
 MEASUREMENTS_KEY = "measurements"
+
+# What a redacted ctx entry publishes in place of its value. It is the same marker
+# DeviceApi writes for a header it will not log, so a reader learns one word for
+# "present, withheld" across every record surface.
+REDACTED = "<redacted>"
+
+
+def redact_run_data(run_data: JsonObject, rules: Sequence[re.Pattern[str]]) -> None:
+    """Replace the value of every key a ``redact_ctx`` rule matches with ``REDACTED``.
+
+    A rule must match the whole key, so ``"sid"`` withholds ``sid`` and not
+    ``inside_temp``. The key stays in the record because a key that silently vanished
+    would read as a value never taken. The framework-owned measurements slot is not
+    ctx and is never a candidate.
+    """
+    for key in run_data:
+        if key != MEASUREMENTS_KEY and any(rule.fullmatch(key) for rule in rules):
+            run_data[key] = REDACTED
 
 
 class _Unserializable:
