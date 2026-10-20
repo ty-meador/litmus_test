@@ -345,6 +345,22 @@ subclass ([HIL ruling 1](hil/index.md#the-three-rulings)). The guarantees live
 in the signed [Device API design note](hil/device-api.md); this page does not
 restate them.
 
+`DeviceRequest(..., json=value)` is the JSON body convenience (issue #155): it
+serializes once to UTF-8 `payload` bytes and supplies `Content-Type: application/json`
+unless the request already declares a content type, matched case-insensitively.
+`json=None` sends JSON null; omitting `json` leaves the raw-payload API unchanged.
+Combining `json` with a non-`None` `payload`, even empty bytes, is a `ValueError` before
+any transfer. Non-serializable values and non-finite numbers are refused at construction.
+The request never mutates the caller's headers or retains its JSON object.
+
+`DeviceResponse.json()` decodes the returned bytes. `parse(response_type="json")`
+is the format-selecting form; `response_type="yaml"` uses `yaml.safe_load` from the
+optional `litmus[yaml]` extra. Unknown formats raise `ValueError`, a missing YAML
+dependency raises `ImportError`, and parser errors propagate without a fallback.
+Parsing is explicit, independent of response status and headers; it preserves `body`
+and `status`, makes no request, and supplies no verdict. A malformed body remains a
+completed transfer for the suite to judge. Body contents never enter attempt logs.
+
 **Developer obligation:** Implement `DeviceApiInterface` as that note specifies.
 
 ---

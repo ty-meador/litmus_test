@@ -78,14 +78,25 @@ request.
   non-`bytes` payload, a path that is an absolute URL, a method the
   backend did not declare, and a header or option name that is not a
   string, at the call site, before the adapter is touched. Booleans are
-  not integers; a `dict` is not a JSON body. Encoding is the author's,
-  recorded as the bytes actually sent.
+  not integers; a `dict` passed as `payload` is not a JSON body. The approved
+  convenience on #155 adds keyword-only `json=value`: serialize once to UTF-8
+  bytes and default the HTTP `Content-Type` to `application/json`, preserving an
+  explicitly supplied content type case-insensitively. Omission sends no JSON;
+  `json=None` sends null. Combining it with a non-`None` `payload` (including
+  empty bytes) is refused, as are unserializable values and non-finite numbers.
+  The wire payload remains bytes, and logs still record lengths, never body contents.
 - A provisional `DeviceResponse` carries `status` (HTTP status or CoAP
   code), protocol options (headers / CoAP options), and `body` (`bytes`).
   JSON parsing is a convenience on top of those bytes, not the contract:
   a body that is not JSON is still a successful transfer of bytes. The
   interface does not invent an empty body, a 200, or a CoAP 2.05 to stand
   in for a missing response.
+  Issue #155 adds `json()` and `parse(response_type="json")` to decode those
+  bytes explicitly; `parse(response_type="yaml")` uses `yaml.safe_load` and
+  requires the optional `litmus[yaml]` extra. Parser errors propagate unchanged,
+  unsupported formats raise `ValueError`, and a missing YAML extra raises
+  `ImportError`. Neither method changes status or bytes or interprets a status
+  as a verdict. A malformed body remains a completed transfer.
 - **Status is data.** HTTP 4xx / 5xx and CoAP 4.xx / 5.xx are fields on
   the response, the way a non-zero `exit_code` is a field on `ExecResult`.
   The interface does not raise `TestFailure` because a resource returned

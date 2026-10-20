@@ -134,6 +134,10 @@ and a way to mark a ctx key as not-for-the-record.
 `json.loads(response.body)`. Six times in one suite. A `json=` argument on the request
 and a `.json()` on the response would halve the Pi-hole child.
 
+**Resolved (#155):** the child uses `DeviceRequest(json=...)` and `response.json()`
+and no longer imports `json`. `response.parse(response_type="json" or "yaml")`
+provides the format selector Ty requested; YAML is an optional extra.
+
 ## F7. CoAP codes arrive as bare integers (ergonomics, low)
 
 `GET /hello` is `69`, `PUT` is `68`, a miss is `132`: `class << 5 | detail`. The suite

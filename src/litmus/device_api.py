@@ -10,14 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json as jsonlib
 import logging
 import math
 import ssl
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, cast, final
+from typing import Any, Final, Literal, NamedTuple, cast, final
 from urllib.parse import urljoin, urlsplit
 
 from litmus.errors import DeviceApiOperationFailure
@@ -48,6 +49,7 @@ _COAP_SUCCESS_CLASS: Final[int] = 2
 # 6 (1024 bytes) is the largest the option can name; a server that wants
 # smaller blocks says so in its 2.31 and the transfer follows it down.
 _COAP_BLOCK_SZX: Final[int] = 6
+_NO_JSON: Final[object] = object()
 
 
 def _require_int(name: str, value: object) -> int:
@@ -143,10 +145,14 @@ def _redact_url(url: str) -> str:
 class DeviceRequest:
     """One resource operation: method, path, optional payload, optional headers.
 
-    Path is relative to the handle's base URL. Payload is the bytes actually
-    sent — a dict is not a JSON body. ``retries`` counts extra application-level
-    attempts after the first; the default is zero. Attempt logs withhold every
-    header value unless the name is in ``evidence_headers``.
+    Path is relative to the handle's base URL. Use ``payload`` for raw bytes or
+    keyword-only ``json`` for a JSON value, including ``None`` (JSON null).
+    JSON is encoded once as UTF-8 and adds ``Content-Type: application/json``
+    unless a content type was supplied. Supplying both bodies raises
+    ``ValueError``; unserializable or non-finite JSON is refused at construction.
+    ``retries`` counts extra application-level attempts after the first; the
+    default is zero. Attempt logs withhold every header value unless the name
+    is in ``evidence_headers``.
     """
 
     method: DeviceMethod
@@ -158,6 +164,19 @@ class DeviceRequest:
     retry_non_idempotent: bool = False
     timeout: float | None = None
     evidence_headers: frozenset[str] = frozenset()
+    json: InitVar[Any] = field(default=_NO_JSON, kw_only=True)
+
+    def __post_init__(self, json: Any) -> None:
+        if json is _NO_JSON:
+            return
+        if self.payload is not None:
+            raise ValueError("payload and json are mutually exclusive")
+        payload = jsonlib.dumps(json, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        headers = dict(_freeze_headers(self.headers))
+        if not any(name.lower() == "content-type" for name in headers):
+            headers["Content-Type"] = "application/json"
+        object.__setattr__(self, "payload", payload)
+        object.__setattr__(self, "headers", _freeze_headers(headers))
 
 
 @final
@@ -167,12 +186,38 @@ class DeviceResponse:
 
     HTTP 4xx/5xx and CoAP 4.xx/5.xx are fields here, not exceptions. ``headers``
     carries HTTP headers or CoAP options as strings. ``body`` is the payload
-    bytes; JSON parsing is the author's.
+    bytes. Parsing is opt-in through ``json()`` or ``parse(response_type=...)``;
+    a parsing error never changes the transfer's status or raw bytes.
     """
 
     status: int
     body: bytes
     headers: Mapping[str, str] = MappingProxyType({})
+
+    def json(self) -> Any:
+        """Decode the body as JSON, independent of status and content type.
+
+        Raises ``json.JSONDecodeError`` for malformed JSON and
+        ``UnicodeDecodeError`` for invalid encoding. No fallback value is invented.
+        """
+        return jsonlib.loads(self.body)
+
+    def parse(self, response_type: Literal["json", "yaml"] = "json") -> Any:
+        """Decode the body in the explicitly selected format; default is JSON.
+
+        YAML uses ``yaml.safe_load`` and requires the ``litmus[yaml]`` extra.
+        Parser errors propagate unchanged; an unknown ``response_type`` raises
+        ``ValueError``. Parsing never sends a request or changes the response.
+        """
+        if response_type == "json":
+            return self.json()
+        if response_type == "yaml":
+            try:
+                import yaml
+            except ImportError as error:
+                raise ImportError("YAML responses require the litmus[yaml] extra") from error
+            return yaml.safe_load(self.body)
+        raise ValueError("response_type must be 'json' or 'yaml'")
 
 
 class DeviceApiInterface(ABC):

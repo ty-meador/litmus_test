@@ -19,6 +19,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `DeviceRequest(..., json=value)` encodes a JSON body and defaults its content type;
+  `DeviceResponse.json()` and `parse(response_type="json" or "yaml")` decode the
+  returned bytes explicitly (bench finding F6, issue #155). YAML uses the optional
+  `litmus[yaml]` extra. Status and raw bytes stay available; parsing supplies no verdict.
+  The Pi-hole child suite no longer imports `json` or writes content-type boilerplate.
 - `utils.measure(name, None, ...)` records a reading not taken (bench finding F10, issue
   #159). The entry sits in `measurements` in call order with `value: null`; against a
   window it carries `in_limits: false`, so a claim gated on the window fails through its
@@ -667,6 +672,8 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Security
 
+- Upgrade the locked `certifi` pin to `2026.10.19` to clear `PYSEC-2026-4320`,
+  found by the required dependency audit while validating issue #155.
 - Optional `env_allow` / `env_deny` filtering of the published environment snapshot;
   SSH credential containment tests pin that password and private-key values do not
   escape into logs, results, or other evidence
