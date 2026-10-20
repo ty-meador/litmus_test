@@ -242,6 +242,60 @@ class TestWaitForContract:
 
         self._assert_timeout_failure(outcome, looking_for)
 
+    async def test_true_is_handed_back_unchanged(self) -> None:
+        utils = TestUtils()
+
+        async def ready() -> bool:
+            return True
+
+        assert await utils.wait_for(lambda: True, looking_for="ready", timeout_seconds=0) is True
+        assert await utils.wait_for(ready, looking_for="ready", timeout_seconds=0) is True
+
+    async def test_truthy_value_is_handed_back(self) -> None:
+        entries = [{"domain": "ads.example", "status": "DENYLIST"}]
+        polls = 0
+
+        def logged() -> list[dict[str, str]]:
+            nonlocal polls
+            polls += 1
+            if polls < 2:
+                return []
+            return entries
+
+        async def logged_async() -> list[dict[str, str]]:
+            return entries
+
+        utils = TestUtils()
+        observed = await utils.wait_for(
+            logged,
+            looking_for="ads.example in the query log",
+            interval=0.01,
+            timeout_seconds=1,
+        )
+        assert observed is entries
+        assert polls == 2
+        assert (
+            await utils.wait_for(
+                logged_async,
+                looking_for="ads.example in the query log",
+                timeout_seconds=0,
+            )
+            is entries
+        )
+
+    async def test_falsy_value_is_not_a_hit(self) -> None:
+        async def empty() -> list[str]:
+            return []
+
+        utils = TestUtils()
+        with pytest.raises(TestFailure) as caught:
+            await utils.wait_for(empty, looking_for="query log entries", timeout_seconds=0)
+
+        artifact = caught.value.to_json()
+        assert artifact["fail_message"] == "timed out waiting for query log entries"
+        assert artifact["expected"] == "query log entries"
+        assert artifact["received"] == "timeout"
+
 
 class TestFrameworkLoggingDiscipline:
     def test_framework_code_never_calls_print(self) -> None:

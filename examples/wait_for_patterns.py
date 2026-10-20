@@ -70,9 +70,10 @@ class ConfigureGatedDevice(LitmusTest):
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Block until the service is active and return the readiness evidence.
 
-        The predicate is a closure over the poll counter and the last state seen.
-        `wait_for` only learns true or false from it, so the closure is where the
-        observations are kept for the log, the artifact, and the ctx return.
+        The poll counter and the last state stay in the closure: they feed the log,
+        the artifact, and the ctx return, and a timeout never hands a value back.
+        The predicate here only reports whether the service is active. A claim that
+        needs the observation returns it, and `wait_for` hands that truthy value back.
         """
         states = iter(self._service_states)
         service_state = "not-observed"
