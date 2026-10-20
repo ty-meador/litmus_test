@@ -6,11 +6,12 @@ import functools
 import inspect
 import math
 import os
+import re
 import signal
 import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast, final
+from typing import Any, ClassVar, cast, final
 
 from litmus.artifacts import Artifact
 from litmus.errors import (
@@ -47,13 +48,21 @@ from litmus.lifecycle import (
     TimeoutEvidence,
 )
 from litmus.measurement import current_utils
+from litmus.redaction import compile_redact_ctx
 from litmus.results import NodeType, RunResult, SummaryTreeNode
 from litmus.run_data import MEASUREMENTS_KEY, JsonObject, snapshot_run_data
-from litmus.utils import NodeRuntime, TestUtils, node_runtime
+from litmus.utils import NodeRuntime, RunContext, TestUtils, node_runtime
 from litmus.verdict import Verdict
 
 type _TestFunction = Callable[..., Awaitable[Verdict]]
 type _TimedCall = Callable[[tuple[TimeBudgetClock, ...], object], Awaitable[object]]
+
+
+def _redact_ctx_patterns_of(base: type) -> tuple[re.Pattern[str], ...]:
+    """The compiled ``redact_ctx`` a base class carries, or nothing for a mixin."""
+    patterns: object = getattr(base, "_redact_ctx_patterns", ())
+    return cast("tuple[re.Pattern[str], ...]", patterns)
+
 
 _SEALED_METHODS = frozenset(
     {
@@ -383,6 +392,23 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         "_time_budget",
     )
 
+    redact_ctx: ClassVar[Sequence[str | re.Pattern[str]]] = ()
+    """Ctx keys whose values are not for the record (issue #154).
+
+    Each entry names a key ``configure()`` returns, exactly or as a regular expression
+    that the key matches whole; a compiled pattern is taken as written. A subclass
+    adds to its bases' entries and never replaces them. The claims read the real
+    value from ``utils.ctx`` as
+    usual; the record does not carry it. ``run_data`` shows the key with the value
+    ``<REDACTED>``, and a string under a redacted key is masked wherever it appears:
+    the scoped log, a failure's message and comparison, evidence on a verdict,
+    ``RunResult.to_json()``, and every file in the run directory. This is the same
+    standard the framework holds an SSH credential to (``docs/contracts.md``,
+    Evidence Contract). An invalid declaration is a ``TypeError`` at class definition.
+    """
+
+    _redact_ctx_patterns: ClassVar[tuple[re.Pattern[str], ...]] = ()
+
     def __init__(
         self,
         *,
@@ -421,6 +447,12 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Reject malformed authored classes before an instance can touch hardware."""
         super().__init_subclass__(**kwargs)
+
+        if "redact_ctx" in cls.__dict__:
+            inherited = [rule for base in cls.__bases__ for rule in _redact_ctx_patterns_of(base)]
+            cls._redact_ctx_patterns = compile_redact_ctx(
+                cls.__name__, cls.redact_ctx, inherited=inherited
+            )
 
         for name in cls.__dict__:
             if name in _SEALED_METHODS or name.startswith("_safe_"):
@@ -509,9 +541,12 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         This is the ctx view: what ``configure()`` provided, minus anything that is
         not JSON. A leaf's ``RunResult.run_data`` is this view plus the evidence its
         verdict carried; the merge happens when the leaf settles, so an override here
-        sees only the context (issue #118).
+        sees only the context (issue #118). A key the suite's ``redact_ctx`` claims
+        appears as ``<REDACTED>`` (issue #154).
         """
-        return snapshot_run_data(self._ctx)
+        ctx = self._ctx
+        redacted = ctx.redacted if isinstance(ctx, RunContext) else None
+        return snapshot_run_data(ctx, redacted=redacted)
 
     def test(
         self,
@@ -859,7 +894,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         )
         utils = runtime.utils
         object.__setattr__(self, "_ctx", utils.ctx)
-        runtime.own_context(self.name)
+        runtime.own_context(self.name, type(self)._redact_ctx_patterns)
         object.__setattr__(self, "_log_path", runtime.owned_log_path())
 
         integration_hooks = runtime.integration_hooks
@@ -869,6 +904,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
             utils.logger,
             node_audit_signal,
             time_budget_clocks=time_budget_clocks,
+            redactions=runtime.redactions,
         )
         after_each_started = False
         summary_children: tuple[SummaryTreeNode, ...] = ()
@@ -911,6 +947,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                         utils.logger,
                         node_audit_signal,
                         time_budget_clocks=active_clocks,
+                        redactions=runtime.redactions,
                     )
                     if isinstance(self, _Sequence):
                         return await self._run_sequence(
@@ -973,6 +1010,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                         utils.logger,
                         node_audit_signal,
                         time_budget_clocks=active_clocks,
+                        redactions=runtime.redactions,
                         evidence_contract=EvidenceContract(
                             declared=self._evidence_declared,
                             reserved=frozenset(utils.ctx),
@@ -1034,6 +1072,7 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
                         utils.logger,
                         node_audit_signal,
                         time_budget_clocks=active_clocks,
+                        redactions=runtime.redactions,
                     )
                     async with _active_time_budgets(active_clocks, lineage):
                         configured = await boundary.run(
@@ -1886,7 +1925,13 @@ class LitmusTest[CtxT: Mapping[str, Any] = Mapping[str, Any]](metaclass=_LitmusT
         audit_signal: AuditSignal,
     ) -> Outcome:
         """Run one audit on its own interval until it produces a failure verdict."""
-        boundary = ChildBoundary(self.name, run_abort, utils.logger, audit_signal)
+        boundary = ChildBoundary(
+            self.name,
+            run_abort,
+            utils.logger,
+            audit_signal,
+            redactions=node_runtime(utils).redactions,
+        )
         count = 0
         while True:
             await asyncio.sleep(hook.interval)
