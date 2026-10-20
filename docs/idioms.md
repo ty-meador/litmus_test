@@ -785,7 +785,7 @@ Where `wait_for()` is called determines what the timeout *means*, not what gets 
 - **In `configure()`** — timeout becomes a `TestFailure` that halts the lifecycle. The test lands in Fail; the suite never runs. The verdict means "the device did not reach a testable state." Whether the cause is hardware or infrastructure is **not knowable from code** — the human triager makes that call from logs and survey artifacts.
 - **In a test method** — timeout becomes a `TestFailure` that is the verdict itself. The device was reachable but failed to reach the expected state.
 
-`looking_for` is required and must be plain language — it becomes the Floor Technician's primary diagnostic string when a wait times out.
+`looking_for` is required and must be plain language — it becomes the Floor Technician's primary diagnostic string when a wait times out. The call returns the predicate's truthy value (`True` stays `True`); a claim that needs what was observed returns it from the predicate instead of closing over a list.
 
 The runnable [`examples/wait_for_patterns.py`](https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/examples/wait_for_patterns.py) ports
 both placements from the legacy example. It also shows how polling observations flow

@@ -284,9 +284,8 @@ class BlocklistRoundTrip(LitmusTest):
         """FTL's query log shows the blocked query with a blocked status."""
         api: DeviceApi = utils.ctx["api"]
         domain: str = utils.ctx["domain"]
-        seen: list[dict[str, Any]] = []
 
-        async def logged() -> bool:
+        async def logged() -> list[dict[str, Any]]:
             try:
                 response = await api.request(
                     DeviceRequest(
@@ -298,14 +297,14 @@ class BlocklistRoundTrip(LitmusTest):
             except DeviceApiOperationFailure as error:
                 raise TestFailure(f"API call failed: {error}") from error
             if response.status != 200:
-                return False
-            seen[:] = [
+                return []
+            entries = [
                 q for q in json.loads(response.body).get("queries", []) if q.get("domain") == domain
             ]
-            utils.logger.info("query log holds %d entries for %s", len(seen), domain)
-            return bool(seen)
+            utils.logger.info("query log holds %d entries for %s", len(entries), domain)
+            return entries
 
-        await utils.wait_for(
+        seen = await utils.wait_for(
             logged,
             looking_for=f"{domain} in the query log",
             interval=1.0,
