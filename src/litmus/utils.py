@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, NoReturn, cast, final
+from typing import TYPE_CHECKING, Any, NoReturn, cast, final, overload
 
 from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
@@ -51,7 +51,10 @@ from litmus.timeline import RunTimeline, TimelinePaths
 if TYPE_CHECKING:
     from litmus.results import RunResult
 
-type WaitPredicate = Callable[[], bool | Awaitable[bool]]
+# A union of callables, not a callable returning a union: an async predicate is
+# itself a callable that returns an awaitable, and matching that against
+# ``T | Awaitable[T]`` lets T collapse to the coroutine.
+type WaitPredicate[T] = Callable[[], Awaitable[T]] | Callable[[], T]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1086,15 +1089,58 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
         logger.info("stdout: \n%s", result.stdout)
         return result
 
-    async def wait_for(
+    @overload
+    async def wait_for[T](
         self,
-        predicate: WaitPredicate,
+        predicate: Callable[[], Awaitable[T]],
+        *,
+        looking_for: str,
+        interval: float = ...,
+        timeout_seconds: float = ...,
+    ) -> T: ...
+
+    @overload
+    async def wait_for[T](
+        self,
+        predicate: Callable[[], T],
+        *,
+        looking_for: str,
+        interval: float = ...,
+        timeout_seconds: float = ...,
+    ) -> T: ...
+
+    async def wait_for[T](
+        self,
+        predicate: WaitPredicate[T],
         *,
         looking_for: str,
         interval: float = 1.0,
         timeout_seconds: float = 30.0,
-    ) -> bool:
-        """Poll until ``predicate`` succeeds or raise a structured timeout verdict."""
+    ) -> T:
+        """Poll until ``predicate`` returns a truthy value, and hand that value back.
+
+        A predicate that returns ``True`` still yields ``True``. Any other truthy
+        value — the entries a query log just found, a parsed reading — is what the
+        caller receives, so the observation does not have to live in a closure
+        (issue #158). Falsy results keep polling. A timeout raises ``TestFailure``
+        with ``looking_for`` as the expected value and ``"timeout"`` as the received
+        one.
+
+        Args:
+            predicate: Sync or async callable, polled until it returns a truthy value.
+            looking_for: Plain-language name of the condition. It is the Floor
+                Technician's primary diagnostic when the wait times out.
+            interval: Seconds between polls. Must be greater than zero.
+            timeout_seconds: Seconds to keep polling. Zero polls once, then times out
+                if that look was falsy.
+
+        Returns:
+            The predicate's last truthy value.
+
+        Raises:
+            TestFailure: The window closed before a truthy value.
+            ValueError: ``interval`` is not positive, or ``timeout_seconds`` is negative.
+        """
         if interval <= 0:
             raise ValueError(
                 "wait_for interval must be greater than zero; pass a positive number of seconds"
@@ -1111,7 +1157,7 @@ class TestUtils[CtxT: Mapping[str, Any] = Mapping[str, Any]]:
             if inspect.isawaitable(observed):
                 observed = await observed
             if observed:
-                return True
+                return cast("T", observed)
             if loop.time() >= deadline:
                 msg = f"timed out waiting for {looking_for}"
                 raise TestFailure(msg, looking_for, "timeout")

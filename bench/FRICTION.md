@@ -146,11 +146,15 @@ A baud rate or a limit from the environment is `int(utils.env.require(...))` wit
 `ValueError` that is a developer-bug Fail, not a named one. `env.int(name, default=)`
 and `env.float` beside `port` would carry the same "Fails naming the variable" promise.
 
-## F9. `wait_for` has no channel for the observed value (ergonomics, low)
+## F9. `wait_for` has no channel for the observed value (ergonomics, low) — closed 2026-10-19
 
 The query-log claim needs the entries it found, not just that it found some. The
 predicate writes into a list it closes over. A predicate returning a truthy value that
 `wait_for` hands back would remove the closure.
+
+**Closed:** `wait_for` returns the predicate's last truthy value (issue #158). `True`
+is still `True`. The Pi-hole query-log claim returns the matching entries from the
+predicate and no longer writes them into a closed-over list.
 
 ## F10. `measure()` refuses NaN with a ContractViolation (observation, low) — closed 2026-10-20
 
