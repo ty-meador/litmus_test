@@ -89,7 +89,10 @@
       "required": ["name", "value", "unit", "limits", "in_limits", "timestamp"],
       "properties": {
         "name": { "type": "string", "minLength": 1 },
-        "value": { "type": "number" },
+        "value": {
+          "type": ["number", "null"],
+          "description": "The reading as passed, or null when the suite tried to take it and could not (issue #159). Never a string, boolean, or non-finite number. A consumer charting the series skips null; it is a hole, not a zero."
+        },
         "unit": { "type": ["string", "null"] },
         "limits": {
           "anyOf": [
@@ -113,7 +116,7 @@
         }
       },
       "additionalProperties": true,
-      "description": "One utils.measure call. in_limits is evidence: it never decides the node's state."
+      "description": "One utils.measure call. in_limits is evidence: it never decides the node's state. A null value with limits carries in_limits false: a reading not taken is never inside its window."
     },
     "state": {
       "type": "string",

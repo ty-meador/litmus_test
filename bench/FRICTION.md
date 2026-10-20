@@ -142,13 +142,21 @@ The query-log claim needs the entries it found, not just that it found some. The
 predicate writes into a list it closes over. A predicate returning a truthy value that
 `wait_for` hands back would remove the closure.
 
-## F10. `measure()` refuses NaN with a ContractViolation (observation, low)
+## F10. `measure()` refuses NaN with a ContractViolation (observation, low) — closed 2026-10-20
 
 A blank reading over the hop (`float("")`) is a `ValueError`, and a NaN is a contract
 violation naming the suite as buggy. Both are right by the measurements note; both mean
 every reading taken over a shell needs its own `try` before `measure`. The guest suite
 has five of them. A `measure` that accepts `None` and records "not taken" would move
 the gap to the record, where the FT reads it, without lowering the NaN guard.
+
+**Closed:** `measure(name, None, ...)` records the reading with `value: null` in the
+`measurements` array (issue #159; Ty ruled the nullable field in place under version 1,
+since nothing is released). It is never inside its window, so the gate a claim already
+writes on `in_limits` fails on a blank answer, and the claim names the command that
+gave nothing. NaN is still refused. `guest_acceptance.py` parses every shell reading
+through one `_number()` helper and has no `try` left around a `measure` call; the
+audit keeps its own, because audits cannot measure.
 
 ## F11. The gateway shape needs `::Class` on the command line (observation, low)
 

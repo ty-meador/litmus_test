@@ -19,6 +19,15 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `utils.measure(name, None, ...)` records a reading not taken (bench finding F10, issue
+  #159). The entry sits in `measurements` in call order with `value: null`; against a
+  window it carries `in_limits: false`, so a claim gated on the window fails through its
+  own gate, and without one it is a hole in the trend. The timeline line reads
+  `<name> not taken ...` at `warning`. `NaN` stays a `ContractViolation`. The
+  `measurement.value` field of `result-v1.schema.json` became nullable in place, under
+  the versioning policy's pre-1.0.0 clause, by Ty's ruling on the issue; `Measurement`,
+  `TestUtils.measure` and `litmus.measure` widen `value` to `int | float | None`. The
+  bench's guest suite drops its five `try` blocks for one parsing helper.
 - `TestUtils.use_serial` and `TestUtils.get_serial`, `use_shell` / `get_shell` for a console
   reached by its device path (bench finding F2, issue #139). `use_serial(device=...)` in
   `configure()` opens the console and binds `utils.exec` to it for the node and its

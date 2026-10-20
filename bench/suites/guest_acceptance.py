@@ -25,6 +25,20 @@ from litmus import PASS, LitmusTest, Phase, TestFailure, TestUtils, Verdict, evi
 _SETTLED_STATES = frozenset({"running", "degraded"})
 
 
+def _number(text: str) -> float | None:
+    """A reading that came back over the hop as text, or ``None`` when it was not a number.
+
+    A guest that answers blank, or with a shell error on stdout, is a fact about the
+    guest; ``utils.measure`` records ``None`` as a reading not taken (issue #159), so
+    the gap lands on the record where the Floor Technician reads it. The ``try`` lives
+    here once rather than around every ``measure`` call in the suite.
+    """
+    try:
+        return float(text.strip())
+    except ValueError:
+        return None
+
+
 class DebianGuest(LitmusTest):
     """Prove a guest booted to a usable state and is inside its resource limits."""
 
@@ -105,11 +119,9 @@ class DebianGuest(LitmusTest):
         )
         kernel = (await utils.exec("uname -r")).stdout.strip()
         os_release = (await utils.exec(". /etc/os-release && echo $PRETTY_NAME")).stdout.strip()
-        uptime = (await utils.exec("cut -d' ' -f1 /proc/uptime")).stdout.strip()
-        try:
-            utils.measure("uptime_at_configure_s", float(uptime), unit="s")
-        except ValueError:
-            utils.logger.warning("no uptime reading: %r", uptime)
+        uptime = (await utils.exec("cut -d' ' -f1 /proc/uptime")).stdout
+        # A trend reading: a blank answer is a hole in the series, not a failure.
+        utils.measure("uptime_at_configure_s", _number(uptime), unit="s")
         return {
             "kernel": kernel,
             "os": os_release,
@@ -173,32 +185,31 @@ class DebianGuest(LitmusTest):
     async def _root_filesystem(self, utils: TestUtils) -> Verdict:
         """Root filesystem use is under the ceiling."""
         result = await utils.exec("df --output=pcent / | tail -n 1")
-        text = result.stdout.strip().rstrip("%")
-        try:
-            used = float(text)
-        except ValueError as error:
-            raise TestFailure("df gave no percentage", "N%", result.stdout.strip()) from error
+        used = _number(result.stdout.rstrip().rstrip("%"))
         reading = utils.measure(
             "root_used_pct", used, unit="%", limits=(None, utils.ctx["root_used_limit_pct"])
         )
+        if reading.value is None:
+            raise TestFailure("df gave no percentage", "N%", result.stdout.strip())
         if reading.in_limits:
-            return PASS({"root_used_pct": used})
-        raise TestFailure("root filesystem too full", f"<= {reading.limits}", f"{used:g} %")
+            return PASS({"root_used_pct": reading.value})
+        raise TestFailure(
+            "root filesystem too full", f"<= {reading.limits}", f"{reading.value:g} %"
+        )
 
     @evidence("mem_available_mb")
     async def _memory(self, utils: TestUtils) -> Verdict:
         """``MemAvailable`` is above the floor."""
         result = await utils.exec("awk '/MemAvailable/ {print $2}' /proc/meminfo")
-        try:
-            available_mb = int(result.stdout.strip()) / 1024.0
-        except ValueError as error:
-            raise TestFailure("no MemAvailable reading", "kB", result.stdout.strip()) from error
+        available_kb = _number(result.stdout)
         reading = utils.measure(
             "mem_available_mb",
-            round(available_mb, 1),
+            None if available_kb is None else round(available_kb / 1024.0, 1),
             unit="MB",
             limits=(utils.ctx["mem_available_floor_mb"], None),
         )
+        if reading.value is None:
+            raise TestFailure("no MemAvailable reading", "kB", result.stdout.strip())
         if reading.in_limits:
             return PASS({"mem_available_mb": reading.value})
         raise TestFailure("memory below floor", f">= {reading.limits}", f"{reading.value} MB")
@@ -207,28 +218,36 @@ class DebianGuest(LitmusTest):
     async def _entropy(self, utils: TestUtils) -> Verdict:
         """The entropy pool is seeded."""
         result = await utils.exec("cat /proc/sys/kernel/random/entropy_avail")
-        try:
-            bits = int(result.stdout.strip())
-        except ValueError as error:
-            raise TestFailure("no entropy reading", "bits", result.stdout.strip()) from error
+        bits = _number(result.stdout)
         reading = utils.measure(
-            "entropy_bits", bits, unit="bit", limits=(utils.ctx["entropy_floor_bits"], None)
+            "entropy_bits",
+            None if bits is None else int(bits),
+            unit="bit",
+            limits=(utils.ctx["entropy_floor_bits"], None),
         )
+        if reading.value is None:
+            raise TestFailure("no entropy reading", "bits", result.stdout.strip())
         if reading.in_limits:
-            return PASS({"entropy_bits": bits})
-        raise TestFailure("entropy pool not seeded", f">= {reading.limits}", f"{bits} bits")
+            return PASS({"entropy_bits": reading.value})
+        raise TestFailure(
+            "entropy pool not seeded", f">= {reading.limits}", f"{reading.value} bits"
+        )
 
     @evidence("clock_skew_s")
     async def _clock(self, utils: TestUtils) -> Verdict:
         """The guest clock agrees with the bench clock to within the limit."""
         bench_now = time.time()
         result = await utils.exec("date +%s.%N")
-        try:
-            skew = float(result.stdout.strip()) - bench_now
-        except ValueError as error:
-            raise TestFailure("no clock reading", "epoch seconds", result.stdout.strip()) from error
+        guest_now = _number(result.stdout)
         limit: float = utils.ctx["clock_skew_limit_s"]
-        reading = utils.measure("clock_skew_s", round(skew, 3), unit="s", limits=(-limit, limit))
+        reading = utils.measure(
+            "clock_skew_s",
+            None if guest_now is None else round(guest_now - bench_now, 3),
+            unit="s",
+            limits=(-limit, limit),
+        )
+        if reading.value is None:
+            raise TestFailure("no clock reading", "epoch seconds", result.stdout.strip())
         if reading.in_limits:
             return PASS({"clock_skew_s": reading.value})
         raise TestFailure("guest clock skewed", f"within {limit} s", f"{reading.value} s")
