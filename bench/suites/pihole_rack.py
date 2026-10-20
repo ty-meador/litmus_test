@@ -115,6 +115,10 @@ class PiHole(LitmusTest):
 class BlocklistRoundTrip(LitmusTest):
     """Add a domain to the deny list over the API and watch DNS refuse it."""
 
+    redact_ctx = ("sid",)
+    """The FTL session id rides in ctx for the claims and is `<REDACTED>` on the record
+    (bench finding F5, issue #154)."""
+
     def __init__(
         self,
         *,
