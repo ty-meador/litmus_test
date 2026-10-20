@@ -193,7 +193,8 @@ class BlocklistRoundTrip(LitmusTest):
         ctx holds none of these keys (issue #152). ``configure()`` returns them only
         once the entry is on the list, so a missing key means there is nothing to take
         off. A login whose deny-list add then failed leaves its session to FTL's own
-        timeout, because the ``sid`` never reached ctx; #163 asks for a way to carry it.
+        timeout, because the ``sid`` never reached ctx. Ty declined a ctx checkpoint
+        for 1.0 on #163.
         """
         api: DeviceApi | None = utils.ctx.get("api")
         sid: str | None = utils.ctx.get("sid")
