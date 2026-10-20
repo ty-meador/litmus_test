@@ -776,6 +776,20 @@ return PASS({"status": response.status})
 
 The backends stay off the public surface, the way `SshInterface` does.
 
+For a JSON body, declare `json=` instead of encoding bytes and setting a header by
+hand. Read it back with `.json()`, or select the parser with
+`.parse(response_type="json")` / `.parse(response_type="yaml")` (YAML needs
+`litmus[yaml]`). Both leave the original bytes and status available. Parser errors
+propagate, so model a malformed response as `TestFailure` when it is a DUT failure
+mode. Neither the transfer nor the parser chooses a verdict.
+
+```python
+response = await api.request(DeviceRequest(method="PUT", path="/settings", json={"enabled": True}))
+if response.status == 200 and response.json().get("enabled") is True:
+    return PASS({"enabled": True})
+raise TestFailure("device did not enable", "enabled", response.status)
+```
+
 ---
 
 ## wait_for Patterns

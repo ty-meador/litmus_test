@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, Protocol
@@ -351,7 +353,121 @@ class TestPublicSurface:
         assert "DeviceApiOperationFailure" in litmus.__all__
 
 
+class TestJsonRequest:
+    @pytest.mark.parametrize(
+        "value", [{"ready": True, "label": "温度"}, [1, None], False, 0, "", None]
+    )
+    def test_json_encodes_every_json_value(self, value: Any) -> None:
+        request = DeviceRequest(method="POST", path="/echo", json=value)
+
+        assert request.payload is not None
+        assert json.loads(request.payload) == value
+        assert request.headers == {"Content-Type": "application/json"}
+
+    def test_omitting_json_preserves_the_raw_payload(self) -> None:
+        request = DeviceRequest("PUT", "/echo", b"raw")
+
+        assert request.payload == b"raw"
+        assert request.headers == {}
+
+    @pytest.mark.parametrize("payload", [b"", b"raw"])
+    def test_payload_and_json_are_mutually_exclusive(self, payload: bytes) -> None:
+        with pytest.raises(ValueError, match=r"payload.*json"):
+            DeviceRequest("POST", "/echo", payload=payload, json=None)
+
+    def test_json_does_not_mutate_the_headers_or_keep_the_input_object(self) -> None:
+        headers = {"sid": "secret"}
+        value = {"ready": True}
+        request = DeviceRequest("POST", "/echo", headers=headers, json=value)
+        headers["sid"] = "changed"
+        value["ready"] = False
+
+        assert headers == {"sid": "changed"}
+        assert request.headers == {"sid": "secret", "Content-Type": "application/json"}
+        assert json.loads(request.payload or b"") == {"ready": True}
+        with pytest.raises(TypeError):
+            request.headers["other"] = "value"  # type: ignore[index]
+
+    def test_explicit_content_type_is_preserved_case_insensitively(self) -> None:
+        request = DeviceRequest(
+            "POST", "/echo", json={}, headers={"content-type": "application/vnd.dut+json"}
+        )
+
+        assert request.headers == {"content-type": "application/vnd.dut+json"}
+
+    @pytest.mark.parametrize("value", [object(), {"bad": object()}])
+    def test_non_serializable_json_is_refused_at_construction(self, value: Any) -> None:
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            DeviceRequest("POST", "/echo", json=value)
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_json_is_refused_at_construction(self, value: float) -> None:
+        with pytest.raises(ValueError, match="Out of range float"):
+            DeviceRequest("POST", "/echo", json={"reading": value})
+
+
+class TestResponseParsing:
+    @pytest.mark.parametrize(
+        "value", [{"ready": True, "label": "温度"}, [1, None], False, 0, "", None]
+    )
+    def test_json_and_parse_decode_without_changing_the_response(self, value: Any) -> None:
+        body = json.dumps(value, ensure_ascii=False).encode()
+        response = DeviceResponse(400, body)
+
+        assert response.json() == value
+        assert response.parse() == value
+        assert response.parse(response_type="json") == value
+        assert response.status == 400
+        assert response.body == body
+
+    @pytest.mark.parametrize("body", [b"", b"not json", b"{", b"\xff"])
+    def test_bad_json_raises_a_decode_error_and_keeps_the_bytes(self, body: bytes) -> None:
+        response = DeviceResponse(200, body)
+
+        with pytest.raises((json.JSONDecodeError, UnicodeDecodeError)):
+            response.json()
+        assert response.body == body
+
+    def test_yaml_uses_the_selected_parser(self) -> None:
+        response = DeviceResponse(200, "ready: true\nlabel: 温度\n".encode())
+
+        assert response.parse(response_type="yaml") == {"ready": True, "label": "温度"}
+
+    def test_yaml_does_not_construct_python_objects(self) -> None:
+        import yaml
+
+        response = DeviceResponse(200, b"!!python/object/apply:builtins.list []")
+
+        with pytest.raises(yaml.YAMLError):
+            response.parse(response_type="yaml")
+
+    def test_yaml_extra_is_required_only_when_yaml_is_selected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "yaml", None)
+        response = DeviceResponse(200, b'{"ready": true}')
+
+        assert response.json() == {"ready": True}
+        with pytest.raises(ImportError, match=r"litmus\[yaml\]"):
+            response.parse(response_type="yaml")
+
+    def test_unknown_response_type_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="response_type"):
+            DeviceResponse(200, b"{}").parse(response_type="toml")  # type: ignore[arg-type]
+
+
 class TestSharedContract:
+    async def test_json_body_round_trip(self, api: DeviceApiInterface) -> None:
+        request = DeviceRequest("POST", "/echo", json={"ready": True, "label": "温度"})
+        if isinstance(api, MockDeviceApi):
+            api.script("POST", "/echo", DeviceResponse(200, request.payload or b""))
+
+        response = await api.request(request)
+
+        assert response.json() == {"ready": True, "label": "温度"}
+        assert response.body == request.payload
+        assert len(api.attempts) == 1
+
     async def test_status_200_is_data(self, api: DeviceApiInterface) -> None:
         response = await api.request(DeviceRequest(method="GET", path="/whoami"))
 
@@ -640,6 +756,41 @@ class TestHttpSpecific:
 
         assert response.status == 200
         assert response.body == b"hello"
+
+    async def test_json_bytes_and_content_type_reach_the_server_without_body_logging(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="litmus")
+        received: list[tuple[bytes, dict[str, str]]] = []
+
+        def router(
+            method: str, path: str, body: bytes, headers: dict[str, str]
+        ) -> tuple[int, bytes, dict[str, str]]:
+            del method, path
+            received.append((body, headers))
+            return 400, body, {"Content-Type": "application/json"}
+
+        server = await asyncio.start_server(
+            lambda reader, writer: _http_client(reader, writer, router), "127.0.0.1", 0
+        )
+        port = server.sockets[0].getsockname()[1]
+        backend = HttpInterface(base_url=f"http://127.0.0.1:{port}")
+        await backend.connect()
+        try:
+            response = await backend.request(
+                DeviceRequest("POST", "/echo", json={"password": "body-secret"})
+            )
+        finally:
+            await backend.disconnect()
+            server.close()
+            await server.wait_closed()
+
+        assert response.status == 400
+        assert response.json() == {"password": "body-secret"}
+        assert len(received) == 1
+        assert json.loads(received[0][0]) == {"password": "body-secret"}
+        assert received[0][1]["content-type"] == "application/json"
+        assert "body-secret" not in caplog.text
 
     async def test_host_header_is_not_duplicated(self, http_api: HttpInterface) -> None:
         response = await http_api.request(
