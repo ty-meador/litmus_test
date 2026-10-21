@@ -19,6 +19,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- CoAP `DeviceResponse.status` is the dotted code (`"2.05"`), not the wire
+  integer `69` (bench finding F7, issue #156). `CoapCode.CONTENT`, `CHANGED`,
+  and `NOT_FOUND` are the names a claim compares against, and that same string
+  is what the record stores. HTTP status stays an integer. The CoAP bench
+  suite drops its local constants.
 - `utils.env.int` and `utils.env.float` sit beside `port` (bench finding F8, issue
   #157). A missing variable uses the keyword `default` when the call passed one,
   and otherwise Fails naming the variable. A value that is not a base-10 integer,

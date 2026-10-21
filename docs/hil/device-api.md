@@ -85,8 +85,11 @@ request.
   `json=None` sends null. Combining it with a non-`None` `payload` (including
   empty bytes) is refused, as are unserializable values and non-finite numbers.
   The wire payload remains bytes, and logs still record lengths, never body contents.
-- A provisional `DeviceResponse` carries `status` (HTTP status or CoAP
-  code), protocol options (headers / CoAP options), and `body` (`bytes`).
+- A provisional `DeviceResponse` carries `status` (an HTTP status integer,
+  or a CoAP code as the dotted string `2.05` — see `CoapCode`), protocol
+  options (headers / CoAP options), and `body` (`bytes`). The wire integer
+  (`class << 5 | detail`, so Content is `69`) stays inside the transport.
+  Issue #156.
   JSON parsing is a convenience on top of those bytes, not the contract:
   a body that is not JSON is still a successful transfer of bytes. The
   interface does not invent an empty body, a 200, or a CoAP 2.05 to stand
