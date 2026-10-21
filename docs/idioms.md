@@ -578,6 +578,9 @@ class MyDevice(LitmusTest):
         # from logs and survey artifacts. Model as many failure modes as
         # possible so they surface as verdicts rather than bugs. utils.env.port
         # does the same for a port, defaulting to 22 and rejecting a typo.
+        # utils.env.int and utils.env.float do it for a number: unset uses the
+        # default when one was given, and a bad value Fails naming the variable
+        # and the value.
         username = utils.env.require("TARGET_USER")
         password = utils.env.require("TARGET_PASSWORD")
         address = utils.env.require("TARGET_ADDRESS")
@@ -613,7 +616,7 @@ class MyDevice(LitmusTest):
 A device-level test can be dropped into a rack-level test without modification. "Push state up" to higher-level components; trust the framework lifecycle.
 
 ## Environment Variables
-Always use `utils.env` inside test code. Never `os.environ` directly. The env snapshot is stored in every `RunResult` for post-run auditing — filtered by the run's `env_allow` or `env_deny` list when one was declared, verbatim otherwise (see `docs/inspector-json.md`).
+Always use `utils.env` inside test code. Never `os.environ` directly. The env snapshot is stored in every `RunResult` for post-run auditing — filtered by the run's `env_allow` or `env_deny` list when one was declared, verbatim otherwise (see `docs/inspector-json.md`). `text`, `require`, and `port` read a string, a required string, and a TCP port. `int` and `float` read a number the same way: a bad value Fails the run naming the variable and the value, and a missing one uses the `default` when the call passed one.
 
 ## TestUtils Injection
 Call `await root.run()` to execute a suite. The framework constructs `TestUtils`; suite
