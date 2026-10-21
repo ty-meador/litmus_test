@@ -19,6 +19,14 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `litmus-check` rule `litmus/evidence-shadows-ctx` (bench finding F14, issue #161): a
+  key `@evidence` declares that the class's `configure()` is statically known to return,
+  or that is the framework-owned `measurements` slot, is a finding on the declaring
+  literal at check time rather than a `ContractViolation` on the first run. Ctx and
+  evidence land on one record, so the reading may not reuse the name of the limit or
+  target it was judged against; `docs/idioms.md` now says so beside `@evidence`. A clash
+  with an enclosing suite's ctx stays with tier 1. Self-tests reproduce the three bench
+  findings by reverting the bench's renames.
 - `redact_ctx` on a suite class names the ctx keys that are not for the record (bench
   finding F5, issue #154), exactly or as regular expressions matched against the whole
   key. The key appears in `run_data` as `<REDACTED>`, and a string under it is masked
