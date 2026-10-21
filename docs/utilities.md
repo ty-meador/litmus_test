@@ -74,7 +74,10 @@ See `examples/ssh_tunneling.py`.
 
 ```python
 async def configure(self, utils: TestUtils) -> dict[str, Any]:
-    await utils.use_serial(device=utils.env.require("SERIAL_DEVICE"), baud=115200)
+    await utils.use_serial(
+        device=utils.env.require("SERIAL_DEVICE"),
+        baud=utils.env.int("SERIAL_BAUD", default=115200),
+    )
     return {}
 ```
 

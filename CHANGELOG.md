@@ -24,6 +24,11 @@ of feature parity: the Python Inspector is still separate work.
   and `NOT_FOUND` are the names a claim compares against, and that same string
   is what the record stores. HTTP status stays an integer. The CoAP bench
   suite drops its local constants.
+- `utils.env.int` and `utils.env.float` sit beside `port` (bench finding F8, issue
+  #157). A missing variable uses the keyword `default` when the call passed one,
+  and otherwise Fails naming the variable. A value that is not a base-10 integer,
+  or not a finite float, Fails naming the variable and the value. The serial bench
+  suite reads `SERIAL_BAUD` this way.
 - `litmus-check` rule `litmus/evidence-shadows-ctx` (bench finding F14, issue #161): a
   key `@evidence` declares that the class's `configure()` is statically known to return,
   or that is the framework-owned `measurements` slot, is a finding on the declaring

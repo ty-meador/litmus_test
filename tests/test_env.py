@@ -96,3 +96,74 @@ class TestRunEnvReaders:
             RunEnv({"TARGET_PORT": value}).port("TARGET_PORT")
 
         assert raised.value.fail_message == _BAD_PORT
+
+
+_UNSET_BAUD = "did not reach a testable state: BAUD env var not set; set BAUD"
+
+
+class TestRunEnvNumbers:
+    """Issue #157: a number from the environment Fails naming the variable and the value."""
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ({"BAUD": "9600"}, 9600),
+            ({"BAUD": " 115200 "}, 115200),
+            ({"BAUD": "010"}, 10),
+            ({"BAUD": "-3"}, -3),
+            ({"BAUD": "+12"}, 12),
+        ],
+    )
+    def test_int_parses_base_ten(self, source: dict[str, str], expected: int) -> None:
+        assert RunEnv(source).int("BAUD") == expected
+
+    def test_int_defaults_when_unset_or_blank(self) -> None:
+        assert RunEnv({}).int("BAUD", default=115200) == 115200
+        assert RunEnv({"BAUD": "  "}).int("BAUD", default=115200) == 115200
+
+    def test_int_fails_when_unset_and_no_default_was_given(self) -> None:
+        with pytest.raises(TestFailure) as raised:
+            RunEnv({}).int("BAUD")
+
+        assert raised.value.fail_message == _UNSET_BAUD
+
+    @pytest.mark.parametrize("value", ["nope", "9600.5", "0x10", "1e2", "nan"])
+    def test_int_fails_naming_the_variable_and_the_value(self, value: str) -> None:
+        with pytest.raises(TestFailure) as raised:
+            RunEnv({"BAUD": value}).int("BAUD", default=115200)
+
+        assert raised.value.fail_message == (
+            "did not reach a testable state: BAUD env var is not an integer; "
+            f"set BAUD to an integer (value was {value!r})"
+        )
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ({"LIMIT": "1.5"}, 1.5),
+            ({"LIMIT": " 2 "}, 2.0),
+            ({"LIMIT": "1e2"}, 100.0),
+            ({"LIMIT": "-0.25"}, -0.25),
+        ],
+    )
+    def test_float_parses_a_finite_number(self, source: dict[str, str], expected: float) -> None:
+        assert RunEnv(source).float("LIMIT") == expected
+
+    def test_float_defaults_when_unset(self) -> None:
+        assert RunEnv({}).float("LIMIT", default=0.5) == 0.5
+
+    def test_float_fails_when_unset_and_no_default_was_given(self) -> None:
+        with pytest.raises(TestFailure) as raised:
+            RunEnv({}).float("LIMIT")
+
+        assert "LIMIT env var not set" in raised.value.fail_message
+
+    @pytest.mark.parametrize("value", ["nope", "nan", "inf", "-inf", "1.2.3"])
+    def test_float_fails_naming_the_variable_and_the_value(self, value: str) -> None:
+        with pytest.raises(TestFailure) as raised:
+            RunEnv({"LIMIT": value}).float("LIMIT", default=0.5)
+
+        assert raised.value.fail_message == (
+            "did not reach a testable state: LIMIT env var is not a finite number; "
+            f"set LIMIT to a finite number (value was {value!r})"
+        )
