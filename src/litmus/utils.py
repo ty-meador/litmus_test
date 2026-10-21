@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import uuid
@@ -616,6 +617,10 @@ class RunEnv(Mapping[str, str]):
       - ``port(name, default=22)`` parses an integer in 1-65535 and raises
         ``TestFailure`` for anything else, so a bench typo is reported as the variable
         rather than surfacing later as a transport error.
+      - ``int(name, default=)`` and ``float(name, default=)`` do the same for a
+        number. Unset or blank uses ``default`` when one was passed, and otherwise
+        Fails naming the variable. A value that is not a base-10 integer, or not a
+        finite float, Fails naming the variable and the value.
     """
 
     __slots__ = ("_values",)
@@ -673,6 +678,67 @@ class RunEnv(Mapping[str, str]):
                 f"set {name} to an integer 1-65535"
             )
         return port
+
+    def int(self, name: str, *, default: int | None = None) -> int:
+        """Return ``name`` as a base-10 integer, or ``default`` when unset or blank.
+
+        A missing variable with no ``default`` Fails naming the variable, the same
+        promise as ``require``. A value that is not a base-10 integer Fails naming
+        the variable and the value, even when a default was passed. ``0x10`` is
+        refused; ``010`` is ten.
+
+        Raises:
+            TestFailure: unset or blank with no default, or not a base-10 integer.
+        """
+        raw = self.text(name)
+        if raw is None:
+            if default is None:
+                raise TestFailure(
+                    f"did not reach a testable state: {name} env var not set; set {name}"
+                )
+            return default
+        try:
+            return _decimal_int(raw)
+        except ValueError:
+            raise TestFailure(
+                f"did not reach a testable state: {name} env var is not an integer; "
+                f"set {name} to an integer (value was {raw!r})"
+            ) from None
+
+    def float(self, name: str, *, default: float | None = None) -> float:
+        """Return ``name`` as a finite float, or ``default`` when unset or blank.
+
+        Raises:
+            TestFailure: unset or blank with no default, or not a finite number.
+                The message names the variable and the value.
+        """
+        raw = self.text(name)
+        if raw is None:
+            if default is None:
+                raise TestFailure(
+                    f"did not reach a testable state: {name} env var not set; set {name}"
+                )
+            return default
+        try:
+            return _finite_float(raw)
+        except ValueError:
+            raise TestFailure(
+                f"did not reach a testable state: {name} env var is not a finite number; "
+                f"set {name} to a finite number (value was {raw!r})"
+            ) from None
+
+
+def _decimal_int(raw: str) -> int:
+    """Parse ``raw`` as base 10. Called out so :meth:`RunEnv.int` can keep its name."""
+    return int(raw, 10)
+
+
+def _finite_float(raw: str) -> float:
+    """Parse ``raw`` as a finite float. Called out so :meth:`RunEnv.float` can keep its name."""
+    number = float(raw)
+    if not math.isfinite(number):
+        raise ValueError(raw)
+    return number
 
 
 @final

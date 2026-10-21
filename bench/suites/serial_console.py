@@ -18,6 +18,7 @@ replies with N bytes, ``sleep N`` parks until Ctrl-C. A pty drops BREAK, so the 
 lands on the Ctrl-C fallback and the port is closed afterwards, as the contract says.
 
 Run it: ``SERIAL_DEVICE=/dev/pts/N PYTHONPATH=. litmus run bench/suites/serial_console.py``.
+``SERIAL_BAUD`` overrides the constructor baud when it is set.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ class SerialConsole(LitmusTest):
 
         Args:
             name: Node name used by logs, artifacts, and failures.
-            baud: Line rate requested at open; a pty ignores it, an adapter does not.
+            baud: Line rate used when ``SERIAL_BAUD`` is unset. A pty ignores it.
             prompt_timeout_s: How long one ``exec`` waits for the prompt to return.
             dump_bytes: Size of the large reply the ``large-reply`` claim asks for.
             exec_latency_limit_ms: Upper limit on one short round trip.
@@ -59,10 +60,11 @@ class SerialConsole(LitmusTest):
     async def configure(self, utils: TestUtils) -> dict[str, Any]:
         """Route ``utils.exec`` to the tty ``SERIAL_DEVICE`` names; a dead port is a Fail."""
         device = utils.env.require("SERIAL_DEVICE")
+        baud = utils.env.int("SERIAL_BAUD", default=self._baud)
         try:
             await utils.use_serial(
                 device=device,
-                baud=self._baud,
+                baud=baud,
                 login_timeout=self._prompt_timeout_s,
                 prompt_timeout=self._prompt_timeout_s,
             )
@@ -71,7 +73,7 @@ class SerialConsole(LitmusTest):
             raise TestFailure(f"console did not open: {error}") from error
         return {
             "device": device,
-            "baud": self._baud,
+            "baud": baud,
             "dump_bytes": self._dump_bytes,
             "exec_latency_limit_ms": self._exec_latency_limit_ms,
         }
