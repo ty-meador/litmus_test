@@ -180,17 +180,56 @@ class DeviceRequest:
 
 
 @final
+class CoapCode:
+    """Dotted CoAP response codes, the form a record can carry.
+
+    A CoAP ``DeviceResponse.status`` is one of these strings (``"2.05"``), never
+    the wire integer ``class << 5 | detail``. HTTP status stays an ``int``.
+    Compare with ``response.status == CoapCode.CONTENT`` and put
+    ``response.status`` on the evidence as-is: it is already the text a reader
+    sees. ``from_wire`` is how the transport, and a claim that still holds a
+    code byte, spells that integer.
+    """
+
+    CONTENT: Final[str] = "2.05"
+    CHANGED: Final[str] = "2.04"
+    NOT_FOUND: Final[str] = "4.04"
+
+    @staticmethod
+    def from_wire(code: int) -> str:
+        """Render a CoAP code byte as ``class.detail`` (``69`` becomes ``"2.05"``).
+
+        Raises:
+            ValueError: ``code`` is not an integer in 0-255. Booleans are refused.
+        """
+        if type(code) is not int or not 0 <= code <= 255:
+            raise ValueError(f"CoAP wire code must be an integer 0-255, not {code!r}")
+        return f"{code >> 5}.{code & 0x1F:02d}"
+
+
+def _coap_response(code: int, body: bytes) -> DeviceResponse:
+    """One CoAP reply: the dotted code on ``status``, the payload on ``body``."""
+    return DeviceResponse(
+        status=CoapCode.from_wire(code),
+        body=body,
+        headers=MappingProxyType({}),
+    )
+
+
+@final
 @dataclass(frozen=True, slots=True)
 class DeviceResponse:
     """The bytes and status a transfer actually returned.
 
-    HTTP 4xx/5xx and CoAP 4.xx/5.xx are fields here, not exceptions. ``headers``
-    carries HTTP headers or CoAP options as strings. ``body`` is the payload
-    bytes. Parsing is opt-in through ``json()`` or ``parse(response_type=...)``;
-    a parsing error never changes the transfer's status or raw bytes.
+    HTTP 4xx/5xx and CoAP 4.xx/5.xx are fields here, not exceptions. An HTTP
+    ``status`` is the integer. A CoAP ``status`` is the dotted code (``"2.05"``,
+    :class:`CoapCode`). ``headers`` carries HTTP headers or CoAP options as
+    strings. ``body`` is the payload bytes. Parsing is opt-in through ``json()``
+    or ``parse(response_type=...)``; a parsing error never changes the transfer's
+    status or raw bytes.
     """
 
-    status: int
+    status: int | str
     body: bytes
     headers: Mapping[str, str] = MappingProxyType({})
 
@@ -742,12 +781,10 @@ class HttpInterface(DeviceApiInterface):
         while True:
             response = await self._round_trip(method, current_path, payload, headers)
             location = _header(response.headers, "location")
-            if (
-                self._follow_redirects
-                and location is not None
-                and 300 <= response.status < 400
-                and hops < 5
-            ):
+            # This backend only builds integer statuses. The field is a union
+            # because CoAP shares DeviceResponse and stores a dotted code.
+            status = cast(int, response.status)
+            if self._follow_redirects and location is not None and 300 <= status < 400 and hops < 5:
                 hops += 1
                 current_path = self._redirect_path(location)
                 if current_path is None:
@@ -1043,7 +1080,7 @@ class CoapInterface(DeviceApiInterface):
             if not more:
                 break
             if code != _COAP_CONTINUE:
-                return DeviceResponse(status=code, body=data, headers=MappingProxyType({}))
+                return _coap_response(code, data)
             sent += len(chunk)
             ack = _coap_block(options, _COAP_BLOCK1)
             if ack is not None and ack.szx < szx:
@@ -1053,14 +1090,14 @@ class CoapInterface(DeviceApiInterface):
         # how the reference stack (aiocoap) keys the transfer: on code and path.
         block2 = _coap_block(options, _COAP_BLOCK2)
         if block2 is None:
-            return DeviceResponse(status=code, body=data, headers=MappingProxyType({}))
+            return _coap_response(code, data)
         parts = [data]
         received = len(data)
         while block2.more:
             wanted = _CoapBlock(received // block2.size, False, block2.szx)
             code, options, data = await self._send(method, path, b"", block2=wanted)
             if code >> 5 != _COAP_SUCCESS_CLASS:
-                return DeviceResponse(status=code, body=data, headers=MappingProxyType({}))
+                return _coap_response(code, data)
             block2 = _coap_block(options, _COAP_BLOCK2)
             if block2 is None or block2.start != received:
                 raise ConnectionError(
@@ -1069,7 +1106,7 @@ class CoapInterface(DeviceApiInterface):
                 )
             parts.append(data)
             received += len(data)
-        return DeviceResponse(status=code, body=b"".join(parts), headers=MappingProxyType({}))
+        return _coap_response(code, b"".join(parts))
 
     async def _send(
         self,
