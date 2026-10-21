@@ -1,8 +1,10 @@
 """JSON-safe run-data snapshots: the ctx view and the evidence a verdict carries."""
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import cast
+
+from litmus.redaction import REDACTED
 
 type JsonScalar = bool | int | float | str | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
@@ -73,17 +75,28 @@ def _json_snapshot(
         active_containers.remove(container_id)
 
 
-def snapshot_run_data(ctx: Mapping[str, object]) -> JsonObject:
+def snapshot_run_data(
+    ctx: Mapping[str, object],
+    *,
+    redacted: Callable[[str], bool] | None = None,
+) -> JsonObject:
     """Return a detached JSON-safe snapshot of the serializable top-level ctx entries.
 
     A top-level entry survives only when its complete value is serializable. Silently
     pruning an invalid nested handle would make the remaining evidence look complete
     when it is not. Context is typed with string keys; a runtime value that violates
     that contract is stripped rather than coerced into a different JSON key.
+
+    A key ``redacted`` claims (the suite's ``redact_ctx``, issue #154) appears with
+    the value :data:`REDACTED` whatever it holds; the value is never inspected, so a
+    secret under a redacted key is neither copied nor judged for serializability.
     """
     snapshot = default_run_data()
     for key, value in ctx.items():
         if type(key) is not str or key == MEASUREMENTS_KEY:
+            continue
+        if redacted is not None and redacted(key):
+            snapshot[key] = REDACTED
             continue
         copied = _json_snapshot(value, set())
         if not isinstance(copied, _Unserializable):

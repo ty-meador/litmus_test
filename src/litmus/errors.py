@@ -20,10 +20,13 @@ guard: a developer bug and a framework bug, each with its own banner so the read
 a log can tell instantly whose code is wrong.
 """
 
+import functools
 import signal
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, ClassVar, Literal, cast, final
+
+from litmus.redaction import Redactions
 
 
 @final
@@ -93,7 +96,69 @@ class LitmusError(Exception):
 
     Catching this catches everything litmus raises deliberately and nothing a suite
     author raises by accident.
+
+    A failure recorded at the child boundary is bound to the run's redactions
+    (issue #154): from then on ``str()``, ``repr()``, and ``to_json()`` mask every
+    secret the suite declared through ``redact_ctx``, so a ``TestFailure`` that was
+    handed a session credential as its ``received`` value renders it as
+    ``<REDACTED>`` on every surface. Every ``to_json`` in the taxonomy is wrapped at
+    class creation, so a subclass need not know the masking exists.
     """
+
+    _redactions: Redactions | None = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        to_json = cls.__dict__.get("to_json")
+        if callable(to_json):
+            cls.to_json = _masking_to_json(cast("Callable[[Any], dict[str, Any]]", to_json))
+
+    def __str__(self) -> str:
+        return self._masked(super().__str__())
+
+    def __repr__(self) -> str:
+        return self._masked(super().__repr__())
+
+    def _masked(self, text: str) -> str:
+        redactions = self._redactions
+        return text if redactions is None else redactions.mask(text)
+
+    def _masked_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+        redactions = self._redactions
+        if redactions is None:
+            return payload
+        return cast("dict[str, Any]", redactions.mask_json(payload))
+
+
+def _masking_to_json(
+    to_json: Callable[[Any], dict[str, Any]],
+) -> Callable[[Any], dict[str, Any]]:
+    @functools.wraps(to_json)
+    def masked(self: LitmusError) -> dict[str, Any]:
+        return self._masked_json(to_json(self))  # pyright: ignore[reportPrivateUsage]
+
+    return masked
+
+
+def bind_redactions(error: BaseException | None, redactions: Redactions) -> None:
+    """Bind ``redactions`` to ``error`` and every litmus error chained beneath it.
+
+    Walks ``cause`` (the taxonomy's own link), ``__cause__``, and ``__context__``, so a
+    ``ContractViolation`` raised from an author's ``TestFailure`` masks both. An
+    exception outside the taxonomy is left as it is: the framework does not rewrite
+    what it did not raise and cannot render.
+    """
+    seen: set[int] = set()
+    current = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, LitmusError):
+            current._redactions = redactions  # pyright: ignore[reportPrivateUsage]
+        nested = getattr(current, "cause", None)
+        if isinstance(nested, BaseException):
+            current = nested
+            continue
+        current = current.__cause__ or current.__context__
 
 
 class TestFailure(LitmusError):
