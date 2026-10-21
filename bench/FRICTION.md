@@ -221,7 +221,7 @@ TestFailure, or fix the call`) instead of advising `PASS`. The suite's echo leav
 `parallel` again and `make bench-suite-coap` is green; `docs/hil/device-api.md` and the
 idioms page say what a shared handle does to a latency measurement.
 
-## F14. An evidence key may not reuse a ctx key, and only the contract page says so (idiom, medium)
+## F14. An evidence key may not reuse a ctx key, and only the contract page says so (idiom, medium) — closed 2026-10-20
 
 Two of five suites hit `evidence shadows a ctx key or reserved slot` on their first run
 (`kernel` in the guest, `probe` and `domain` in the Pi-hole child): the natural name
@@ -232,6 +232,14 @@ the evidence keys.
 
 **Close it:** a tier-3 rule (`litmus/evidence-shadows-ctx`), and a line in the idioms
 page next to `@evidence`.
+
+**Closed:** `litmus/evidence-shadows-ctx` flags an `@evidence` key that `configure()` is
+statically known to return, or that is the `measurements` slot, on the declaring literal
+(issue #161). Its self-test reverts the three renames above against the bench files and
+gets exactly `kernel`, `probe`, and `domain` back; the renamed bench is clean. The
+idioms page now says the two namespaces are one, beside `@evidence`. A clash with a key
+only an enclosing suite provides (the Pi-hole child under the rack, had the rack returned
+`domain`) stays with tier 1: a single file does not know its parent.
 
 ## F15. `CoapInterface` has no block-wise transfer: a large echo is 2.04 and short (bug, high) — closed 2026-10-17
 
