@@ -153,11 +153,16 @@ defines the constants itself. Named codes (or a `(2, 5)` tuple with a `__str__` 
 is `"2.05"`). The wire integer stays in the transport. `coap_device.py` compares
 against `CoapCode` and records that string (issue #156). HTTP status is unchanged.
 
-## F8. `utils.env` has `text`, `require`, `port` and nothing numeric (ergonomics, low)
+## F8. `utils.env` has `text`, `require`, `port` and nothing numeric (ergonomics, low) — closed 2026-10-20
 
 A baud rate or a limit from the environment is `int(utils.env.require(...))` with a
 `ValueError` that is a developer-bug Fail, not a named one. `env.int(name, default=)`
 and `env.float` beside `port` would carry the same "Fails naming the variable" promise.
+
+**Closed:** `RunEnv.int` and `RunEnv.float` sit beside `port` (issue #157). A bad
+value Fails naming the variable and the value. `serial_console.py` reads
+`SERIAL_BAUD` through `env.int`, and the constructor baud is the default when
+the variable is unset.
 
 ## F9. `wait_for` has no channel for the observed value (ergonomics, low) — closed 2026-10-19
 
