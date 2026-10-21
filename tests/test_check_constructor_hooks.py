@@ -161,6 +161,7 @@ class TestConstructorHooksAtTheCommandLine:
             "litmus/ctx-provenance",
             "litmus/env-via-utils",
             "litmus/evidence-fulfilled",
+            "litmus/evidence-shadows-ctx",
             "litmus/gated-pass",
             "litmus/immutable-self",
             "litmus/logger-not-print",
@@ -178,4 +179,4 @@ class TestConstructorHooksAtTheCommandLine:
             "litmus/unannotated-interface",
         ]
         assert all("seeded_suite.py" in line or "seeded_seams.py" in line for line in lines[:-1])
-        assert lines[-1] == "Found 19 violations."
+        assert lines[-1] == "Found 20 violations."
