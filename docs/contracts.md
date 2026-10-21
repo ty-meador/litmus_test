@@ -361,6 +361,8 @@ dependency raises `ImportError`, and parser errors propagate without a fallback.
 Parsing is explicit, independent of response status and headers; it preserves `body`
 and `status`, makes no request, and supplies no verdict. A malformed body remains a
 completed transfer for the suite to judge. Body contents never enter attempt logs.
+A CoAP `status` is the dotted code (`"2.05"`, a `CoapCode` constant). An HTTP
+`status` stays an integer (issue #156).
 
 **Developer obligation:** Implement `DeviceApiInterface` as that note specifies.
 

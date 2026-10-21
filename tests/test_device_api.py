@@ -15,6 +15,7 @@ import pytest
 
 from litmus import (
     PASS,
+    CoapCode,
     DeviceApi,
     DeviceApiOperationFailure,
     DeviceRequest,
@@ -337,6 +338,28 @@ async def api(
     return backend
 
 
+class TestCoapCode:
+    """Issue #156: the code on a CoAP response is the dotted string, not the byte."""
+
+    def test_named_codes_match_the_wire_byte(self) -> None:
+        assert CoapCode.CONTENT == "2.05" == CoapCode.from_wire(2 << 5 | 5)
+        assert CoapCode.CHANGED == "2.04" == CoapCode.from_wire(2 << 5 | 4)
+        assert CoapCode.NOT_FOUND == "4.04" == CoapCode.from_wire(4 << 5 | 4)
+        assert CoapCode.from_wire(4 << 5 | 13) == "4.13"
+        assert CoapCode.from_wire(0) == "0.00"
+
+    @pytest.mark.parametrize("code", [True, False, -1, 256, 1.5, "69"])
+    def test_a_wire_code_outside_a_byte_is_refused(self, code: object) -> None:
+        with pytest.raises(ValueError, match="0-255"):
+            CoapCode.from_wire(code)  # type: ignore[arg-type]
+
+    def test_a_coap_status_is_evidence_as_itself(self) -> None:
+        response = DeviceResponse(status=CoapCode.CONTENT, body=b"hello")
+
+        assert response.status == "2.05"
+        assert response.status != 69
+
+
 class TestPublicSurface:
     def test_backends_are_not_on_the_public_surface(self) -> None:
         import litmus
@@ -471,7 +494,7 @@ class TestSharedContract:
     async def test_status_200_is_data(self, api: DeviceApiInterface) -> None:
         response = await api.request(DeviceRequest(method="GET", path="/whoami"))
 
-        assert response.status in {200, 69}
+        assert response.status in {200, CoapCode.CONTENT}
         assert response.body in {b"/whoami", b"whoami"} or (
             isinstance(api, MockDeviceApi) and response.body == b"/whoami"
         )
@@ -481,7 +504,7 @@ class TestSharedContract:
     ) -> None:
         response = await api.request(DeviceRequest(method="GET", path="/missing"))
 
-        assert response.status in {404, 132}
+        assert response.status in {404, CoapCode.NOT_FOUND}
 
     async def test_payload_must_be_bytes(self, api: DeviceApiInterface) -> None:
         with pytest.raises(TypeError, match="payload must be bytes"):
@@ -1156,7 +1179,7 @@ class TestValidationAndHalt:
         await backend.connect()
         try:
             response = await backend.request(DeviceRequest(method="GET", path="/abcdefghijklmn"))
-            assert response.status == 69
+            assert response.status == CoapCode.CONTENT
         finally:
             await backend.disconnect()
             transport.close()
@@ -1171,7 +1194,7 @@ class TestValidationAndHalt:
         try:
             api = await utils.get_coap(base_url=f"coap://127.0.0.1:{port}")
             response = await api.request(DeviceRequest(method="PUT", path="/a/b", payload=b"xy"))
-            assert response.status == 69
+            assert response.status == CoapCode.CONTENT
         finally:
             await node_runtime(utils).cancel_opened()
             transport.close()
@@ -1184,7 +1207,7 @@ class TestCoapBlockwise:
         payload = bytes(range(256)) * 10  # 2560 bytes: three Block1 blocks at 1024
         async with _coap_loopback() as (api, server):
             response = await api.request(DeviceRequest(method="PUT", path="/echo", payload=payload))
-            assert response.status == _COAP_CHANGED
+            assert response.status == CoapCode.CHANGED
             assert response.body == payload
             block1s = [b1 for _p, b1, _b2, _n in server.seen if b1 is not None]
             assert block1s == [(0, True, 6), (1, True, 6), (2, False, 6)]
@@ -1197,7 +1220,7 @@ class TestCoapBlockwise:
     async def test_a_large_get_is_assembled_from_block2(self) -> None:
         async with _coap_loopback() as (api, server):
             response = await api.request(DeviceRequest(method="GET", path="/big"))
-            assert response.status == _COAP_CONTENT
+            assert response.status == CoapCode.CONTENT
             assert response.body == _BIG_BODY
             assert len(server.seen) == 3
 
@@ -1205,7 +1228,7 @@ class TestCoapBlockwise:
         payload = b"x" * 1500
         async with _coap_loopback(szx=5) as (api, server):
             response = await api.request(DeviceRequest(method="PUT", path="/echo", payload=payload))
-            assert response.status == _COAP_CHANGED
+            assert response.status == CoapCode.CHANGED
             assert response.body == payload
             block1s = [b1 for _p, b1, _b2, _n in server.seen if b1 is not None]
             # 1024 at SZX 6, then the server's 512: block 2 of 512 is byte 1024.
@@ -1225,7 +1248,7 @@ class TestCoapBlockwise:
             response = await api.request(
                 DeviceRequest(method="PUT", path="/echo", payload=b"z" * 2000)
             )
-            assert response.status == _COAP_TOO_LARGE
+            assert response.status == CoapCode.from_wire(_COAP_TOO_LARGE)
             assert response.body == b""
             assert len(server.seen) == 1
 
