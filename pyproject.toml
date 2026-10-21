@@ -52,6 +52,9 @@ pylsp = [
 serial = [
     "pyserial-asyncio>=0.6",
 ]
+yaml = [
+    "PyYAML>=6.0.3",
+]
 
 [dependency-groups]
 bench = [
@@ -70,6 +73,7 @@ dev = [
     "mutmut>=3.7.0",
     "python-lsp-server>=1.12",
     "pyserial-asyncio>=0.6",
+    "types-PyYAML>=6.0.12",
 ]
 
 [project.scripts]
@@ -159,7 +163,7 @@ data_file = ".coverage/data"
 precision = 1
 # Global floor. Ratchet-only: raise it to the new measurement when coverage rises,
 # never lower it (STANDARDS.md section 6). Per-file floors: [tool.litmus.coverage].
-fail_under = 97.1
+fail_under = 97.4
 exclude_also = [
     "if TYPE_CHECKING:",
     "^\\s*\\.\\.\\.\\s*$",

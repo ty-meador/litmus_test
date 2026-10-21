@@ -16,7 +16,6 @@ Run it: ``make bench-suite-pihole``.
 from __future__ import annotations
 
 import ipaddress
-import json
 import re
 from typing import Any
 
@@ -154,15 +153,14 @@ class BlocklistRoundTrip(LitmusTest):
                 DeviceRequest(
                     method="POST",
                     path="/api/auth",
-                    payload=json.dumps({"password": password}).encode(),
-                    headers={"Content-Type": "application/json"},
+                    json={"password": password},
                 )
             )
         except DeviceApiOperationFailure as error:
             raise TestFailure(f"FTL API unreachable: {error}") from error
         if login.status != 200:
             raise TestFailure("FTL API refused the login", 200, login.status)
-        sid = str(json.loads(login.body).get("session", {}).get("sid", ""))
+        sid = str(login.json().get("session", {}).get("sid", ""))
         if not sid:
             raise TestFailure("FTL API login carried no session id", "sid", login.body.decode())
         try:
@@ -170,10 +168,8 @@ class BlocklistRoundTrip(LitmusTest):
                 DeviceRequest(
                     method="POST",
                     path="/api/domains/deny/exact",
-                    payload=json.dumps(
-                        {"domain": self._domain, "comment": "litmus bench"}
-                    ).encode(),
-                    headers={"Content-Type": "application/json", "sid": sid},
+                    json={"domain": self._domain, "comment": "litmus bench"},
+                    headers={"sid": sid},
                 )
             )
         except DeviceApiOperationFailure as error:
@@ -245,9 +241,7 @@ class BlocklistRoundTrip(LitmusTest):
             )
         except DeviceApiOperationFailure as error:
             raise TestFailure(f"API call failed: {error}") from error
-        blocking = (
-            str(json.loads(response.body).get("blocking", "")) if response.status == 200 else ""
-        )
+        blocking = str(response.json().get("blocking", "")) if response.status == 200 else ""
         if blocking == "enabled":
             return PASS({"blocking": blocking})
         raise TestFailure(
@@ -302,9 +296,7 @@ class BlocklistRoundTrip(LitmusTest):
                 raise TestFailure(f"API call failed: {error}") from error
             if response.status != 200:
                 return []
-            entries = [
-                q for q in json.loads(response.body).get("queries", []) if q.get("domain") == domain
-            ]
+            entries = [q for q in response.json().get("queries", []) if q.get("domain") == domain]
             utils.logger.info("query log holds %d entries for %s", len(entries), domain)
             return entries
 
