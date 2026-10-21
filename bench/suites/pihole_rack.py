@@ -114,6 +114,10 @@ class PiHole(LitmusTest):
 class BlocklistRoundTrip(LitmusTest):
     """Add a domain to the deny list over the API and watch DNS refuse it."""
 
+    redact_ctx = ("sid",)
+    """The FTL session id rides in ctx for the claims and is `<REDACTED>` on the record
+    (bench finding F5, issue #154)."""
+
     def __init__(
         self,
         *,
@@ -278,9 +282,8 @@ class BlocklistRoundTrip(LitmusTest):
         """FTL's query log shows the blocked query with a blocked status."""
         api: DeviceApi = utils.ctx["api"]
         domain: str = utils.ctx["domain"]
-        seen: list[dict[str, Any]] = []
 
-        async def logged() -> bool:
+        async def logged() -> list[dict[str, Any]]:
             try:
                 response = await api.request(
                     DeviceRequest(
@@ -292,12 +295,12 @@ class BlocklistRoundTrip(LitmusTest):
             except DeviceApiOperationFailure as error:
                 raise TestFailure(f"API call failed: {error}") from error
             if response.status != 200:
-                return False
-            seen[:] = [q for q in response.json().get("queries", []) if q.get("domain") == domain]
-            utils.logger.info("query log holds %d entries for %s", len(seen), domain)
-            return bool(seen)
+                return []
+            entries = [q for q in response.json().get("queries", []) if q.get("domain") == domain]
+            utils.logger.info("query log holds %d entries for %s", len(entries), domain)
+            return entries
 
-        await utils.wait_for(
+        seen = await utils.wait_for(
             logged,
             looking_for=f"{domain} in the query log",
             interval=1.0,

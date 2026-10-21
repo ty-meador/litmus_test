@@ -19,6 +19,16 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- `redact_ctx` on a suite class names the ctx keys that are not for the record (bench
+  finding F5, issue #154), exactly or as regular expressions matched against the whole
+  key. The key appears in `run_data` as `<REDACTED>`, and a string under it is masked
+  wherever it appears, run-wide: every scoped-log record, a failure's `str()`,
+  `repr()`, and `to_json()` once the child boundary has recorded it, evidence on a
+  verdict, captured artifacts, `RunResult.to_json()`, and every file in the run
+  directory. This is the standard the Evidence Contract already held an SSH credential
+  to; the env snapshot stays verbatim (issue #53). `ScopedLogger`, `RunContext`,
+  `ChildBoundary`, and the artifact store take the run's `Redactions` registry; the
+  bench's Pi-hole suite declares its FTL session id. By Ty's ruling on the issue.
 - `DeviceRequest(..., json=value)` encodes a JSON body and defaults its content type;
   `DeviceResponse.json()` and `parse(response_type="json" or "yaml")` decode the
   returned bytes explicitly (bench finding F6, issue #155). YAML uses the optional
@@ -454,6 +464,10 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- `TestUtils.wait_for` returns the predicate's last truthy value (bench finding F9,
+  issue #158). `True` is still `True`, and a falsy look keeps polling until the same
+  timeout verdict. The Pi-hole query-log claim returns the matching entries from the
+  predicate instead of writing them into a closed-over list.
 - `docs/idioms.md` says what the Lifecycle Contract already implied: `cleanup()` reads
   every ctx key with `.get()` or `in`, because it also runs when `configure()` raised
   before returning, and a `[]` read there logs a `ContractViolation` beside the real

@@ -100,7 +100,7 @@ The backends stay off the public surface, the way `SshInterface` does.
 
 ## `wait_for`
 
-`looking_for` is required and must be plain language: it is the Floor Technician's primary diagnostic string when a wait times out. Both placements raise `TestFailure`; where the call sits decides what the timeout means, and that is a lifecycle question answered on the idioms page. The runnable [`examples/wait_for_patterns.py`](https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/examples/wait_for_patterns.py) shows both placements and how polling observations flow through scoped logs, surveys, artifacts, `run_data`, and the root `summary_tree` without another evidence API.
+`looking_for` is required and must be plain language: it is the Floor Technician's primary diagnostic string when a wait times out. Both placements raise `TestFailure`; where the call sits decides what the timeout means, and that is a lifecycle question answered on the idioms page. The call returns the predicate's truthy value (`True` stays `True`), so a claim that needs the observation returns it from the predicate instead of writing into a closure. The runnable [`examples/wait_for_patterns.py`](https://gitlab.com/Tyler-Meador/litmus_test/-/blob/main/examples/wait_for_patterns.py) shows both placements and how polling observations flow through scoped logs, surveys, artifacts, `run_data`, and the root `summary_tree` without another evidence API.
 
 ## `utils.exec`
 
