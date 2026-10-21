@@ -67,6 +67,12 @@ async def _check_voltage(self, utils: TestUtils) -> Verdict:
 - The payload is validated entry by entry. A value that is not JSON, or a key that shadows
   a ctx entry or the framework-owned `measurements` slot, is a `ContractViolation` naming
   the key. Nothing is stripped silently.
+- Ctx and evidence are one namespace, because they land on one record. A key
+  `configure()` returns names the limit or the target (`kernel`, `domain`, `voltage_high_v`);
+  a key `@evidence` declares names the reading judged against it (`kernel_running`,
+  `queried`, `output_voltage_v`). The same word cannot do both, so pick the evidence name
+  with the ctx key in view. `litmus-check` flags the clash on the declaring literal as
+  `litmus/evidence-shadows-ctx` (bench finding F14, issue #161).
 - A measurement is not evidence. `utils.measure` records a number beside the verdict
   (see *Measurements* below); it does not satisfy an `@evidence` declaration, so a claim
   that wants the reading in both records names it in both.
@@ -85,8 +91,9 @@ class VoltageEvidence(TypedDict):
 async def _check_voltage(self, utils: TestUtils) -> Verdict[VoltageEvidence]: ...
 ```
 
-`litmus-check` enforces the declaration statically as `litmus/evidence-fulfilled` and the
-read-only context as part of `litmus/ctx-provenance`.
+`litmus-check` enforces the declaration statically as `litmus/evidence-fulfilled`, the one
+namespace as `litmus/evidence-shadows-ctx`, and the read-only context as part of
+`litmus/ctx-provenance`.
 
 ## The Parent Owns the Route
 

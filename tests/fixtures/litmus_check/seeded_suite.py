@@ -92,3 +92,22 @@ class SeededGateway(LitmusTest):
         if utils.ctx["ip"]:
             return PASS
         raise TestFailure("no address", "an IP", "none")
+
+
+class SeededReadings(LitmusTest):
+    """The one seed whose two halves are a ``configure()`` key and an ``@evidence`` key."""
+
+    def __init__(self, *, name: str) -> None:
+        super().__init__(name=name)
+
+    async def configure(self, utils: TestUtils) -> dict[str, Any]:
+        return {"rail_v": 3.3}
+
+    def build_suite(self) -> LitmusTest:
+        return self.test("rail", self._rail)
+
+    @evidence("rail_v")  # seed: litmus/evidence-shadows-ctx
+    async def _rail(self, utils: TestUtils) -> Verdict:
+        if utils.ctx["rail_v"] > 3.0:
+            return PASS({"rail_v": utils.ctx["rail_v"]})
+        raise TestFailure("rail low", "> 3.0 V", str(utils.ctx["rail_v"]))
