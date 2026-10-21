@@ -16,7 +16,7 @@ import sys
 import time
 
 from bench._common import cache_dir, report, require_tool, run
-from litmus.device_api import CoapInterface, DeviceRequest
+from litmus.device_api import CoapCode, CoapInterface, DeviceRequest
 
 IMAGE = "litmus-bench/coap"
 CONTAINER = "litmus-bench-coap"
@@ -109,17 +109,21 @@ async def check() -> int:
     response = await backend.request(DeviceRequest(method="GET", path="/hello"))
     failures += report(
         "GET /hello is 2.05 Content",
-        response.status == 69 and b"litmus" in response.body,
+        response.status == CoapCode.CONTENT and b"litmus" in response.body,
         f"code={response.status} body={response.body!r}",
     )
     response = await backend.request(DeviceRequest(method="PUT", path="/echo", payload=b"ping"))
     failures += report(
         "PUT /echo returns the payload",
-        response.status == 68 and response.body == b"ping",
+        response.status == CoapCode.CHANGED and response.body == b"ping",
         f"code={response.status} body={response.body!r}",
     )
     response = await backend.request(DeviceRequest(method="GET", path="/missing"))
-    failures += report("GET /missing is 4.04", response.status == 132, f"code={response.status}")
+    failures += report(
+        "GET /missing is 4.04",
+        response.status == CoapCode.NOT_FOUND,
+        f"code={response.status}",
+    )
     await backend.disconnect()
     return failures
 

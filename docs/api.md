@@ -12,6 +12,7 @@ the module a name is defined in is an implementation detail. The policy is
 ::: litmus.Artifact
 ::: litmus.BeforeEachContext
 ::: litmus.BeforeEachHook
+::: litmus.CoapCode
 ::: litmus.ContractViolation
 ::: litmus.DeviceApi
 ::: litmus.DeviceApiOperationFailure

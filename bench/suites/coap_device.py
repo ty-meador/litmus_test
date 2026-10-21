@@ -23,6 +23,7 @@ from typing import Any
 
 from litmus import (
     PASS,
+    CoapCode,
     DeviceApi,
     DeviceApiOperationFailure,
     DeviceRequest,
@@ -32,11 +33,6 @@ from litmus import (
     Verdict,
     evidence,
 )
-
-# CoAP codes as the transport reports them: class << 5 | detail.
-_CONTENT = 2 << 5 | 5
-_CHANGED = 2 << 5 | 4
-_NOT_FOUND = 4 << 5 | 4
 
 
 class CoapDevice(LitmusTest):
@@ -105,7 +101,7 @@ class CoapDevice(LitmusTest):
             "hello_latency_ms", latency_ms, unit="ms", limits=(None, utils.ctx["latency_limit_ms"])
         )
         body = response.body.decode(errors="replace")
-        if response.status == _CONTENT and "litmus" in body and reading.in_limits:
+        if response.status == CoapCode.CONTENT and "litmus" in body and reading.in_limits:
             return PASS({"code": response.status, "body": body, "latency_ms": latency_ms})
         raise TestFailure(
             "device did not greet",
@@ -117,7 +113,7 @@ class CoapDevice(LitmusTest):
     async def _missing_resource(self, utils: TestUtils) -> Verdict:
         """GET on a resource the device does not serve is 4.04, as a status, not an error."""
         response, _latency = await self._timed(utils, DeviceRequest(method="GET", path="/missing"))
-        if response.status == _NOT_FOUND:
+        if response.status == CoapCode.NOT_FOUND:
             return PASS({"code": response.status})
         raise TestFailure("missing resource not reported", "4.04", f"code {response.status}")
 
@@ -132,7 +128,7 @@ class CoapDevice(LitmusTest):
             "echo_latency_ms", latency_ms, unit="ms", limits=(None, utils.ctx["latency_limit_ms"])
         )
         intact = response.body == payload
-        if response.status == _CHANGED and intact and reading.in_limits:
+        if response.status == CoapCode.CHANGED and intact and reading.in_limits:
             return PASS(
                 {"size": size, "code": response.status, "intact": intact, "latency_ms": latency_ms}
             )

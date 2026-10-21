@@ -143,11 +143,15 @@ and a `.json()` on the response would halve the Pi-hole child.
 and no longer imports `json`. `response.parse(response_type="json" or "yaml")`
 provides the format selector Ty requested; YAML is an optional extra.
 
-## F7. CoAP codes arrive as bare integers (ergonomics, low)
+## F7. CoAP codes arrive as bare integers (ergonomics, low) — closed 2026-10-20
 
 `GET /hello` is `69`, `PUT` is `68`, a miss is `132`: `class << 5 | detail`. The suite
 defines the constants itself. Named codes (or a `(2, 5)` tuple with a `__str__` of
 `2.05`) on `DeviceResponse` would make the evidence readable on the record.
+
+**Closed:** a CoAP `DeviceResponse.status` is the dotted code (`CoapCode.CONTENT`
+is `"2.05"`). The wire integer stays in the transport. `coap_device.py` compares
+against `CoapCode` and records that string (issue #156). HTTP status is unchanged.
 
 ## F8. `utils.env` has `text`, `require`, `port` and nothing numeric (ergonomics, low) — closed 2026-10-20
 
