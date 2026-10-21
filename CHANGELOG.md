@@ -687,7 +687,7 @@ of feature parity: the Python Inspector is still separate work.
 ### Security
 
 - Upgrade the locked `certifi` pin to `2026.10.19` to clear `PYSEC-2026-4320`,
-  found by the required dependency audit while validating issue #155.
+  found by the required dependency audit; landed standalone in !195.
 - Optional `env_allow` / `env_deny` filtering of the published environment snapshot;
   SSH credential containment tests pin that password and private-key values do not
   escape into logs, results, or other evidence
