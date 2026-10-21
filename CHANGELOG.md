@@ -19,6 +19,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- CoAP `DeviceResponse.status` is the dotted code (`"2.05"`), not the wire
+  integer `69` (bench finding F7, issue #156). `CoapCode.CONTENT`, `CHANGED`,
+  and `NOT_FOUND` are the names a claim compares against, and that same string
+  is what the record stores. HTTP status stays an integer. The CoAP bench
+  suite drops its local constants.
 - `litmus-check` rule `litmus/evidence-shadows-ctx` (bench finding F14, issue #161): a
   key `@evidence` declares that the class's `configure()` is statically known to return,
   or that is the framework-owned `measurements` slot, is a finding on the declaring

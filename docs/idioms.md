@@ -783,8 +783,11 @@ See `examples/ssh_tunneling.py`.
 A device API is not `exec` with a URL. Open a session from `configure()` with
 `utils.get_http` or `utils.get_coap`, then `request` a typed
 `DeviceRequest`. The response's `status` is data — HTTP 4xx/5xx is not an
-exception. Catch `DeviceApiOperationFailure` when the transfer itself did not
-complete (timeout, refused connection) and model it as a `TestFailure`.
+exception, and neither is a CoAP 4.xx. On HTTP, `status` is the integer. On
+CoAP it is the dotted code (`CoapCode.CONTENT` is `"2.05"`), which is what the
+record stores when the claim puts `response.status` on the verdict. Catch
+`DeviceApiOperationFailure` when the transfer itself did not complete (timeout,
+refused connection) and model it as a `TestFailure`.
 
 Retries default to zero. Each declared attempt is logged. POST refuses retry
 unless `retry_non_idempotent=True`. Attempt logs keep header names and withhold
