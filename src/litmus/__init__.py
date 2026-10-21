@@ -6,7 +6,7 @@ list is. Import public names from `litmus` itself; the module a name is defined 
 an implementation detail and may move.
 
 Suite authors need `LitmusTest`, `TestUtils`, `Shell`, `DeviceApi`, `DeviceRequest`,
-`DeviceResponse`, `ExecResult`, `Artifact`,
+`DeviceResponse`, `CoapCode`, `ExecResult`, `Artifact`,
 `JsonObject`, `PASS`, `Verdict`, `evidence`, `measure`, `Measurement`, `TestFailure`,
 and `ArpResolver`. The
 rest of the failure taxonomy is exported because it appears in artifacts and logs,
@@ -35,7 +35,7 @@ from importlib.metadata import version as _distribution_version
 from litmus.arp import ArpResolver
 from litmus.artifacts import Artifact
 from litmus.base import LitmusTest
-from litmus.device_api import DeviceApi, DeviceRequest, DeviceResponse
+from litmus.device_api import CoapCode, DeviceApi, DeviceRequest, DeviceResponse
 from litmus.errors import (
     ArpResolutionFailure,
     ContractViolation,
@@ -74,6 +74,7 @@ __all__ = [
     "Artifact",
     "BeforeEachContext",
     "BeforeEachHook",
+    "CoapCode",
     "ContractViolation",
     "DeviceApi",
     "DeviceApiOperationFailure",
