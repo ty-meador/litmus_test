@@ -190,12 +190,18 @@ gave nothing. NaN is still refused. `guest_acceptance.py` parses every shell rea
 through one `_number()` helper and has no `try` left around a `measure` call; the
 audit keeps its own, because audits cannot measure.
 
-## F11. The gateway shape needs `::Class` on the command line (observation, low)
+## F11. The gateway shape needs `::Class` on the command line (observation, low) — closed 2026-10-21
 
 `pihole_rack.py` holds the gateway and the device behind it, which is the shape
 `examples/networked_device.py` recommends; `litmus run bench/suites/pihole_rack.py`
 refuses a module with two suites. The Makefile says `::PiHole`. A module-level
 `__suite__ = PiHole` the runner honours would let the file name the default.
+
+**Closed:** `litmus run` honours a module-level `__suite__` bound to a `LitmusTest`
+subclass when the target carries no `::SuiteClass` (issue #160). `pihole_rack.py` says
+`__suite__ = PiHole` and `make bench-suite-pihole` runs it by path. `::SuiteClass`
+still overrides; a module with two suites and no `__suite__` is refused with the same
+message; `docs/litmus-run.md` names the rule and its order.
 
 ## F13. One in-flight request per `DeviceApi` handle, and `parallel` does not know (gap, high) — closed 2026-10-17
 
