@@ -54,12 +54,21 @@ esac
 - A source ending in `.py`, or naming an existing file, is **loaded from disk**,
   standalone. Anything else is **imported by dotted name** through the normal import
   path (`examples.hello_world`, `station.suites.psu`).
-- Without `::SuiteClass`, the module must **define exactly one** `LitmusTest`
-  subclass. A module that defines none, or more than one, is a usage error whose
-  message lists what it found.
 - With `::SuiteClass`, the named attribute may be **any** `LitmusTest` subclass bound
   in the module, imported or defined. A station module may therefore re-export the
   suite it runs.
+- Without `::SuiteClass`, a module-level **`__suite__`** bound to a `LitmusTest`
+  subclass is the default: a file that holds a gateway and the device behind it
+  (`examples/networked_device.py`) can say `__suite__ = Gateway` and be run by path
+  alone. `::SuiteClass` still overrides it. A `__suite__` bound to anything else is a
+  usage error naming what it found.
+- Without either, the module must **define exactly one** `LitmusTest` subclass. A
+  module that defines none, or more than one, is a usage error whose message lists
+  what it found.
+
+The run record always names the class (`<file>::SuiteClass`), whichever rule picked
+it, so `litmus inspect --rerun` selects the same suite after another is added beside
+it.
 
 The runner constructs the selected class as `SuiteClass(name=SuiteClass.__name__)`.
 Every other `__init__` parameter must carry a default; a constructor that needs more

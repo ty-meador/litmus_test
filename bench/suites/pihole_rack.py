@@ -10,7 +10,9 @@ Environment: ``PIHOLE_HOST`` / ``PIHOLE_USER`` / optional ``PIHOLE_PASSWORD`` /
 ``PIHOLE_SSH_PORT`` for the hop; ``PIHOLE_API_URL`` / ``PIHOLE_API_PASSWORD`` for FTL's
 API. The bench container (``make bench-pihole``) sets all six in the Makefile.
 
-Run it: ``make bench-suite-pihole``.
+Run it: ``make bench-suite-pihole``. The module holds two suites, so ``__suite__`` at
+the bottom names ``PiHole`` as the one ``litmus run`` picks when the target carries no
+``::SuiteClass``; ``::BlocklistRoundTrip`` runs the child on its own, without the hop.
 """
 
 from __future__ import annotations
@@ -332,3 +334,9 @@ async def _settle(api: DeviceApi, request: DeviceRequest) -> str:
     except DeviceApiOperationFailure as error:
         return f"unreachable ({error})"
     return f"status {response.status}"
+
+
+__suite__ = PiHole
+"""The default for ``litmus run bench/suites/pihole_rack.py``: the gateway, which
+composes the round trip behind its hop. ``::BlocklistRoundTrip`` still selects the
+child alone (issue #160)."""
