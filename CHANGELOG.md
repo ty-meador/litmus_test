@@ -19,6 +19,13 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Added
 
+- A module-level `__suite__` names the suite `litmus run` picks when the target has no
+  `::SuiteClass` (bench finding F11, issue #160). The gateway shape keeps the appliance
+  and the device behind it in one file; that file now says `__suite__ = PiHole` and
+  runs by path alone, where it used to need `::PiHole` on every command line. The
+  selector still overrides it, a module with several suites and no `__suite__` is
+  refused as before, and a `__suite__` bound to anything but a `LitmusTest` subclass is
+  a usage error naming the fix. The run record names the class either way.
 - CoAP `DeviceResponse.status` is the dotted code (`"2.05"`), not the wire
   integer `69` (bench finding F7, issue #156). `CoapCode.CONTENT`, `CHANGED`,
   and `NOT_FOUND` are the names a claim compares against, and that same string

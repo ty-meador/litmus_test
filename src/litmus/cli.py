@@ -70,6 +70,7 @@ _EXIT_BY_STATE: Mapping[State, int] = {
     State.ABORTED: EXIT_ABORTED,
 }
 _SELECTOR = "::"
+_MODULE_SUITE = "__suite__"
 _ARTIFACT_ROOT_VARIABLE = "LITMUS_ARTIFACT_ROOT"
 _DEFAULT_ARTIFACT_ROOT = "artifacts"
 _RESULT_FILE = "result.json"
@@ -95,10 +96,11 @@ class SuiteLoader:
     """Resolve ``<path-or-module>[::SuiteClass]`` to one ``LitmusTest`` subclass.
 
     A source ending in ``.py``, or naming an existing file, is loaded standalone from
-    disk; anything else is imported as a dotted module name. Without ``::SuiteClass``
-    the module must define exactly one ``LitmusTest`` subclass of its own; with it, the
+    disk; anything else is imported as a dotted module name. With ``::SuiteClass`` the
     named attribute may be any ``LitmusTest`` subclass bound in the module, imported or
-    defined. Every failure raises ``UsageError`` with the fix in the message.
+    defined. Without it, a module-level ``__suite__`` bound to such a class is the
+    default; a module with neither must define exactly one ``LitmusTest`` subclass of
+    its own. Every failure raises ``UsageError`` with the fix in the message.
     """
 
     def load(self, target: str) -> type[LitmusTest]:
@@ -113,6 +115,8 @@ class SuiteLoader:
         defined = self._defined_suites(module)
         if class_name:
             return self._named(module, defined, class_name)
+        if _MODULE_SUITE in vars(module):
+            return self._declared(source, module, defined)
         if len(defined) == 1:
             return next(iter(defined.values()))
         if not defined:
@@ -221,18 +225,38 @@ class SuiteLoader:
         return defined
 
     @staticmethod
-    def _named(
-        module: ModuleType, defined: Mapping[str, type[LitmusTest[Any]]], class_name: str
-    ) -> type[LitmusTest[Any]]:
-        value = getattr(module, class_name, None)
+    def _as_suite(value: object) -> type[LitmusTest[Any]] | None:
         if isinstance(value, type) and issubclass(value, LitmusTest) and value is not LitmusTest:
             # The checks above are what prove the type. Narrowing a generic class
             # leaves its parameter unsolved, so the CLI states what it already knows:
             # a suite class of any context shape (issue #75).
             return cast("type[LitmusTest[Any]]", value)
+        return None
+
+    def _named(
+        self, module: ModuleType, defined: Mapping[str, type[LitmusTest[Any]]], class_name: str
+    ) -> type[LitmusTest[Any]]:
+        suite = self._as_suite(getattr(module, class_name, None))
+        if suite is not None:
+            return suite
         names = ", ".join(defined) or "(none)"
         raise UsageError(
             f"{module.__name__}: no LitmusTest subclass named {class_name!r}; name one of: {names}"
+        )
+
+    def _declared(
+        self, source: str, module: ModuleType, defined: Mapping[str, type[LitmusTest[Any]]]
+    ) -> type[LitmusTest[Any]]:
+        # ``__suite__`` is the module's own ``::SuiteClass``: the file names its default
+        # when it holds more than one suite, and the selector still overrides (#160).
+        value = getattr(module, _MODULE_SUITE)
+        suite = self._as_suite(value)
+        if suite is not None:
+            return suite
+        names = ", ".join(defined) or "(none)"
+        raise UsageError(
+            f"{source}: {_MODULE_SUITE} is {value!r}, not a LitmusTest subclass; "
+            f"bind it to one of: {names}"
         )
 
 
