@@ -63,7 +63,7 @@ writing them is logged in `FRICTION.md`, which is the other deliverable of #139.
 |---|---|---|
 | `make bench-suite-serial` | `serial_console.py` | A console opened by tty path: prompt sync, exit status as data, a 4 KiB reply, cancel of a wedged command. The transport has no route today, so the suite owns the handle. |
 | `make bench-suite-guest` | `guest_acceptance.py` | Board bring-up acceptance over a class-owned SSH hop: `wait_for` systemd to settle, a journal survey at every boundary, a load audit while claims run, one leaf per unit, measurements with limits (disk, memory, entropy, clock skew). |
-| `make bench-suite-pihole` | `pihole_rack.py::PiHole` | The gateway shape: SSH hop on the parent, a child that logs into FTL's REST API, puts a domain on the deny list in `configure()`, watches `dig` behind the hop answer `0.0.0.0`, finds the query in FTL's log, and takes the entry back off in `cleanup()`. |
+| `make bench-suite-pihole` | `pihole_rack.py` | The gateway shape: SSH hop on the parent, a child that logs into FTL's REST API, puts a domain on the deny list in `configure()`, watches `dig` behind the hop answer `0.0.0.0`, finds the query in FTL's log, and takes the entry back off in `cleanup()`. |
 | `make bench-suite-coap` | `coap_device.py` | A device API over CoAP: identity, 4.04 as a status, one echo leaf per payload size up to past the block-wise boundary, a latency measurement on each. |
 | `make bench-suite-gpio` | `gpio_lines.py` | A header through `gpiod` inside the claims, because `utils.get_gpio` is not built: input follows drive, output is witnessed, edge events with a latency measurement. |
 | `make bench-rack` | `rack.py` | The four networked/serial devices under one `parallel` owner: one record for the rack. |

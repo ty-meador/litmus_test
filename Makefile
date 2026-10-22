@@ -161,7 +161,7 @@ bench-suite-serial:  ## Console by tty path: prompt sync, status, large reply, c
 bench-suite-guest:  ## Guest acceptance over SSH: survey, audit, wait_for, measurements
 	$(BENCH_RUN) bench/suites/guest_acceptance.py
 bench-suite-pihole:  ## Pi-hole as a gateway: hop, REST deny-list round trip, dig behind the hop
-	$(BENCH_RUN) bench/suites/pihole_rack.py::PiHole
+	$(BENCH_RUN) bench/suites/pihole_rack.py
 bench-suite-coap:  ## CoAP device: hello, 4.04, echo per payload size
 	$(BENCH_RUN) bench/suites/coap_device.py
 bench-suite-gpio:  ## gpio-sim header through gpiod inside the claims (needs root setup)

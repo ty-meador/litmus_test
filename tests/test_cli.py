@@ -105,6 +105,14 @@ class Second(First):
     """The second of two."""
 '''
 
+_TWO_SUITES_WITH_DEFAULT = _TWO_SUITES + "\n__suite__ = Second\n"
+
+_RE_EXPORTING_STATION = """
+from station_suites import Second
+
+__suite__ = Second
+"""
+
 _NO_SUITES = '''
 class NotASuite:
     """A module with nothing to run."""
@@ -322,6 +330,59 @@ class TestSelection:
 
         assert status == EXIT_PASS
         assert "litmus run: Second: Pass" in err
+
+    def test_module_suite_is_the_default_among_several(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "pair.py", _TWO_SUITES_WITH_DEFAULT)
+
+        status, _, err = _run("run", str(path))
+
+        assert status == EXIT_PASS
+        assert "litmus run: Second: Pass" in err
+
+    def test_selector_overrides_module_suite(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "pair.py", _TWO_SUITES_WITH_DEFAULT)
+
+        status, _, err = _run("run", f"{path}::First")
+
+        assert status == EXIT_PASS
+        assert "litmus run: First: Pass" in err
+
+    def test_module_suite_may_be_imported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write(tmp_path, "station_suites.py", _TWO_SUITES)
+        path = _write(tmp_path, "station.py", _RE_EXPORTING_STATION)
+        monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+
+        status, _, err = _run("run", str(path))
+
+        assert status == EXIT_PASS
+        assert "litmus run: Second: Pass" in err
+
+    def test_module_suite_bound_to_a_non_suite_is_a_usage_error(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "pair.py", _TWO_SUITES + "\n__suite__ = 'Second'\n")
+
+        status, _, err = _run("run", str(path))
+
+        assert status == EXIT_USAGE
+        assert "__suite__ is 'Second', not a LitmusTest subclass" in err
+        assert "bind it to one of: First, Second" in err
+
+    def test_module_suite_is_recorded_as_the_class(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "pair.py", _TWO_SUITES_WITH_DEFAULT)
+
+        loader = SuiteLoader()
+        suite = loader.load(str(path))
+
+        assert suite.__name__ == "Second"
+        assert loader.canonical(str(path), suite) == f"{path.resolve()}::Second"
+
+    def test_bench_pihole_rack_defaults_to_the_gateway(self) -> None:
+        path = Path(__file__).resolve().parent.parent / "bench" / "suites" / "pihole_rack.py"
+
+        suite = SuiteLoader().load(str(path))
+
+        assert suite.__name__ == "PiHole"
 
     def test_dotted_module_name_is_imported(self) -> None:
         status, _, err = _run("run", "examples.hello_world")

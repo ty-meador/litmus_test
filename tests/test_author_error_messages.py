@@ -763,6 +763,24 @@ class TestRunnerUsageErrors:
         )
         _assert_names_rule_and_fix(str(raised.value))
 
+    def test_module_suite_bound_to_a_non_suite_names_the_fix(self, tmp_path: Path) -> None:
+        path = tmp_path / "suite_bound_to_a_string.py"
+        path.write_text(
+            "from litmus import LitmusTest\n"
+            "class First(LitmusTest):\n"
+            "    def build_suite(self) -> LitmusTest:\n        return self\n"
+            "class Second(First):\n    pass\n"
+            "__suite__ = 'Second'\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(UsageError) as raised:
+            SuiteLoader().load(str(path))
+        assert str(raised.value) == (
+            f"{path}: __suite__ is 'Second', not a LitmusTest subclass; "
+            "bind it to one of: First, Second"
+        )
+        _assert_names_rule_and_fix(str(raised.value))
+
     def test_selector_without_a_source_names_the_fix(self) -> None:
         with pytest.raises(UsageError) as raised:
             SuiteLoader().load("::Passing")
