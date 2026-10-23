@@ -100,8 +100,9 @@ class HelloWorld(LitmusTest):
 ## The Inspector
 
 `litmus inspect` opens any saved run in a terminal UI built for the person at the
-station. It replays saved evidence only: no DUT, no SSH, no suite source, no risk of
-running anything.
+station. The `Inspect` tab replays the evidence from the run. The `Re-Run` tab
+allows the technician to re-run any branch or leaf of the test hierarchy - dependencies
+are managed by the framework.
 
 ```text
   [ Inspect ]   Re-Run
@@ -129,7 +130,7 @@ running anything.
   health matched what actually happened.
 - Missing readings are shown as **not taken** by name, so an absent value is never
   mistaken for zero.
-- **Re-Run** is the bench: after reseating a cable, press Enter on one node to
+- **Re-Run** is the bench: after debuggin the hardware, press Enter on one node to
   re-run just that subtree with the exact production code. Nothing it produces
   overwrites the production record.
 
@@ -200,6 +201,6 @@ records every change.
 
 ## License
 
-Copyright 2026 Tyler Meador. Litmus is free software, released under the GNU General
+Copyright 2026 Tyler Meador. Litmus-Test ("Litmus") is free software, released under the GNU General
 Public License, version 2 (`GPL-2.0-only`). The full text is in `LICENSE`; the copyright
 notice is in `NOTICE`. There is no warranty; see the license for the terms.
