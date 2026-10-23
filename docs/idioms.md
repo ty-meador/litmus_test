@@ -399,7 +399,7 @@ evidence are the gateway's own, and the devices behind it are never asked.
 ## Pass/Fail/Aborted Contract
 - A test method returning `PASS`, or `PASS(evidence)` with its readings → test passes (state `Pass`). The check is `isinstance(result, Verdict)`, and only `PASS` mints one. The string `"PASS"` does not pass, and a `PASS` missing a key its `@evidence` declared is a contract violation, not a pass.
 - A test method raising `TestFailure` (or subclass) → test fails with structured data (state `Fail`)
-- A test method raising any other exception → BUG-signaled Fail: the developer didn't model this failure mode
+- A test method raising any other exception → `ContractViolation` Fail (banner `CONTRACT VIOLATION`, `bug: true`): the developer didn't model this failure mode
 - A test method returning anything other than the `PASS` sentinel (including falling through with `None`) → node-local `Aborted`. No verdict was produced, so the framework refuses to forge one. Siblings are unaffected.
 - An integration hook (`before_each` / `after_each`) throwing anywhere in the tree → state `Aborted` on the enclosing node AND every ancestor
 
