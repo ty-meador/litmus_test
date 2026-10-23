@@ -24,10 +24,6 @@ Litmus gives the SEs a framework that allows them to focus on getting the test r
 
 A Floor Technician (the "FT" of the source docstrings) can accurately categorize a failure and initiate the correct recovery protocol within 60 seconds of opening the Inspector, without needing to Slack the Software Engineer.
 
-## The Problem It Solves
-
-AI hyperscaler server manufacturing (Google, Meta, AWS, etc.) requires rigorous, evidence-rich testing at multiple assembly stages. Current pain: test software engineers manually maintain IPN mapping files, manually look up BOM details, manually add each new customer part number to test. This scales with product velocity and introduces silent error risk.
-
 ## The Core Purpose
 
 > "We are giving developers the tools they need to give floor operators the tools THEY need,
@@ -41,7 +37,7 @@ Two-level service contract:
 
 #### "Floor technicians simultaneously have the biggest impact on the success of our business, and the least control over how it operates"
 
-Typically early-career technology enthusiast. Passionate, capable, but many are operating at the edge of their knowledge. They are the first person to see failures and to make failure category judgment calls. They are the experts on how to handle any given failure mode. The inspector is their primary tool — and also a containment layer preventing them from going places they shouldn't. The station page is `docs/floor-technician.md`
+Typically early-career technology enthusiast. Passionate, capable, but may be operating at the edge of their knowledge. They are the first person to see failures and to make failure category judgment calls. They are the experts on how to handle any given failure mode. The inspector is their primary tool — and also a containment layer preventing them from going places they shouldn't. The station page is `docs/floor-technician.md`
 ([Floor Technician guide](floor-technician.md)): how to read `result.json` and
 what to do next, without opening the suite source.
 
@@ -73,16 +69,16 @@ A rack-level L11 test is not a different kind of thing — it is more atoms comp
 Every run of a `LitmusTest` resolves to one of three peer states — no silent exits, no hidden fourth category:
 
 1. **Pass** — the test method returned `PASS` explicitly, bare or as `PASS(evidence)` carrying its readings. Cannot accidentally pass: the framework checks `isinstance(result, Verdict)`, and a `Verdict` is only obtained by importing `PASS` or calling it, so a string, a truthy value, or a parsed config cannot forge it. A method that declares its evidence with `@evidence(...)` cannot pass without carrying it.
-2. **Fail** — the test method raised a `TestFailure`. Structured articulation of what the hardware did wrong, or (for a plain exception) a loud BUG signal that the developer didn't model this failure mode.
+2. **Fail** — the test method raised a `TestFailure`. Structured articulation of what the hardware did wrong, or (for a plain exception) a loud contract violation signal that the developer didn't model this failure mode.
 3. **Aborted** — no verdict was produced. Two causes:
    - **Harness-level:** an external integration hook (`before_each`/`after_each` on the run params) threw, halting the run before a verdict could be reached.
    - **Node-local:** the test method returned anything other than the `PASS` sentinel — a `None` fall-through or an explicit wrong value (the string `"PASS"` included). No verdict exists, so the framework refuses to forge Fail (or Pass) on its behalf. Siblings are unaffected.
 
    **Peer state to Pass/Fail, NOT a flavor of failure.**
 
-> The node-local Aborted cause is a deliberate deviation from the TypeScript original, which folded a missing verdict into the bug/Fail path. The port's position: a bug that *threw* produced information (Fail + BUG signal); a method that *returned wrong* produced nothing, and reporting nothing as a verdict would itself be a quiet lie.
+> The node-local Aborted cause is a deliberate deviation from the TypeScript original, which folded a missing verdict into the contract violation/Fail path. The port's position: a contract violation that *threw* produced information (Fail + violation signal); a method that *returned wrong* produced nothing, and reporting nothing as a verdict would itself be a quiet lie.
 
-The tech's recovery protocol differs for each. A Fail says "check the hardware." An Aborted says "check the harness — the shop-floor DB, the coordinator, the integration layer — or the test method that produced no verdict — not the unit." Collapsing these into one category is exactly what the framework refuses to do.
+The tech's recovery protocol differs for each. A Fail says "check the hardware." An Aborted says "check the harness — the shop-floor DB, the coordinator, the integration layer — or the test method that produced no verdict — not the unit." **Collapsing these into one category is exactly what the framework refuses to do.**
 
 A two-layer bug-guard exists alongside the three terminal states:
 - `ContractViolation` — developer contract violation, raised at the lifecycle layer
@@ -93,7 +89,7 @@ A two-layer bug-guard exists alongside the three terminal states:
 Root causes the framework must make obvious:
 1. **DUT failed a check** — `TestFailure` from a test method or from `configure()` → state `Fail`. A `TestFailure` from `configure()` means "the device did not reach a testable state"; whether hardware or infrastructure is the cause is **not knowable from code** — the human triager decides.
 2. **Hardware lying** — survey artifacts expose mismatch (claimed success vs actual state)
-3. **Test method bug** — plain exception from a test method or from `configure()` → BUG signal; a missing verdict → node-local Aborted; also: a test that passes bad hardware
+3. **Test method contract violation** — plain exception from a test method or from `configure()` → violation signal
 4. **Integration failure** — `ExternalIntegrationFailure` from `before_each`/`after_each` aborts the run. The test may be fine; the harness around it broke (e.g. shopfloor DB unreachable, network congestion).
 5. **Operator interrupt** — `OperatorInterrupt` from SIGINT/SIGTERM during a live run. The Floor Technician reads that the operator stopped the rack, not that the harness or the DUT failed.
 
@@ -140,7 +136,7 @@ Here are some of the ways Litmus implements this:
 
 - **No pass by default** — test methods must explicitly return `PASS`, or `PASS(evidence)` with the readings that prove it. Reaching the end of the method without doing so is a missing verdict (node-local Aborted); raising a plain exception is a developer contract violation. A method that declares its evidence with `@evidence(...)` cannot pass without carrying it. Even internal implementations like `TestSequence` explicitly model the passing condition as (all tests ran AND all tests passed) — it does not silently pass if nothing threw.
 - **Setup is constrained to `configure()`** — All infrastructure wiring, readiness checks, and context creation must happen in `configure()`. The framework merges the return value into `utils.ctx` for the rest of the lifecycle and all descendants, and ctx is read-only from then on: inputs come in through configure, readings go out with the verdict. This prevents hidden state coupling and makes the data flow explicit.
-- **Unmodeled failure modes are loud** — Raising anything other than a `TestFailure` (or subclass) from a test method produces a clear "CONTRACT VIOLATION" message with a BUG signal. The framework refuses to let an unhandled error silently become a pass.
+- **Unmodeled failure modes are loud** — Raising anything other than a `TestFailure` (or subclass) from a test method produces a clear "CONTRACT VIOLATION" message. **The framework refuses to let an unhandled error silently become a pass.**
 - **`use_shell()` auto-wires execution routing** — Calling `utils.use_shell()` in `configure()` automatically rebinds `utils.exec` to route through the SSH connection. Child tests and descendants inherit the routing with zero extra code. The SE never has to manually thread SSH interfaces.
 - **Composition takes bound methods directly** — `self.test("name", self._my_method)` works with a plain bound method reference. No wrapping, no binding ceremony.
 - **Sensible defaults reduce boilerplate** — `self.test("name", self._my_method)` defaults to `discrete_log_file=False`, so its logs automatically roll up into the parent. This gives you **one log per logical abstraction instead of one log per screw**.
