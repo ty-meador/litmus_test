@@ -713,6 +713,9 @@ of feature parity: the Python Inspector is still separate work.
 
 - Upgrade the locked `certifi` pin to `2026.10.19` to clear `PYSEC-2026-4320`,
   found by the required dependency audit; landed standalone in !195.
+- Upgrade the locked `black` pin to `26.10.1` to clear `CVE-2026-114134`, found by the
+  required dependency audit. `black` arrives only through the `python-lsp-server`
+  development tool; the bump landed standalone so `main` did not stay red.
 - Optional `env_allow` / `env_deny` filtering of the published environment snapshot;
   SSH credential containment tests pin that password and private-key values do not
   escape into logs, results, or other evidence
