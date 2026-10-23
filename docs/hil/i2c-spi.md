@@ -226,7 +226,7 @@ a transaction does not identify the DUT as the cause.
 | Situation | Raised as | Terminal state |
 |---|---|---|
 | Invalid address, mode, payload, or conflicting in-flight use | `TypeError` / `ValueError` at the call site | `ContractViolation` (Fail, `bug: true`) if it escapes |
-| I2C NACK on address or data; transaction exceeds its ceiling (including stretch); SPI transfer exceeds its ceiling; release cannot be confirmed at bring-up | `BusOperationFailure` (provisional `LitmusError`) naming the handle, operation, address or CS, and ceiling | Fail when the author catches it and states the verdict; BUG-signaled Fail when it escapes |
+| I2C NACK on address or data; transaction exceeds its ceiling (including stretch); SPI transfer exceeds its ceiling; release cannot be confirmed at bring-up | `BusOperationFailure` (provisional `LitmusError`) naming the handle, operation, address or CS, and ceiling | Fail when the author catches it and states the verdict; a `ContractViolation` Fail (`bug: true`) when it escapes |
 | I2C arbitration loss | `BusArbitrationFailure` (provisional `LitmusError`) | As above. Never an automatic DUT Fail |
 | SPI MISO fill (0xFF / 0x00) | No exception: those bytes are the transfer result | Whatever verdict the author writes. The interface does not guess "unplugged" |
 | Backend cannot reach the adapter at bring-up | `ConnectionError` from the interface's own `connect` | Absorbed the way `RemoteInterface` connect failures are absorbed today |

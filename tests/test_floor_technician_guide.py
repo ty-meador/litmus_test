@@ -41,7 +41,7 @@ class TestFloorTechnicianGuide:
         assert contract_fields, "inspector-json.md grew no field tables"
         assert missing == []
 
-    def test_recovery_protocol_names_the_three_states_and_the_bug_signal(self) -> None:
+    def test_recovery_protocol_names_the_three_states_and_the_violation_banner(self) -> None:
         guide = GUIDE.read_text(encoding="utf-8")
         for token in (
             "`Pass`",
