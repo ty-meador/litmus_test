@@ -130,7 +130,7 @@ are managed by the framework.
   health matched what actually happened.
 - Missing readings are shown as **not taken** by name, so an absent value is never
   mistaken for zero.
-- **Re-Run** is the bench: after debuggin the hardware, press Enter on one node to
+- **Re-Run** is the bench: after debugging the hardware, press Enter on one node to
   re-run just that subtree with the exact production code. Nothing it produces
   overwrites the production record.
 
@@ -201,6 +201,7 @@ records every change.
 
 ## License
 
-Copyright 2026 Tyler Meador. Litmus-Test ("Litmus") is free software, released under the GNU General
-Public License, version 2 (`GPL-2.0-only`). The full text is in `LICENSE`; the copyright
-notice is in `NOTICE`. There is no warranty; see the license for the terms.
+Copyright 2026 Tyler Meador. Litmus-Test ("Litmus") is free software, released under
+the GNU General Public License, version 2 (`GPL-2.0-only`). The full text is in
+`LICENSE`; the copyright notice is in `NOTICE`. There is no warranty; see the license
+for the terms.
