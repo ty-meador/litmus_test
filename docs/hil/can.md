@@ -237,7 +237,7 @@ controller that has gone bus-off, does not identify the DUT as the cause.
 | Situation | Raised as | Terminal state |
 |---|---|---|
 | Invalid frame, filter, deadline, or conflicting in-flight use | `TypeError` / `ValueError` at the call site | `ContractViolation` (Fail, `bug: true`) if it escapes |
-| Bus does not ACK a send within the transmit ceiling; receive deadline expires with no matching frame; silence cannot be confirmed at bring-up | `CanOperationFailure` (provisional `LitmusError`) naming the handle, operation, requested frame or filter, and ceiling | Fail when the author catches it and states the verdict; BUG-signaled Fail when it escapes |
+| Bus does not ACK a send within the transmit ceiling; receive deadline expires with no matching frame; silence cannot be confirmed at bring-up | `CanOperationFailure` (provisional `LitmusError`) naming the handle, operation, requested frame or filter, and ceiling | Fail when the author catches it and states the verdict; a `ContractViolation` Fail (`bug: true`) when it escapes |
 | Controller enters bus-off | `CanBusOff` (provisional `LitmusError`) | As above. Never an automatic DUT Fail |
 | Backend cannot reach the adapter at bring-up | `ConnectionError` from the interface's own `connect` | Absorbed the way `RemoteInterface` connect failures are absorbed today |
 | Silence cannot be confirmed during the safe-state sweep | No exception; the run is already ending | Terminal state unchanged; timeline records the unconfirmed silence, naming the handle. Never a success line |

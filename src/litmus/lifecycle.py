@@ -8,10 +8,11 @@ three things at once:
    a `Verdict` (`PASS` or `PASS(evidence)`), or everything else. There is no third
    bucket. A verdict's evidence is checked here, entry by entry, against the
    `EvidenceContract` the node declared; a pass without its evidence is not a pass.
-2. **Fail / Bug / Abort classifier.** `TestFailure` becomes Fail (data); a non-PASS
-   return becomes node-local Aborted (no verdict exists, so the framework forges none);
-   any other exception becomes a BUG-signaled Fail; `ExternalIntegrationFailure` and an
-   abort-driven `CancelledError` become Aborted (control flow).
+2. **Fail / Contract-violation / Abort classifier.** `TestFailure` becomes Fail (data);
+   a non-PASS return becomes node-local Aborted (no verdict exists, so the framework
+   forges none); any other exception becomes a `ContractViolation` Fail;
+   `ExternalIntegrationFailure` and an abort-driven `CancelledError` become Aborted
+   (control flow).
 3. **The reason TaskGroup semantics are correct.** Fail and node-local Aborted are
    *returned*, never raised — they cannot escape into the enclosing `asyncio.TaskGroup`
    and cancel seventy healthy siblings. Only a harness-level halt is allowed to

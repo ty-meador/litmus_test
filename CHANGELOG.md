@@ -489,6 +489,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- The docs no longer describe a "BUG signal" or a "THIS IS A BUG IN <name>" message.
+  A non-`TestFailure` exception that escapes suite code is a `ContractViolation`:
+  the banner is `CONTRACT VIOLATION IN <name>`, the record is Fail with `bug: true`.
+  `docs/contracts.md`, `docs/idioms.md`, `docs/litmus-check.md`, the HIL pages, the
+  README, and the `ChildBoundary` docstring now say so in those words.
 - `TestUtils.wait_for` returns the predicate's last truthy value (bench finding F9,
   issue #158). `True` is still `True`, and a falsy look keeps polling until the same
   timeout verdict. The Pi-hole query-log claim returns the matching entries from the

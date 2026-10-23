@@ -175,8 +175,8 @@ zero duty or disabled output.
 
 | Situation | Signal and existing classification |
 |---|---|
-| Invalid setting, unsupported trajectory, or conflicting channel use | `TypeError` for a wrong type, `ValueError` for an invalid value or unsupported request; rejected before writes. Escaping configure/test code becomes a `ContractViolation`, Fail with the BUG signal. |
-| Controller unavailable during bring-up or an output request; backend operation exceeds its ceiling | `PwmOperationFailure`; the author handles the condition and may raise a modeled `TestFailure`. An unmodeled escape through configure/test code is BUG-signaled Fail, not an automatic hardware verdict. No silent retry or assumed setting. |
+| Invalid setting, unsupported trajectory, or conflicting channel use | `TypeError` for a wrong type, `ValueError` for an invalid value or unsupported request; rejected before writes. Escaping configure/test code becomes a `ContractViolation`: Fail with the `CONTRACT VIOLATION` banner and `bug: true`. |
+| Controller unavailable during bring-up or an output request; backend operation exceeds its ceiling | `PwmOperationFailure`; the author handles the condition and may raise a modeled `TestFailure`. An unmodeled escape through configure/test code is a `ContractViolation` Fail, not an automatic hardware verdict. No silent retry or assumed setting. |
 | Independent observation shows the DUT missed its declared requirement | Author raises `TestFailure(..., evidence=...)`; Fail under the existing verdict contract. |
 | Disable cannot be confirmed during finalization | Scoped evidence names the unconfirmed channel; the established terminal state is preserved, as in GPIO's safe-state sweep. |
 | Integration hook throws or the operator interrupts | Framework-owned `ExternalIntegrationFailure` or `OperatorInterrupt`; run-level Aborted and the full resource sweep. |

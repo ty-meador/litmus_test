@@ -215,7 +215,7 @@ The transport raises nothing shaped like a verdict — only `ConnectionError`
   `stderr="transport closed"` — framework-decided, never a suite choice.
 - **A suite bug** (bad regex type, wrong argument) → propagates uncaught into
   `LitmusTest`'s existing bug boundary: unmodeled exception → `ContractViolation`,
-  "THIS IS A BUG IN `<name>`".
+  "CONTRACT VIOLATION IN `<name>`".
 
 Nothing here adds a new type to `litmus.errors`. The transport speaks the two
 vocabularies every `RemoteInterface` already speaks — `ConnectionError` at the

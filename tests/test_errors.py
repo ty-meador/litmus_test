@@ -87,7 +87,7 @@ class TestTaxonomyShape:
         assert "signal 99" in failure.fail_message
 
 
-class TestBugSignal:
+class TestContractViolationSentinel:
     def test_contract_violation_lands_in_fail_and_says_it_is_a_bug(self) -> None:
         violation = ContractViolation("dimm-0", cause=ValueError("kaboom"))
         assert isinstance(violation, TestFailure)
