@@ -38,7 +38,7 @@ states, and the framework never merges them:
 | State | What happened | What the floor does |
 |---|---|---|
 | **Pass** | An explicit verdict, with its declared evidence | Ship it |
-| **Fail** | The DUT failed a modeled check, or the test hit a failure mode it didn't model (flagged loudly as a developer contract violation) | Check the hardware, or escalate the defect |
+| **Fail** | The DUT failed a modeled check, or the test returned without the PASS sentinal (flagged loudly as a developer contract violation) | Check the hardware, or escalate the defect |
 | **Aborted** | No verdict exists: the harness broke, the operator stopped the rack, or a test returned nothing | Fix the harness. Don't condemn the unit |
 
 **Evidence is a side effect of running.** Each run writes a timestamped directory with
