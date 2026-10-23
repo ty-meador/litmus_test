@@ -19,8 +19,8 @@ static analysis.
 
 **Framework obligation:** Execute configure → build_suite → cleanup in order, guaranteed.
 - If `configure()` raises a `TestFailure`: cleanup runs, test methods never run, the test lands in `Fail`. The verdict means "the device did not reach a testable state" — whether the underlying cause is hardware or infrastructure is **not knowable from code** and is the human triager's call.
-- If `configure()` raises anything else: wrapped as "THIS IS A BUG IN <name>" (`ContractViolation`) — configure must signal verdicts via `TestFailure`.
-- If a test method raises a plain exception: wrapped as "THIS IS A BUG IN <name>" — not a hardware failure.
+- If `configure()` raises anything else: wrapped as a `ContractViolation` ("CONTRACT VIOLATION IN <name>: ... escaped the node", recorded as Fail with `bug: true`) — configure must signal verdicts via `TestFailure`.
+- If a test method raises a plain exception: wrapped as a `ContractViolation` the same way — a developer contract violation, not a hardware failure.
 - A cancellation already delivered to suite code outranks any return value or different
   exception produced after a pathological catch. The child boundary restores the
   cancellation before classifying that settlement, so an aborted run cannot forge a
@@ -35,11 +35,11 @@ static analysis.
 **Framework obligation:** Every run of a `LitmusTest` resolves to exactly one of three peer terminal states. The states are distinct categories with distinct recovery protocols — the framework does not collapse them. There is no hidden fourth: a call that settles without producing a terminal state (a successful `configure`, a completed `cleanup`) reports no state at all rather than inventing one.
 
 1. **Pass** — a test method returned a `Verdict`: the bare `PASS`, or `PASS(evidence)` carrying its readings. The check is `isinstance(result, Verdict)`; a `Verdict` is obtained only by importing `PASS` or calling it, so nothing a suite constructs can forge one. A pass without its declared evidence is not a pass: when the method carries `@evidence(...)`, a `PASS` that does not carry every declared key is a `ContractViolation` (developer-bug Fail), never a green run (issue #118).
-2. **Fail** — a test method raised a `TestFailure` (or subclass): the DUT produced a verdict and the verdict was negative. OR the developer didn't model a failure mode: a plain exception → BUG-signaled Fail.
+2. **Fail** — a test method raised a `TestFailure` (or subclass): the DUT produced a verdict and the verdict was negative. OR the developer didn't model a failure mode: a plain exception → `ContractViolation` Fail (`bug: true`).
 3. **Aborted** — no verdict was produced. Peer to Pass/Fail, **NOT** a flavor of failure. Three causes:
    - **Harness-level (integration):** a `before_each`/`after_each` integration hook threw; the error is wrapped as `ExternalIntegrationFailure` and the run halts before a verdict could be produced.
    - **Harness-level (operator):** SIGINT or SIGTERM arrived while a run was live; the failure is `OperatorInterrupt` so the Floor Technician reads that the operator stopped the rack. The same run-abort path fires as a hook throw: Aborted everywhere, transports hard-closed, `RunResult` returned.
-   - **Node-local:** a test method returned anything other than the `PASS` sentinel — `None` fall-through or an explicit wrong value (`MissingVerdict`). No verdict exists, so the framework refuses to forge Fail (or Pass) on its behalf. Siblings are unaffected. *(Deliberate deviation from the TypeScript original, which folded this into the bug/Fail path.)*
+   - **Node-local:** a test method returned anything other than the `PASS` sentinel — `None` fall-through or an explicit wrong value (`MissingVerdict`). No verdict exists, so the framework refuses to forge Fail (or Pass) on its behalf. Siblings are unaffected. *(Deliberate deviation from the TypeScript original, which folded this into the contract-violation/Fail path.)*
 
 **Developer obligation:** Recognize the taxonomy. A `TestFailure` means "the DUT failed a check"; an `ExternalIntegrationFailure` means "the harness around the test broke"; an `OperatorInterrupt` means "the operator stopped the rack." Never conflate them — the Floor Technician's recovery protocol depends on knowing which. A `KeyboardInterrupt` raised from suite code is not an operator signal: the child boundary still passes it through unrecorded.
 

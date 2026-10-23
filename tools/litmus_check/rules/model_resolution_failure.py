@@ -2,9 +2,10 @@
 
 ``ArpResolver.resolve`` / ``reacquire`` raise ``ArpResolutionFailure`` and a device
 API's ``request`` raises ``DeviceApiOperationFailure``. Neither is a ``TestFailure``.
-Left uncaught, the failure taxonomy classifies it as a developer-bug Fail ("THIS IS A
-BUG IN <name>"), and the Floor Technician reads a software defect where the bench
-had a device that never appeared on the network. The suite did not model the miss.
+Left uncaught, the failure taxonomy classifies it as a ``ContractViolation`` Fail
+("CONTRACT VIOLATION IN <name>"), and the Floor Technician reads a software defect
+where the bench had a device that never appeared on the network. The suite did not
+model the miss.
 
 Flagged: an awaited ``.resolve()``, ``.reacquire(...)``, or ``.request(...)`` call
 inside a statically known ``LitmusTest`` subclass that does not sit in the body of a

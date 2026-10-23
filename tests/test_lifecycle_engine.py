@@ -75,7 +75,7 @@ class TestLifecycleOrder:
         assert outcome.failure is readiness
         assert calls == ["configure", "cleanup"]
 
-    async def test_plain_configure_error_is_a_bug_signaled_failure(self) -> None:
+    async def test_plain_configure_error_is_a_contract_violation_failure(self) -> None:
         calls: list[str] = []
 
         class Suite(LitmusTest):
