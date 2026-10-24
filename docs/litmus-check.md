@@ -22,7 +22,7 @@ That is the whole reason this tier may be skipped and the other two may not.
 
 ```sh
 uv run litmus-check suites/                 # check a directory (recursive)
-uv run litmus-check suites/blade.py other/  # files and directories mix freely
+uv run litmus-check suites/board.py other/  # files and directories mix freely
 uv run litmus-check --list-rules            # the rule catalogue
 uv run litmus-check --select litmus/gated-pass suites/
 uv run litmus-check --ignore litmus/pure-build-suite suites/

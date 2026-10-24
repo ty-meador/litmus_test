@@ -237,14 +237,14 @@ This illustration shows the arrangement, not a captured run:
   [ Inspect ]   Re-Run
   ---------------------------------------------------------
     rack  Aborted
-    └─ servers  Aborted  ←
-       ├─ server-01  Pass
-       ├─ server-02  Fail
+    └─ units  Aborted  ←
+       ├─ unit-01  Pass
+       ├─ unit-02  Fail
   >    │  └─ thermal check  Fail  not taken: fan_rpm
-       ├─ server-03  Aborted
+       ├─ unit-03  Aborted
        └─ firmware check  Pending
   ---------------------------------------------------------
-  log: rack/servers  (rolled up: thermal check has no own log)
+  log: rack/units  (rolled up: thermal check has no own log)
   page 4/7  errors only: off  captures: 1  (1-9 opens a capture)
       14:02:11Z info     starting thermal ramp
   [1] 14:02:45Z info     survey captured

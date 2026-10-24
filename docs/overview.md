@@ -50,7 +50,7 @@ what to do next, without opening the suite source.
 - Does not know what surrounds it in the composition
 - Only knows: `configure` → `build_suite` → `cleanup`
 
-A rack-level L11 test is not a different kind of thing — it is more atoms composed together. Leaves, sequences, parallel nodes, and full hardware devices are all instances of `LitmusTest`; the framework is fractal. A `LitmusTest` is simultaneously a claim about hardware and a procedure for verifying that claim: **evidence at scale N−1 becomes a verdict at scale N.** The DUT tree and the test tree are one structure.
+A rack-level test is not a different kind of thing — it is more atoms composed together. Leaves, sequences, parallel nodes, and full hardware devices are all instances of `LitmusTest`; the framework is fractal. A `LitmusTest` is simultaneously a claim about hardware and a procedure for verifying that claim: **evidence at scale N−1 becomes a verdict at scale N.** The DUT tree and the test tree are one structure.
 
 ## The Chemistry Mental Model
 
@@ -60,7 +60,7 @@ A rack-level L11 test is not a different kind of thing — it is more atoms comp
 | Molecule | `self.sequence()` (ordered, bails on failure), `self.parallel()` (concurrent, collects all) |
 | Organelle | `LitmusTest` subclass (encapsulates state + lifecycle, produces atoms via `build_suite()`) |
 | Organism | Full rack/system-level suite |
-| Emulsion | L10+JBOG/JBOD — two molecules behaving as unified system under test |
+| Emulsion | A unit plus its attached expansion hardware — two molecules behaving as a unified system under test |
 
 **Key property**: No level needs to know about the levels above it. Composition is the only coupling mechanism and the framework is contractually obligated to provide it.
 

@@ -364,7 +364,7 @@ def build_suite(self) -> LitmusTest:
     return self.parallel(
         "rack claims",
         [
-            self.test("BMC ready", self._bmc_ready, fail_after=45.0),
+            self.test("controller ready", self._controller_ready, fail_after=45.0),
             self.test("optional telemetry", self._telemetry, abort_after=10.0),
         ],
         fail_after=120.0,
@@ -410,7 +410,7 @@ evidence are the gateway's own, and the devices behind it are never asked.
 Survey and audit hooks are registered in `__init__`, not in `configure()`. They are stackable — multiple calls register multiple independent hooks, each firing on its own schedule.
 
 ```python
-class ComputeBlade(LitmusTest):
+class ControlBoard(LitmusTest):
     def __init__(self, params: TestParams) -> None:
         super().__init__(params)
 

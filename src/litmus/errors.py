@@ -165,7 +165,7 @@ class TestFailure(LitmusError):
     """A verdict of Fail: the hardware did not meet the spec.
 
     Raised by suite code. Caught and recorded at the child boundary, which is what
-    makes a failing DUT data rather than control flow — server 12 failing POST does
+    makes a failing DUT data rather than control flow — DUT 12 failing POST does
     not disturb the other 69.
 
     Raised from `configure()` it means "did not reach a testable state". Whether the

@@ -489,6 +489,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- The docs describe litmus as a generic hardware-in-the-loop manufacturing test
+  framework. Examples and stage names in the README, `docs/overview.md`,
+  `docs/idioms.md`, `docs/inspector.md`, and `docs/litmus-check.md` use neutral
+  device names (units, boards, controllers) instead of one industry's vocabulary.
+
 - The docs no longer describe a "BUG signal" or a "THIS IS A BUG IN <name>" message.
   A non-`TestFailure` exception that escapes suite code is a `ContractViolation`:
   the banner is `CONTRACT VIOLATION IN <name>`, the record is Fail with `bug: true`.
