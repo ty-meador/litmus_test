@@ -721,6 +721,11 @@ of feature parity: the Python Inspector is still separate work.
 - Upgrade the locked `black` pin to `26.10.1` to clear `CVE-2026-114134`, found by the
   required dependency audit. `black` arrives only through the `python-lsp-server`
   development tool; the bump landed standalone so `main` did not stay red.
+- Upgrade the locked `filelock` pin to `4.2.4` to clear `CVE-2026-112907`,
+  `CVE-2026-112913`, and `CVE-2026-112940`, found by the required dependency audit.
+  `filelock` arrives only through `pip-audit`'s own cache (`cachecontrol[filecache]`), so
+  the major-version step touches the audit tool and nothing Litmus ships; the bump landed
+  standalone so `main` did not stay red.
 - Optional `env_allow` / `env_deny` filtering of the published environment snapshot;
   SSH credential containment tests pin that password and private-key values do not
   escape into logs, results, or other evidence
