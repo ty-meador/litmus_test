@@ -113,7 +113,7 @@ When the root reaches Pass, Fail, or Aborted, the framework atomically writes it
 versioned `RunResult` to `result.json` at that run-directory root. The root timeline's
 final entry points to the file, so the structural and temporal views remain joined.
 
-**Timestamp integrity is a system requirement.** NTP sync on the test VM is not optional. The log backbone is used as a legal instrument in customer disputes ("did failures start before your 2pm firmware push?").
+**Timestamp integrity is a system requirement.** NTP sync on the test host is not optional. The log backbone is used as a legal instrument in customer disputes ("did failures start before your 2pm firmware push?").
 
 ## Integration Hooks: The External-World Contract
 
