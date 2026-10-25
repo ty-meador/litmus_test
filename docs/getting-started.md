@@ -98,7 +98,7 @@ through a hop instead of the test host's table.
 
 ## Deploying to a station
 
-**Every test VM must synchronize its system clock with NTP before Litmus runs.** The
+**Every test host must synchronize its system clock with NTP before Litmus runs.** The
 scoped log is the authoritative chronology for a run, including structured pointers to
 captured artifacts, and may be used to establish event order in customer disputes. A
 station with an unsynchronized clock cannot produce trustworthy evidence and must not
