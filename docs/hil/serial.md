@@ -287,7 +287,7 @@ for `use_shell`. The route is shared by the node and its descendants, so
 
 ## Packaging
 
-`pyserial-asyncio` is checked for GPL-2.0 compatibility at implementation time and
+`pyserial-asyncio` is checked for Apache-2.0 compatibility at implementation time and
 lands as an optional extra: `pip install litmus[serial]`. Core `litmus` gains no
 new dependency and `import litmus` never imports `litmus.serial`: the default
 connector imports it on the first `use_serial` / `get_serial`, and a local open

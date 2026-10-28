@@ -3,7 +3,7 @@ name = "litmus"
 version = "0.0.1"
 description = "React-for-hardware HIL testing framework — Python port"
 readme = "README.md"
-license = "GPL-2.0-only"
+license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.14"
 # Discovery metadata (#103). The name is #9's decision and is not settled here.
