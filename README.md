@@ -201,7 +201,6 @@ records every change.
 
 ## License
 
-Copyright 2026 Tyler Meador. Litmus-Test ("Litmus") is free software, released under
-the GNU General Public License, version 2 (`GPL-2.0-only`). The full text is in
-`LICENSE`; the copyright notice is in `NOTICE`. There is no warranty; see the license
-for the terms.
+Copyright 2026 Tyler Meador. Litmus-Test ("Litmus") is released under the Apache
+License, Version 2.0 (`Apache-2.0`). The full text is in `LICENSE`; the copyright
+notice is in `NOTICE`. There is no warranty; see the license for the terms.

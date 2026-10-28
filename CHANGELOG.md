@@ -489,6 +489,11 @@ of feature parity: the Python Inspector is still separate work.
 
 ### Changed
 
+- Litmus is relicensed from GPL-2.0-only to Apache-2.0. `LICENSE` carries the Apache
+  License 2.0 text, `NOTICE` the Apache-style copyright notice, and `pyproject.toml`
+  the `Apache-2.0` SPDX expression. Suites that import litmus no longer raise a
+  copyleft question when they ship to a contract manufacturer, and the license grants
+  patent rights. Copies already obtained under GPL-2.0-only keep that license.
 - The docs no longer describe a "BUG signal" or a "THIS IS A BUG IN <name>" message.
   A non-`TestFailure` exception that escapes suite code is a `ContractViolation`:
   the banner is `CONTRACT VIOLATION IN <name>`, the record is Fail with `bug: true`.
